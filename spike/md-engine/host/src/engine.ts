@@ -22,6 +22,12 @@ export interface RustApi {
   /** ask the Agent stand-in in Rust to change the document (addressed by block id) */
   agent(op: { op: "replace_block" | "insert_after" | "append"; id?: string; text: string }): void;
   agentErrors(): string[];
+  /** IME composition is active in the editor right now */
+  composing(): boolean;
+  /** an edit of ours is out / more are queued behind it */
+  pending(): { inflight: boolean; queued: boolean };
+  /** log of composition and Agent-patch events (manual testing) */
+  onEvent(cb: (line: string) => void): void;
   /** the author's Ctrl-Z */
   undo(): void;
   stats(): { remoteApplied: number; remoteTransformed: number };

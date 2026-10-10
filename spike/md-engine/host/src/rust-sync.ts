@@ -50,10 +50,10 @@ export class RustSync {
   /** number of Agent patches integrated, and how many of them had to be transformed over unconfirmed local edits */
   remoteApplied = 0;
   remoteTransformed = 0;
-  private inflight = false;
+  inflight = false;
   /** the patch that is out (relative to the last confirmed version) and edits made since (relative to the doc after `sent`) */
   private sent: ChangeSet | null = null;
-  private queued: ChangeSet | null = null;
+  queued: ChangeSet | null = null;
   private waiters: (() => void)[] = [];
 
   constructor(private post: (o: unknown) => void, private onBlocks: () => void, private applyRemote: (changes: ChangeSet) => void) {

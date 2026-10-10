@@ -151,7 +151,7 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
                     return s.win.map(|w| send_page(w, reply)).unwrap_or_else(Task::none);
                 }
                 Some("info") => println!("INFO: {}\n      {}", v["name"].as_str().unwrap_or("?"), v["detail"].as_str().unwrap_or("")),
-                Some("ready") => s.status = format!("engine: {} — type here; try Chinese/Japanese IME, `## `, **bold**, moving the caret between blocks", v["engine"].as_str().unwrap_or("?")),
+                Some("ready") => s.status = format!("engine: {} — 用中文/日文输入法在示例章节里打字;右侧面板可让 Agent 在你组合输入时改写。看:候选框是否保持、已组合的字是否被打断或重复、光标是否跳走", v["engine"].as_str().unwrap_or("?")),
                 Some("done") => {
                     println!("SUMMARY {}: {} passed, {} failed", s.engine, s.passes, s.fails);
                     return iced::exit();

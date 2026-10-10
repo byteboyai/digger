@@ -144,6 +144,7 @@ const theme = EditorView.theme({
 export function createCm(post: (o: unknown) => void = () => {}): Engine {
   let view: EditorView;
   let sync: RustSync;
+  let eventLog: (line: string) => void = () => {};
   const rust: RustApi = {
     async load(text) {
       sync.loading = true;
@@ -167,6 +168,9 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
     agent(op) { post({ t: "agent", ...op }); },
     agentErrors: () => sync.agentErrors,
     undo() { undo(view); },
+    composing: () => view.composing,
+    pending: () => ({ inflight: sync.inflight, queued: !!sync.queued }),
+    onEvent(cb) { eventLog = cb; },
     stats: () => ({ remoteApplied: sync.remoteApplied, remoteTransformed: sync.remoteTransformed }),
     detach() { sync.active = false; rustTops = () => null; view.dispatch({ effects: refresh.of(null) }); },
   };
@@ -200,11 +204,21 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
         }),
       });
       // not inside an update (this is called from the update listener): rebuild the live preview right after it
+      let wasComposing = false;
+      view.contentDOM.addEventListener("compositionstart", () => { wasComposing = true; eventLog("compositionstart"); });
+      view.contentDOM.addEventListener("compositionend", () => { wasComposing = false; eventLog("compositionend"); });
+      // composition that stops without a compositionend event = something interrupted it
+      setInterval(() => { if (wasComposing && !view.composing) { wasComposing = false; eventLog("COMPOSITION INTERRUPTED (view stopped composing without compositionend)"); } }, 100);
       sync = new RustSync(
         post,
         () => queueMicrotask(() => view.dispatch({ effects: refresh.of(null) })),
         // The Agent's change goes into the author's undo history like any edit: one Ctrl-Z takes it back.
-        (changes) => view.dispatch({ changes, annotations: [fromRust.of(true), Transaction.userEvent.of("agent")] }),
+        (changes) => {
+          const during = view.composing;
+          const caret = view.state.selection.main.head;
+          view.dispatch({ changes, annotations: [fromRust.of(true), Transaction.userEvent.of("agent")] });
+          eventLog(`Agent patch applied${during ? " WHILE COMPOSING" : ""} (caret ${caret}→${view.state.selection.main.head}, composing now: ${view.composing})`);
+        },
       );
     },
     load(md) {

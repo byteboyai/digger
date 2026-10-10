@@ -348,5 +348,6 @@ export function start(e: Engine) {
   e.mount(document.getElementById("editor")!);
   window.addEventListener("error", (ev) => post({ t: "result", name: "page error", pass: false, detail: ev.message }));
   if (window.__MODE__ === "test") { void run(e); }
+  else if (e.rust) { void import("./manual").then((m) => m.startManual(e)).then(() => post({ t: "ready", engine: e.name })); }
   else { e.load(CORPUS); e.caretAtStart(); post({ t: "ready", engine: e.name }); }
 }
