@@ -310,6 +310,17 @@ What the tests show (three consecutive runs, a mutation check, and 22 of 22 chec
 - Undo restores text, not ids: after undoing a wholesale rewrite the block gets a new id, because the id of the old text was not kept by the reconciler for the rewrite (see the block identity results).
 - The CodeMirror collaboration package was not used; the transform is a few lines over `ChangeSet`, with the authority's version counter in Rust. Whether to adopt `@codemirror/collab` for its update log and rebase helpers is open.
 
+## Text merge results (2026-10-10, `spike/text-merge`)
+
+Validation item 3: a text-level, block-aware three-way merge. Tokens are UAX#29 words (CJK per character); the diff first aligns blocks, then tokens inside changed blocks; hunks from the two sides are clustered diff3-style; overlapping clusters that the two sides spelled differently are settled by comparing the resulting text, and otherwise become a conflict.
+
+- Edits in different blocks never conflict; disjoint edits in one long paragraph (the weakness of block-level merge) merge cleanly.
+- Randomised campaign, 100,000 merges of generated Chinese/English chapters with edits chosen so the union is the one right answer: 96,162 clean, 3,838 conflicts, **0 clean-but-wrong**. 158,614 re-merges of a merged text with either side: **0 silent changes, 0 spurious conflicts**. The same campaign (30,000 cases) is a test.
+- Three bugs found only by the campaign (each is now a deterministic regression test): `similar` reports `Insert.old_index` unreliably (use a running cursor); deleting one of two equal neighbours is the same change whichever one is named, so hunks are canonicalised by sliding left; and two sides naming different equal tokens could collapse into one deletion.
+- **Verification gate (kept, required):** a clean result is returned only if re-merging it against each side reproduces it; otherwise the whole region is reported as a conflict. It costs about 1% extra conflicts and is the guarantee that a "clean" merge never loses or duplicates an edit.
+- Mutation checks: removing the sliding, or the gate, is caught by tests.
+- Limits: ambiguity with repeated tokens falls back to conflict, never to a guess; prose diff display and a real-manuscript corpus are not covered; performance on book-length input is not measured here (merge runs per changed block).
+
 ## Consequences
 
 Positive:
