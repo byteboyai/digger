@@ -168,6 +168,27 @@ Negative / costs:
 7. **Bundle freshness and generated-type staleness checks** run in CI.
 8. Large chapter (target size to be set during the spike) opens and edits without blocking the iced event loop.
 
+## Spike results (2026-10-10, `spike/editor-host`, macOS, wry 0.55.1, iced 0.14, Tiptap 3.31)
+
+Automated (`cargo test` and `SELFTEST=1`) — passed:
+
+- iced window with a wry child view built via `iced::window::run` + `build_as_child`; host bounds equal window minus left panel and top bar (760×680) and follow a window resize (900×600 → 560×560). This is the push-down rule from §3 for one bar.
+- Round trip: Rust pushes a ProseMirror projection (`load`); scripted edits return as `edit`; Rust parses them, derives semantic operations (`ReplaceBlockContent`, `InsertBlock`, `DeleteBlock`) and commits; `committed` acks update the host's base.
+- `blockId` stability: untouched blocks keep their id across edits; splitting a block yields a new unique id; a deleted block's id disappears. Rust rejects candidates with missing/duplicate ids or unsupported nodes.
+- Bridge validation (unit tests): foreign binding, unknown type, wrong host kind, oversize, malformed JSON and replayed `seq` are rejected, and a rejected message does not advance `seq`.
+- Debounced recovery snapshots reach a journal file.
+
+Findings:
+
+1. `crypto.randomUUID()` is **undefined** in a `with_html` WKWebView page (not a secure context). The host must not rely on it. Preferred: block ids are minted by Rust; host-side temporary ids use `getRandomValues`. Check whether the scoped custom protocol gives a secure context.
+2. Exactly one edit in flight (send, wait for `committed`/`rejected`) is needed so `baseRev` never goes stale because of the host's own edits. This should be part of the bridge contract.
+3. Host JS errors must be forwarded as `failed`; without it a script error looked like a silent hang.
+4. Tiptap/ProseMirror copies node attributes on split, so unique `blockId` needs an `appendTransaction` guard. Rust must still validate uniqueness.
+5. `edit` currently carries the whole document JSON. That is fine for the spike but will not scale to large chapters; steps or block-scoped payloads should be evaluated.
+6. The spike's CSP uses `script-src 'unsafe-inline'`; the nonce/hash policy from §6 is not yet implemented.
+
+Not done (still required before Accepted): IME composition (Chinese/Japanese) — manual check only; Milkdown comparison; CodeMirror source-mode round trip; stale-base `rebase`/`conflict` handling; crash recovery offering a candidate change on restart; layering with a native overlay window; pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
+
 ## Open questions
 
 - Whether review/Diff views are pure iced or a preview host (leaning iced for semantic block diffs derived from the AST).

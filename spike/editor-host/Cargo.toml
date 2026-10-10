@@ -1,0 +1,16 @@
+[package]
+name = "editor-host-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# 一次性验证(ADR-001 验证项 1/2):iced 窗口 + wry 编辑器宿主 + 带绑定校验的桥接信封。随时可删。
+[workspace]
+
+[dependencies]
+iced = { version = "0.14", features = ["tokio"] }
+wry = "0.55.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v7", "v4"] }
+tokio = { version = "1", features = ["time", "sync"] }
