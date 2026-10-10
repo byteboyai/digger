@@ -62,7 +62,9 @@ By default IDs are **not** written into the Markdown, so the files stay clean. A
 1. A Change produced by a mutation primitive carries the exact block mapping.
 2. For free typing (a text diff), match old and new blocks by content hash along the longest common subsequence of hash sequences, so unchanged blocks keep their ID wherever they moved or however much text was inserted before them.
 3. In the remaining unmatched regions, pair blocks of the same kind in order when similarity exceeds a threshold; anything else is a new or deleted block.
-4. A split keeps the ID on the first part; a merge keeps the first block's ID. Each match records a confidence; low-confidence matches are marked so Agent history anchored to them can be shown as approximate.
+4. A split or merge is recognized only when at least two of the parts are real fragments of the other side (most of their own words or characters come from it) and together they still add up to it. Which part keeps the id is a policy: `LargestPart` (the part with the most text; the default after the spike) or `FirstPart`. Each match records a confidence; low-confidence matches are marked so Agent history anchored to them can be shown as approximate.
+
+The refined algorithm and its measured behaviour are in "Block identity spike results" below.
 
 ### 3. Changes are text patches with preconditions
 
@@ -164,6 +166,55 @@ Reading the results:
 
 **Recommendation, pending the IME check:** use CodeMirror 6 live preview as the Digger chapter editor, and share the Markdown language and live-preview extension with Dozer's CodeMirror host. Keep ProseMirror only as a fallback if the IME check fails or if rich structured blocks (visual tables) turn out to need it.
 
+## Block identity spike results (2026-10-10, `spike/block-identity`)
+
+A reconciliation algorithm was implemented in Rust on top of pulldown-cmark block ranges, and tested against a simulator that knows the true identity of every block. The simulator renders structured content (headings including setext, paragraphs including wrapped lines, bullet and ordered lists with varying markers, quotes, code, tables, rules, images) to Markdown, applies authoring operations, re-parses the text and reconciles it exactly as a Commit would, then compares with the truth.
+
+**Algorithm, as it ended up** (each step was driven by a measured failure):
+
+1. Exact content hash along the longest common subsequence, then exact hash out of order (moved blocks).
+2. Identical blocks are assigned by their immediate neighbours, not by order alone.
+3. Between those anchors: split/merge detection (real fragments only), then an order-preserving similarity alignment.
+4. A global pass for blocks that were both edited and moved.
+5. Everything left gets a new id; ids are never reused.
+
+Similarity is the larger of a token Dice score and the share of unchanged sentences/lines, with an edit-distance fallback in the 0.25–0.5 band. Tokens are character bigrams for CJK text and whole words for alphabetic text (Latin bigrams make unrelated English paragraphs look alike). Very short blocks use a character edit ratio, and below four significant characters only an identical text matches. Thresholds from a sweep over low/high/kind-change: same-kind pairing 0.5, global pass 0.6, kind change 0.8; the sweep was flat, so the choice is not sensitive.
+
+**Properties that hold in every run (0 violations):** ids are unique, reconciliation is deterministic, and committing unchanged text changes nothing.
+
+**Measured on 24 documents of 60 blocks × 40 commits per scenario** (plus look-alike documents where 60% of the paragraphs follow one template). "Kept" is the share of blocks that existed before, were not rewritten wholesale, and still carry their id.
+
+| Scenario (edits between two commits) | Kept | Lost although ≥50% of the text survived | Id attached to the wrong block |
+|---|---|---|---|
+| Typing (1 / 5) | 100% / 100% | 0 / 0 | 0 / 0 |
+| Mixed editing (1 / 5 / 20) | 100% / 99.99% / 99.97% | 0 / 2 / 2 | 0 / 0 / 2 |
+| Agent rewrite, section insert, move (1 / 5 / 20) | 99.998% / 99.998% / 99.995% | 0 / 0 / 1 | 0 / 0 / 0 |
+| Restructure: move, copy, delete (1 / 5 / 20) | 99.998% / 99.99% / 99.97% | 0 / 0 / 0 | 0 / 0 / 0 |
+| Look-alike documents, same operations | 99.97–100% | ≤ 2 per scenario | 0 for typing; see below |
+
+- The figures marked as lost or wrongly attached **exclude** two kinds of case that content cannot decide: batches that copy a block and then edit one of the copies (which copy is the original?) and ids that belonged to a block rewritten wholesale in the same commit (the rewrite removed the evidence). They are counted separately and make up almost all remaining failures: for example 0.011% of blocks in the heaviest restructure batches (20 operations between commits), 0.4% of newly created blocks inheriting a look-alike's id.
+- In look-alike documents with 20 agent operations between commits, up to about 0.1% of blocks can be attached to a template twin; for ordinary documents the bound used by the test is 0.005%.
+- Inserting a 30-block section (thousands of characters) anywhere: every original block kept its id in 60 of 60 trials. Reformatting the whole document into other Markdown styles (setext↔ATX, wrapping, list markers): at least 99.9% kept. Typing `## ` or removing it: at least 99.5% kept, none attached to another block. A block rewritten wholesale never takes another block's id.
+- Split and merge: the id survives on exactly one resulting block in at least 98% of 300 trials; `FirstPart` puts it on the first part and `LargestPart` on the larger part in at least 96–98%. The remaining gap is near-ties in size.
+- Cost: linear, about 10 µs per block. Reconciling a chapter with ten small edits takes 6 ms for 500 blocks, 16 ms for 1,500, 65 ms for 6,000 and 210 ms for 20,000. Almost all of it is computing similarity signatures for blocks that did not change; computing them lazily for unmatched blocks only would remove most of it (not done).
+
+**Failures the tests found and the fixes:**
+
+- Split detection treated an almost unchanged paragraph plus an unrelated new block next to it as a split and gave the id to the unrelated, longer block. Fix: a split needs at least two real fragments.
+- Short blocks (a short quote or heading) lost their id on any edit. Fix: character edit ratio for short text.
+- Paragraphs where half the sentences were replaced lost their id. Fix: sentence/line overlap as a second similarity signal.
+- Look-alike English text matched wrongly with character bigrams. Fix: word tokens for alphabetic text.
+- Identical blocks went to whichever copy came first. Fix: neighbour context.
+- Adding a relative-position tie-break to the global pass changed nothing and was removed.
+
+**Known limits:**
+
+- Which copy of an identical block is the original is undecidable from content alone. If an author duplicates a block and edits the original in the same commit, the exact copy may take the id.
+- Blocks with fewer than four significant characters (a heading "1.", a rule) keep their id only when their text is unchanged.
+- Evidence destroyed by a wholesale rewrite cannot be recovered; the new text becomes a new block unless it resembles an old one.
+- The property thresholds were set just inside the measured values, so they catch regressions but not every possible bug: breaking the split rule was caught by a dedicated unit test and **not** by the stream thresholds. The simulator also uses synthetic text and a fixed set of operations; real manuscripts and real editor behaviour (autosave timing, paste of whole sections, IME) are not covered.
+- The block structure here comes from pulldown-cmark. Agreement with the editor's own parser (validation item 5) is untested.
+
 ## Consequences
 
 Positive:
@@ -190,7 +241,7 @@ To be reworked: the block model and block delta (`doc.rs`), the block-level merg
 ## Validation required
 
 1. **Minimal diff:** for each candidate engine, open a realistic Markdown chapter, edit one paragraph, and verify only that range changed (hash of the rest unchanged), including lists, nested quotes, reference links, emphasis styles and long lines.
-2. **Block id survival:** property tests over simulated edit streams (typing, paste, split, merge, move, thousands of characters inserted earlier) measuring how many ids survive and how many matches are wrong.
+2. **Block id survival:** property tests over simulated edit streams (typing, paste, split, merge, move, thousands of characters inserted earlier) measuring how many ids survive and how many matches are wrong. **Done in simulation; see "Block identity spike results".** Real manuscripts and editor behaviour remain to be checked.
 3. **Text merge:** automatic merge of disjoint edits inside one block, conflict on overlap, fuzzed against a reference.
 4. **Mirror:** atomic file write, crash between Commit and mirror write, external edit imported through the merge, wholesale replacement handled as WorkingState, no silent loss in either direction.
 5. **Parser agreement:** the Rust and editor parsers agree on block boundaries over the CommonMark and GFM example corpora plus a real manuscript.
