@@ -1,15 +1,16 @@
 //! 极简 Writing Domain AST + ProseMirror 投影 + 语义操作 diff(ADR-006 的最小可验证子集)。
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Kind {
     Paragraph,
     Heading(u8),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub id: String,
     pub kind: Kind,

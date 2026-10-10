@@ -40,7 +40,9 @@ const EDITOR_INBOUND: &[&str] = &[
     "title",
     "snapshot",
     "closing",
+    "resolve",
     "selftest_done",
+    "selftest_report",
 ];
 
 pub struct Validator {

@@ -13,16 +13,21 @@ declare global {
 const binding = window.__DIGGER_BINDING__;
 let seq = 0;
 let baseRev = "";
+let rev = 0;
 let loading = false;
-// One edit in flight at a time: the next one is sent after Rust acks (committed/rejected),
-// so baseRev never goes stale because of our own edits.
+let editDebounceMs = 1200;
+// One edit in flight at a time. `dirty` = changed again while in flight; `editTimer` = debounced, unsent.
+// "Clean" (nothing unsent, nothing in flight) is the only state in which the host may replace its document.
 let inflight = false;
 let dirty = false;
+let editTimer: number | undefined;
 
 function send(type: string, payload: unknown) {
   const env = { hostKind: "editor", binding, seq: ++seq, type, payload };
   window.ipc.postMessage(JSON.stringify(env));
 }
+
+const isClean = () => !inflight && !dirty && editTimer === undefined;
 
 // Stable block identity: assign a fresh id to any top-level block that has none
 // or whose id duplicates an earlier block (PM copies attrs when splitting).
@@ -72,7 +77,7 @@ const editor = new Editor({
   onUpdate({ editor }) {
     if (loading) return;
     scheduleSnapshot();
-    sendEdit();
+    scheduleEdit();
   },
   onSelectionUpdate({ editor }) {
     const { from, to } = editor.state.selection;
@@ -80,6 +85,16 @@ const editor = new Editor({
   },
 });
 
+function scheduleEdit() {
+  if (editDebounceMs <= 0) return flushEdit();
+  clearTimeout(editTimer);
+  editTimer = window.setTimeout(flushEdit, editDebounceMs);
+}
+function flushEdit() {
+  clearTimeout(editTimer);
+  editTimer = undefined;
+  sendEdit();
+}
 function sendEdit() {
   if (inflight) { dirty = true; return; }
   inflight = true;
@@ -91,10 +106,29 @@ function acked() {
   if (dirty) sendEdit();
 }
 
+function applyDoc(doc: unknown) {
+  const { from, to } = editor.state.selection;
+  loading = true;
+  editor.commands.setContent(doc as any, { emitUpdate: false });
+  loading = false;
+  const max = editor.state.doc.content.size;
+  try { editor.commands.setTextSelection({ from: Math.min(from, max - 1), to: Math.min(to, max - 1) }); } catch {}
+}
+
+const banner = document.getElementById("conflict")!;
+function showConflict(items: { blockId: string; mine: string; official: string }[]) {
+  document.getElementById("conflict-text")!.textContent =
+    `${items.length} 个块同时被修改：` + items.map((i) => `“${i.mine}” ↔ “${i.official}”`).join("；");
+  banner.style.display = "block";
+}
+const hideConflict = () => { banner.style.display = "none"; };
+document.getElementById("conflict-mine")!.addEventListener("click", () => send("resolve", { choice: "mine" }));
+document.getElementById("conflict-official")!.addEventListener("click", () => send("resolve", { choice: "official" }));
+
 let snapTimer: number | undefined;
 function scheduleSnapshot() {
   clearTimeout(snapTimer);
-  snapTimer = window.setTimeout(() => send("snapshot", { baseRev, doc: editor.getJSON() }), 500);
+  snapTimer = window.setTimeout(() => send("snapshot", { baseRev, doc: editor.getJSON() }), 300);
 }
 
 window.addEventListener("error", (e) => send("failed", { message: String(e.message), line: e.lineno }));
@@ -121,22 +155,77 @@ async function selfTest() {
   send("selftest_done", {});
 }
 
+function blockEnd(index: number): number {
+  let off = 0;
+  for (let i = 0; i < editor.state.doc.childCount; i++) {
+    const n = editor.state.doc.child(i);
+    if (i === index) return off + n.nodeSize - 1;
+    off += n.nodeSize;
+  }
+  throw new Error("no such block " + index);
+}
+
 window.__digger = {
   receive(json: string) {
     const msg = JSON.parse(json) as { type: string; payload: any };
-    if (msg.type === "load") {
-      loading = true;
-      baseRev = msg.payload.stateRef;
-      editor.commands.setContent(msg.payload.doc, { emitUpdate: false });
-      loading = false;
-    } else if (msg.type === "committed") {
-      baseRev = msg.payload.stateRef;
-      acked();
-    } else if (msg.type === "rejected") {
-      // Spike policy: on rejection, drop the in-flight edit and wait for Rust to rebase/reload.
-      acked();
-    } else if (msg.type === "selftest") {
-      void selfTest();
+    const p = msg.payload;
+    switch (msg.type) {
+      case "load":
+        baseRev = p.stateRef;
+        rev = p.rev;
+        editDebounceMs = p.editDebounceMs;
+        applyDoc(p.doc);
+        break;
+      case "committed":
+        baseRev = p.stateRef;
+        rev = Math.max(rev, p.rev);
+        acked();
+        break;
+      case "rejected":
+        acked();
+        break;
+      case "official_advanced":
+        // Never replace a document that has unsent edits: the pending edit will go stale and Rust merges it.
+        if (p.rev > rev && isClean()) {
+          applyDoc(p.doc);
+          baseRev = p.stateRef;
+          rev = p.rev;
+        }
+        break;
+      case "rebase":
+        inflight = false;
+        if (editTimer === undefined && !dirty) {
+          applyDoc(p.doc);
+          baseRev = p.stateRef;
+          rev = p.rev;
+          hideConflict();
+        } else if (dirty) {
+          sendEdit(); // typed after the answered edit: let Rust merge it against the original base
+        }
+        break;
+      case "conflict":
+        inflight = false;
+        showConflict(p.conflicts);
+        break;
+      case "selftest":
+        void selfTest();
+        break;
+      // ---- spike-only scripted commands ----
+      case "st_type":
+        editor.chain().insertContentAt(blockEnd(p.block), p.text).run();
+        break;
+      case "st_flush":
+        flushEdit();
+        break;
+      case "st_click":
+        (document.getElementById("conflict-" + p.which) as HTMLElement).click();
+        break;
+      case "st_report":
+        send("selftest_report", {
+          doc: editor.getJSON(), rev, baseRev, clean: isClean(),
+          conflictVisible: banner.style.display !== "none",
+        });
+        break;
     }
   },
 };

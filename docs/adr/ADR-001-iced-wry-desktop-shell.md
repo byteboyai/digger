@@ -177,6 +177,11 @@ Automated (`cargo test` and `SELFTEST=1`) — passed:
 - `blockId` stability: untouched blocks keep their id across edits; splitting a block yields a new unique id; a deleted block's id disappears. Rust rejects candidates with missing/duplicate ids or unsupported nodes.
 - Bridge validation (unit tests): foreign binding, unknown type, wrong host kind, oversize, malformed JSON and replayed `seq` are rejected, and a rejected message does not advance `seq`.
 - Debounced recovery snapshots reach a journal file.
+- **Stale base → rebase/conflict (validation item 3), `SELFTEST=merge`:** the host debounces edits, so it can hold unsent edits while the official state advances. Rust pushes `official_advanced`; a host with unsent edits **keeps its document** (verified: it neither takes the official change nor loses its own text). When the pending edit arrives on a stale base, Rust runs a block-level three-way merge (base = the stored version the host edited from, local = host candidate, official = current):
+  - disjoint block edits auto-merge, are committed, and come back as `rebase`; the host then holds both changes and is clean on the latest revision;
+  - same-block edits (including delete-vs-edit) return `conflict` and **nothing is committed**; the host shows a banner and keeps the user's text; `resolve{mine|official}` commits the chosen result and returns `rebase`;
+  - a clean host applies `official_advanced` directly and produces no spurious edit or commit.
+- **Crash recovery (validation item 4), `run_recovery_test.sh`:** process A is aborted (SIGABRT) right after the journal is fsynced with uncommitted buffer content; official state on disk is unchanged. On restart process B loads the **official** state into the host (not the journal), derives a candidate Draft Change from the journal, and shows an iced recovery bar. The host rectangle is pushed down by the bar (viewport 680 → 636) and restored afterwards. Accept commits the candidate as a new revision and removes the journal; Discard leaves official state untouched. A journal whose base revision is behind a newer official revision (Agent edited while the app was closed) is rebased through the same merge and accepted without conflict. All three variants pass.
 
 Findings:
 
@@ -184,12 +189,16 @@ Findings:
 2. Exactly one edit in flight (send, wait for `committed`/`rejected`) is needed so `baseRev` never goes stale because of the host's own edits. This should be part of the bridge contract.
 3. Host JS errors must be forwarded as `failed`; without it a script error looked like a silent hang.
 4. Tiptap/ProseMirror copies node attributes on split, so unique `blockId` needs an `appendTransaction` guard. Rust must still validate uniqueness.
-5. `edit` currently carries the whole document JSON. That is fine for the spike but will not scale to large chapters; steps or block-scoped payloads should be evaluated.
-6. The spike's CSP uses `script-src 'unsafe-inline'`; the nonce/hash policy from §6 is not yet implemented.
+5. Edits typed after an answered edit but before its `rebase` arrives cannot be replayed onto the merged document without step-level rebasing. The spike's rule: while the host has unsent edits it ignores `rebase`/`official_advanced` and lets its next edit go stale again, so Rust merges it against the original base. This kept the tested flows correct but means the host can see a merged document only when it is clean.
+6. `edit` currently carries the whole document JSON. That is fine for the spike but will not scale to large chapters; steps or block-scoped payloads should be evaluated.
+7. The merge does not merge block moves: order follows the official version, and local insertions land after their local predecessor. A real implementation must treat concurrent reordering explicitly.
+8. The conflict choice lives in the host DOM and the self-test triggers it with a synthetic click. A production host must only send `resolve` for real user input, and Rust should not rely on the host to enforce that alone. Placing the conflict bar in iced (like the recovery bar) would avoid the problem and is worth deciding in the next spike.
+9. Persistence in the spike is JSON files (atomic rename + fsync), not SQLite; crash testing used SIGABRT, not power loss. Data loss window on a crash is bounded by the snapshot interval (300 ms in the spike), which was not measured under load.
+10. The spike's CSP uses `script-src 'unsafe-inline'`; the nonce/hash policy from §6 is not yet implemented.
 
 Manual check (2026-10-10, macOS, run by the project owner): Chinese and Japanese IME composition in the Tiptap editor host works with no problems observed. Details such as candidate-window position were not separately recorded. Windows/Linux IME remains unverified.
 
-Not done (still required before Accepted): Milkdown comparison; CodeMirror source-mode round trip; stale-base `rebase`/`conflict` handling; crash recovery offering a candidate change on restart; layering with a native overlay window; pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
+Not done (still required before Accepted): Milkdown comparison; CodeMirror source-mode round trip; layering with a native overlay window (the in-window push-down rule is verified for two iced bars, the native-window route is not); pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
 
 ## Open questions
 
