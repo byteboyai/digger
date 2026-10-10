@@ -1,4 +1,27 @@
+import type { RBlock, TypedSelection } from "./rust-sync";
+
+/** Block ranges that come from Rust (the authority) instead of the editor's own parser. */
+export interface RustApi {
+  load(text: string): Promise<void>;
+  settled(): Promise<void>;
+  blocks(): RBlock[];
+  version(): number;
+  /** hash of the text Rust holds / hash of the text the editor holds */
+  rustHash(): string;
+  editorHash(): string;
+  /** replace [from,to) with `insert` through the editor, like typing would */
+  replace(from: number, to: number, insert: string): void;
+  caret(pos: number): void;
+  doc(): string;
+  typed(): TypedSelection | null;
+  /** which top-level block the live preview treats as the one holding the caret */
+  activeBlockFrom(): number | null;
+  rejects(): string[];
+  detach(): void;
+}
+
 export interface Engine {
+  rust?: RustApi;
   name: string;
   mount(el: HTMLElement): void;
   load(md: string): void;

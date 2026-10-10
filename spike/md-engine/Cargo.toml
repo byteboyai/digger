@@ -12,3 +12,5 @@ iced = { version = "0.14", features = ["tokio"] }
 wry = "0.55.1"
 serde_json = "1"
 tokio = { version = "1", features = ["time", "sync"] }
+# 块解析、块 ID 对齐:与 spike/block-identity 同一份实现
+block-identity-spike = { path = "../block-identity" }

@@ -244,6 +244,41 @@ The question: the Rust parser (pulldown-cmark, authoritative for block boundarie
 
 **Limits of this check:** only top-level block boundaries were compared, not inline structure (emphasis, links) or nested blocks. The workspace documents are mostly engineering text, not prose manuscripts. The typing states come from a random edit generator, not from real sessions. Only macOS-independent logic was tested (both parsers run outside the webview; Lezer is the same package version as in the editor bundle). Whether pulldown-cmark or Lezer is closer to what GitHub renders for half-typed tables was not settled.
 
+## Block range sync from Rust to the editor (2026-10-10, `spike/md-engine`)
+
+The decision above that Rust is authoritative for block boundaries and ids was implemented between the Rust side and the CodeMirror editor and tested end to end in the webview (tests T11 to T18).
+
+**Protocol** (messages between the page and Rust; positions are UTF-16 code units, as in CodeMirror):
+
+```text
+editor → Rust   load  { text }                                  a new document: fresh ids
+editor → Rust   edit  { base, changes: [{ from, to, insert }] }  text patches in the coordinates of version `base`
+Rust → editor   blocks { version, hash, len16, blocks: [{ id, kind, level, title, from, to, head, how }] }
+Rust → editor   reject { reason }                                stale base, position inside a surrogate pair, unparsable message
+```
+
+- Rust holds the text. It applies a patch, re-parses, reconciles ids against the previous version (the algorithm from the block-identity spike) and answers with the new version and block list. `hash` (FNV-1a over the UTF-8 text) lets the editor check both sides hold the same text.
+- One patch is in flight at a time; edits made meanwhile are composed (CodeMirror `ChangeSet.compose`) and sent after the answer. While patches are unconfirmed, block ranges are mapped through the editor's own changes (block start stays put when typing at its first position, block end moves), so the ranges are valid at every moment. On each answer Rust's list is mapped through whatever is still queued.
+- The live preview uses Rust's blocks to decide which block holds the caret. The editor's own tree is no longer consulted for that, and is the fallback only before the first answer.
+- Typed selection for the Agent comes from the same blocks: block id, kind, range, the selection, and the titles of the enclosing headings (for example "书名 / 第一章 / 第二节").
+
+**What the tests check (all pass on three consecutive runs):**
+
+- Ranges are correct UTF-16 positions in a document with CJK text, emoji and an astral character (T11a); ids are unique and the text hashes on both sides are equal (T11b).
+- Typing one character keeps every id, advances the version by one and keeps the texts equal (T12). Inserting 30 paragraphs at the top keeps all 6 original ids and adds 30 (T13).
+- Six edits fired back to back: block ranges stay sorted, in bounds and anchored at their own text after every single edit while the answers are still pending, and at the end equal what a fresh Rust parse gives (T14). Without the mapping of ranges through unconfirmed changes this test fails.
+- Where the editor's parser disagrees with Rust (an empty list item followed by an indented paragraph; a `<textarea>` HTML block), the block that holds the caret is the one Rust reports (T15).
+- Typed selection carries id, kind, range and the heading path (T16).
+- A patch against an out-of-date version, and a position between the two halves of 😀, are refused; reloading resynchronizes (T17).
+- Cost (release build): one-character edit until the new block list is back, median 17 ms at 300 blocks and 22 ms at 3,000 blocks (130k characters); loading a 130k-character chapter, 45 ms. This is about one frame and is dominated by the full re-parse on the Rust side, not by the transport.
+
+**Found by the tests:**
+
+- A patch containing a lone surrogate (for example an edit between the two halves of an emoji) is not valid JSON text for the Rust side; it was dropped silently and the editor waited forever. Rust now answers every unparsable message with a `reject`, and positions inside a surrogate pair are refused explicitly (`BadPosition`).
+- The test first compared 3 UTF-16 units with 3 code points and failed on emoji; block heads are therefore defined in code points while positions are in UTF-16 units. Any code that mixes the two will be wrong on exactly the text this product is about (CJK with emoji).
+
+**Not done:** the other direction (Rust or an Agent changing the text and sending a patch to the editor), so the editor never receives text from Rust yet; interplay with the undo stack; behaviour during an IME composition (the live preview keeps its decorations while composing, but patches are still sent); and re-parsing only the changed region instead of the whole document (22 ms is fine at this size, the cost is linear and would matter for much longer documents).
+
 ## Consequences
 
 Positive:

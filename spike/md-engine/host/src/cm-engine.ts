@@ -3,7 +3,8 @@ import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { history } from "@codemirror/commands";
-import type { Engine } from "./engine";
+import type { Engine, RustApi } from "./engine";
+import { RustSync, fnv } from "./rust-sync";
 import { Footnote } from "./footnote";
 
 class ImageWidget extends WidgetType {
@@ -20,6 +21,9 @@ class HrWidget extends WidgetType {
 }
 
 const refresh = StateEffect.define<null>();
+
+/** When set, the "block that holds the caret" comes from Rust, not from the editor's own tree. */
+let rustTops: () => { from: number; to: number }[] | null = () => null;
 const hide = Decoration.replace({});
 
 /** Live preview: syntax is hidden except in the top-level block that holds the selection. */
@@ -27,7 +31,8 @@ function build(view: EditorView): DecorationSet {
   const { state } = view;
   const tree = syntaxTree(state);
   const active: { from: number; to: number }[] = [];
-  for (let n = tree.topNode.firstChild; n; n = n.nextSibling) {
+  const tops = rustTops() ?? (() => { const t: { from: number; to: number }[] = []; for (let n = tree.topNode.firstChild; n; n = n.nextSibling) t.push({ from: n.from, to: n.to }); return t; })();
+  for (const n of tops) {
     if (state.selection.ranges.some((r) => r.from <= n.to && r.to >= n.from)) active.push({ from: n.from, to: n.to });
   }
   const isActive = (from: number, to: number) => active.some((a) => from >= a.from && to <= a.to);
@@ -133,8 +138,30 @@ const theme = EditorView.theme({
   ".cm-quote": { borderLeft: "3px solid #bbb", paddingLeft: "10px", color: "#555" },
 });
 
-export function createCm(): Engine {
+export function createCm(post: (o: unknown) => void = () => {}): Engine {
   let view: EditorView;
+  let sync: RustSync;
+  const rust: RustApi = {
+    async load(text) {
+      sync.loading = true;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor: 0 } });
+      sync.loading = false;
+      rustTops = () => (sync.active ? sync.blocks : null);
+      await sync.load(text);
+    },
+    settled: () => sync.settled(),
+    blocks: () => sync.blocks,
+    version: () => sync.version,
+    rustHash: () => sync.hash,
+    editorHash: () => fnv(view.state.doc.toString()),
+    replace(from, to, insert) { view.dispatch({ changes: { from, to, insert } }); },
+    caret(pos) { view.dispatch({ selection: { anchor: pos } }); },
+    doc: () => view.state.doc.toString(),
+    typed() { const r = view.state.selection.main; return sync.typed(r.from, r.to); },
+    activeBlockFrom() { const b = sync.blockAt(view.state.selection.main.head); return b ? b.from : null; },
+    rejects: () => sync.rejects,
+    detach() { sync.active = false; rustTops = () => null; view.dispatch({ effects: refresh.of(null) }); },
+  };
   const blocks = (s: EditorState) => {
     const out: { from: number; to: number }[] = [];
     for (let n = syntaxTree(s).topNode.firstChild; n; n = n.nextSibling) out.push({ from: n.from, to: n.to });
@@ -148,11 +175,24 @@ export function createCm(): Engine {
   let loaded: { from: number; to: number }[] = [];
   return {
     name: "codemirror6-live-preview",
+    rust,
     mount(el) {
       view = new EditorView({
         parent: el,
-        state: EditorState.create({ doc: "", extensions: [history(), markdown({ base: markdownLanguage, extensions: [Footnote] }), EditorView.lineWrapping, livePreview, theme] }),
+        state: EditorState.create({
+          doc: "",
+          extensions: [
+            history(),
+            markdown({ base: markdownLanguage, extensions: [Footnote] }),
+            EditorView.lineWrapping,
+            livePreview,
+            theme,
+            EditorView.updateListener.of((u) => { if (u.docChanged) sync.local(u.changes); }),
+          ],
+        }),
       });
+      // not inside an update (this is called from the update listener): rebuild the live preview right after it
+      sync = new RustSync(post, () => queueMicrotask(() => view.dispatch({ effects: refresh.of(null) })));
     },
     load(md) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: md }, selection: { anchor: 0 } });

@@ -2,10 +2,12 @@
 //!   ENGINE=cm|pm  选择引擎(默认 cm)
 //!   MODE=test     自动执行页面里的测试,打印结果并退出(默认手动:打开一份示例章节供人工试用)
 
+mod sync;
+
 use iced::futures::SinkExt;
 use iced::widget::{column, container, text};
 use iced::{Element, Length, Size, Subscription, Task, window};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -28,12 +30,20 @@ enum Message {
 }
 
 struct State {
+    win: Option<window::Id>,
+    doc: sync::Doc,
     engine: &'static str,
     test: bool,
     size: Size,
     fails: u32,
     passes: u32,
     status: String,
+}
+
+/// Rust → page: `window.__md.receive(<json>)`.
+fn send_page(win: window::Id, msg: Value) -> Task<Message> {
+    let js = format!("window.__md && window.__md.receive({})", serde_json::to_string(&msg.to_string()).unwrap());
+    window::run(win, move |_| HOST.with(|h| { if let Some(wv) = h.borrow().as_ref() { let _ = wv.evaluate_script(&js); } })).discard()
 }
 
 fn bounds(size: Size) -> wry::Rect {
@@ -54,13 +64,14 @@ fn boot() -> (State, Task<Message>) {
         Some(id) => window::size(id).map(move |s| Message::Ready(id, s)),
         None => Task::none(),
     });
-    (State { engine, test, size: Size::new(1100.0, 760.0), fails: 0, passes: 0, status: String::new() }, t)
+    (State { win: None, doc: sync::Doc::new(), engine, test, size: Size::new(1100.0, 760.0), fails: 0, passes: 0, status: String::new() }, t)
 }
 
 fn update(s: &mut State, msg: Message) -> Task<Message> {
     match msg {
         Message::Ready(id, size) => {
             s.size = size;
+            s.win = Some(id);
             let (b, tx, html, test) = (bounds(size), TX.get().unwrap().clone(), if s.engine == "pm" { HTML_PM } else { HTML_CM }, s.test);
             let build = window::run(id, move |w| {
                 let wv = wry::WebViewBuilder::new()
@@ -95,12 +106,32 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
         }
         Message::Timeout => { println!("FAIL: timed out"); std::process::exit(2); }
         Message::Page(raw) => {
-            let Ok(v) = serde_json::from_str::<Value>(&raw) else { return Task::none() };
+            let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+                // e.g. a lone surrogate in a patch: say so, so the editor does not wait forever
+                return s.win.map(|w| send_page(w, json!({"t": "reject", "reason": "unparsable message", "version": s.doc.version}))).unwrap_or_else(Task::none);
+            };
             match v["t"].as_str() {
                 Some("result") => {
                     let ok = v["pass"].as_bool().unwrap_or(false);
                     println!("{}: {}{}", if ok { "PASS" } else { "FAIL" }, v["name"].as_str().unwrap_or("?"), match v["detail"].as_str() { Some(d) if !d.is_empty() => format!("\n      {d}"), _ => String::new() });
                     if ok { s.passes += 1 } else { s.fails += 1 }
+                }
+                Some("load") => {
+                    s.doc.load(v["text"].as_str().unwrap_or(""));
+                    return s.win.map(|w| send_page(w, s.doc.blocks_message())).unwrap_or_else(Task::none);
+                }
+                Some("edit") => {
+                    let changes: Option<Vec<(usize, usize, String)>> = v["changes"].as_array().and_then(|a| {
+                        a.iter().map(|c| Some((c["from"].as_u64()? as usize, c["to"].as_u64()? as usize, c["insert"].as_str()?.to_string()))).collect()
+                    });
+                    let reply = match changes {
+                        None => json!({"t": "reject", "reason": "malformed edit"}),
+                        Some(ch) => match s.doc.edit(v["base"].as_u64().unwrap_or(0), &ch) {
+                            Ok(()) => s.doc.blocks_message(),
+                            Err(e) => json!({"t": "reject", "reason": format!("{e:?}"), "version": s.doc.version}),
+                        },
+                    };
+                    return s.win.map(|w| send_page(w, reply)).unwrap_or_else(Task::none);
                 }
                 Some("info") => println!("INFO: {}\n      {}", v["name"].as_str().unwrap_or("?"), v["detail"].as_str().unwrap_or("")),
                 Some("ready") => s.status = format!("engine: {} — type here; try Chinese/Japanese IME, `## `, **bold**, moving the caret between blocks", v["engine"].as_str().unwrap_or("?")),

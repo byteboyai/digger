@@ -109,6 +109,116 @@ async function run(e: Engine) {
       result(`T10 editor parser = Rust parser on ${FIXTURES.length} texts incl. footnotes (${same}/${FIXTURES.length})`, same === FIXTURES.length, bad.join("; "));
     }
 
+    // T11–T17: block ranges and ids come from Rust (the authority) and stay valid while the author types
+    if (e.rust) {
+      const r = e.rust;
+      const within = <T>(p: Promise<T>, what: string) => Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error("timeout waiting for Rust: " + what)), 8000))]);
+      const heads = (text: string, bs: ReturnType<typeof r.blocks>) => bs.every((b) => Array.from(text.slice(b.from, b.to)).slice(0, 16).join("") === b.head);
+      const UNI = "# 😀 第一章\n\n正文一，带 𠮷 字符和 😀 表情。\n\n## 小节\n\n- 列表项一\n- 列表项二\n\n> 引用\n\n末段。\n";
+
+      await within(r.load(UNI), "load");
+      let bs = r.blocks();
+      result("T11a block ranges from Rust are valid UTF-16 positions (CJK, emoji, astral characters)", bs.length === 6 && heads(r.doc(), bs), `blocks ${bs.length}: ${bs.map((b) => `${b.kind}[${b.from}-${b.to}]`).join(" ")}`);
+      result("T11b ids are unique and both sides hold the same text", new Set(bs.map((b) => b.id)).size === bs.length && r.rustHash() === r.editorHash(), `rust ${r.rustHash()} editor ${r.editorHash()}`);
+
+      const ids0 = bs.map((b) => b.id), v0 = r.version();
+      const at = r.doc().indexOf("正文一") + 3;
+      r.replace(at, at, "字");
+      await within(r.settled(), "typing");
+      bs = r.blocks();
+      result("T12 typing one character: every id kept, ranges follow, texts equal", bs.map((b) => b.id).join() === ids0.join() && r.version() === v0 + 1 && r.rustHash() === r.editorHash() && heads(r.doc(), bs), `version ${v0}→${r.version()} ids same ${bs.map((b) => b.id).join() === ids0.join()}`);
+
+      const idsBefore = new Set(r.blocks().map((b) => b.id));
+      const section = Array.from({ length: 30 }, (_, i) => `新增的第${i}段，讲述与本章无关的另一件事情，字数不少。`).join("\n\n") + "\n\n";
+      r.replace(0, 0, section);
+      await within(r.settled(), "section insert");
+      bs = r.blocks();
+      const kept = bs.filter((b) => idsBefore.has(b.id)).length;
+      result("T13 inserting 30 paragraphs above: all 6 original ids kept, 30 new ones", kept === 6 && bs.length === 36 && r.rustHash() === r.editorHash() && heads(r.doc(), bs), `kept ${kept} of 6, blocks ${bs.length}`);
+
+      // T14: six edits fired back to back; ranges must be valid at every moment, and equal Rust's own parse at the end
+      await within(r.load(UNI), "reload");
+      const starts = r.blocks().map((b) => b.from);
+      const invariantViolations: string[] = [];
+      const check = (when: string) => {
+        const doc = r.doc();
+        const cur = r.blocks();
+        if (!cur.every((b, i) => b.from >= 0 && b.to <= doc.length && b.from <= b.to && (i === 0 || cur[i - 1].to <= b.from))) invariantViolations.push(`${when}: ranges not sorted/in bounds`);
+        else if (!cur.every((b) => Array.from(doc.slice(b.from, b.from + 12)).slice(0, 3).join("") === Array.from(b.head).slice(0, 3).join(""))) invariantViolations.push(`${when}: a block no longer starts with its own text`);
+      };
+      for (let i = starts.length - 1; i >= 0; i--) {
+        const bl = r.blocks()[i];
+        // inside the block, after its first three characters (counted in code points: never inside a surrogate pair)
+        const pos = bl.from + Array.from(r.doc().slice(bl.from, bl.from + 12)).slice(0, 3).join("").length;
+        r.replace(pos, pos, "a");
+        check(`after edit ${starts.length - i} (in flight)`);
+      }
+      await within(r.settled(), "rapid edits");
+      check("settled");
+      const mapped = r.blocks().map((b) => [b.from, b.to].join("-")).join(" ");
+      const finalDoc = r.doc();
+      await within(r.load(finalDoc), "fresh parse");
+      const fresh = r.blocks().map((b) => [b.from, b.to].join("-")).join(" ");
+      result("T14 six edits in flight at once: ranges valid at every moment and equal to a fresh Rust parse", invariantViolations.length === 0 && mapped === fresh, `${invariantViolations.join("; ")} mapped=[${mapped}] fresh=[${fresh}]`);
+
+      // T15: Rust decides which block holds the caret, also where the editor's own parser disagrees
+      const t15: string[] = [];
+      await within(r.load("-\n\n  foo\n"), "list case");
+      r.caret(r.doc().indexOf("foo") + 1);
+      const lez = e.blockKinds?.() ?? [];
+      const rb = r.blocks();
+      const act = r.activeBlockFrom();
+      t15.push(`list case: Lezer sees ${lez.map((b) => `${b.name}[${b.startLine}-${b.endLine}]`).join(" ")}, Rust sees ${rb.map((b) => `${b.kind}[${b.from}-${b.to}]`).join(" ")}, active block starts at ${act}`);
+      const ok1 = rb.length === 2 && rb[1].kind === "paragraph" && act === rb[1].from && lez.length === 1;
+      await within(r.load("<textarea>\n\n*foo*\n\n</textarea>\n"), "html case");
+      r.caret(r.doc().indexOf("*foo*") + 2);
+      const ty = r.typed();
+      const ok2 = r.blocks().length === 1 && ty?.kind === "html" && ty.blockFrom === 0;
+      t15.push(`html case: typed selection ${ty?.kind} ${ty?.blockFrom}-${ty?.blockTo}`);
+      result("T15 where the editor's parser disagrees with Rust, the caret's block is the one Rust reports", ok1 && ok2, t15.join(" | "));
+
+      // T16: typed selection for the Agent: block id, kind, range and the headings that enclose it
+      const BOOK = "# 书名\n\n## 第一章\n\n### 第一节\n\n段落甲\n\n### 第二节\n\n段落乙\n\n## 第二章\n\n段落丙\n";
+      await within(r.load(BOOK), "book");
+      const probe = (m: string) => { r.caret(r.doc().indexOf(m) + 1); return r.typed(); };
+      const a = probe("段落乙"), c = probe("段落丙"), h = probe("第一节");
+      const sel = (() => { const p0 = r.doc().indexOf("段落乙"); r.caret(p0); return r.typed(); })();
+      const okT = a?.kind === "paragraph" && a.headingPath.join("/") === "书名/第一章/第二节" && c?.headingPath.join("/") === "书名/第二章" && h?.kind === "heading" && h.headingPath.join("/") === "书名/第一章" && !!a.blockId && a.blockId !== c?.blockId && (sel?.selFrom ?? -1) >= 0;
+      result("T16 typed selection carries block id, kind, range and heading path", okT, `乙: ${a?.headingPath.join("/")} 丙: ${c?.headingPath.join("/")} 第一节: ${h?.headingPath.join("/")}`);
+
+      // T17: a patch against an out-of-date version is refused, and reloading recovers
+      const before = r.rejects().length;
+      window.ipc.postMessage(JSON.stringify({ t: "edit", base: r.version() - 1, changes: [{ from: 0, to: 0, insert: "x" }] }));
+      await new Promise((res) => setTimeout(res, 400));
+      const refused = r.rejects().length === before + 1 && /StaleBase/.test(r.rejects()[before]);
+      // a position inside a surrogate pair (between the two halves of 😀) cannot be a text boundary
+      await within(r.load("😀 一\n\n后文\n"), "pair doc");
+      const b2 = r.rejects().length;
+      window.ipc.postMessage(JSON.stringify({ t: "edit", base: r.version(), changes: [{ from: 1, to: 1, insert: "x" }] }));
+      await new Promise((res) => setTimeout(res, 400));
+      const pairRefused = r.rejects().length === b2 + 1 && /BadPosition/.test(r.rejects()[b2]);
+      await within(r.load(r.doc()), "resync");
+      result("T17 stale patch and a position inside a surrogate pair are refused by Rust; a reload resynchronizes", refused && pairRefused && r.rustHash() === r.editorHash(), `rejects: ${JSON.stringify(r.rejects().slice(before))}`);
+      // round-trip cost of keeping Rust in sync, on long chapters (informational)
+      for (const reps of [20, 200]) {
+        const text = repeated(reps);
+        const t0 = performance.now();
+        await within(r.load(text), "long load");
+        const loadMs = performance.now() - t0;
+        const mid = Math.floor(r.doc().length / 2);
+        const lat: number[] = [];
+        for (let i = 0; i < 12; i++) {
+          const a = performance.now();
+          r.replace(mid + i, mid + i, "字");
+          await within(r.settled(), "latency");
+          lat.push(performance.now() - a);
+        }
+        lat.sort((x, y) => x - y);
+        info(`T18 Rust round trip, ${reps * 14} blocks, ${(text.length / 1000).toFixed(0)}k chars`, `load+parse ${loadMs.toFixed(0)} ms | one-character edit → blocks back: median ${lat[6].toFixed(0)} ms, max ${lat[11].toFixed(0)} ms | ${r.blocks().length} blocks | hashes equal: ${r.rustHash() === r.editorHash()}`);
+      }
+      r.detach();
+    }
+
     // T6: performance on long chapters
     for (const reps of [20, 200, 1000]) {
       const text = repeated(reps);
@@ -131,7 +241,7 @@ async function run(e: Engine) {
       info(`T6 ${reps} chapters (~${(text.match(/\n\n/g) || []).length} blocks), ${(text.length / 1000).toFixed(0)}k chars`, `load+paint ${loadMs.toFixed(0)} ms | serialize ${saveMs.toFixed(0)} ms | keystroke mean ${(tx.reduce((x, y) => x + y, 0) / tx.length).toFixed(2)} ms p95 ${tx[Math.floor(tx.length * 0.95)].toFixed(2)} ms | key→paint ${paint.toFixed(0)} ms | DOM nodes ${dom} | output ${(md.length / 1000).toFixed(0)}k chars`);
     }
   } catch (err) {
-    result("harness error", false, String(err && (err as Error).stack || err));
+    result("harness error", false, String((err as Error)?.message ?? err) + " :: " + String((err as Error)?.stack ?? ""));
   }
   post({ t: "done" });
 }
