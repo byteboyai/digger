@@ -1,8 +1,8 @@
 import { Annotation, EditorState, StateEffect, Transaction, type Range } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType, keymap } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { history, undo } from "@codemirror/commands";
+import { history, historyKeymap, undo } from "@codemirror/commands";
 import type { Engine, RustApi } from "./engine";
 import { RustSync, fnv } from "./rust-sync";
 import { Footnote } from "./footnote";
@@ -168,6 +168,7 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
     agent(op) { post({ t: "agent", ...op }); },
     agentErrors: () => sync.agentErrors,
     undo() { undo(view); },
+    pressKey(init) { view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); },
     composing: () => view.composing,
     pending: () => ({ inflight: sync.inflight, queued: !!sync.queued }),
     onEvent(cb) { eventLog = cb; },
@@ -195,6 +196,9 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
           doc: "",
           extensions: [
             history(),
+            // Cmd/Ctrl-Z, Shift-Cmd-Z, Cmd-Y: without this keymap the shortcuts do nothing (the undo COMMAND works,
+            // the key was never bound — found by hand-testing the Agent-patch undo).
+            keymap.of(historyKeymap),
             markdown({ base: markdownLanguage, extensions: [Footnote] }),
             EditorView.lineWrapping,
             livePreview,

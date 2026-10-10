@@ -277,7 +277,9 @@ Rust → editor   reject { reason }                                stale base, p
 - A patch containing a lone surrogate (for example an edit between the two halves of an emoji) is not valid JSON text for the Rust side; it was dropped silently and the editor waited forever. Rust now answers every unparsable message with a `reject`, and positions inside a surrogate pair are refused explicitly (`BadPosition`).
 - The test first compared 3 UTF-16 units with 3 code points and failed on emoji; block heads are therefore defined in code points while positions are in UTF-16 units. Any code that mixes the two will be wrong on exactly the text this product is about (CJK with emoji).
 
-**Not done:** behaviour during an IME composition (the live preview keeps its decorations while composing, but patches are still sent), and re-parsing only the changed region instead of the whole document (22 ms is fine at this size, the cost is linear and would matter for much longer documents).
+**Not done:** re-parsing only the changed region instead of the whole document (22 ms is fine at this size, the cost is linear and would matter for much longer documents).
+
+**Manual IME check (2026-10-10, macOS, run by the project owner on `spike/md-engine`, `ENGINE=cm`):** Chinese and Japanese composition in ordinary paragraphs, at the start of a line, next to `**bold**` and inside a heading, with the Rust sync running, and **with the Agent rewriting another block every 2 seconds and then the block holding the caret every 2 seconds while composing**, was reported as passing: no problems observed. Specific observations (for example whether the composition candidate window stayed in place) were not recorded. Windows and Linux IMEs are untested.
 
 ### Agent patches: Rust changes the text and the editor integrates it (tests T19 to T23)
 
@@ -304,6 +306,7 @@ What the tests show (three consecutive runs, a mutation check, and 22 of 22 chec
 
 - An Agent operation names a block id. In the randomized run 7 to 19 of 58 operations were refused with "no block with id": a block rewritten wholesale gets a new id, so a second operation aimed at its old id (issued from the editor's slightly outdated list) finds nothing. This is the intended behaviour (an explicit error, never a wrong target), but a real Agent runtime should resolve ids inside Rust at execution time and treat "no such block" as a normal outcome.
 - A patch that lands inside the author's current paragraph (T21) does not ask the author anything; the choice made was "keep both". For prose, whether the Agent's rewrite should be applied at all while the author is typing in the same paragraph is a product decision (queue it as a suggestion, or apply and offer undo); this spike shows that applying it is safe, not that it is the right experience.
+- **Undo had no keyboard shortcut.** Hand-testing found that Cmd-Z did nothing, while the automated undo test passed. The test called the undo *command*; the editor configuration never bound the history keys (`historyKeymap`). Fixed, and the test now presses Cmd-Z and Shift-Cmd-Z as key events (T22b; with the binding removed it fails). General lesson for this spike: an automated check that calls a command directly does not prove that the user can reach it.
 - Undo restores text, not ids: after undoing a wholesale rewrite the block gets a new id, because the id of the old text was not kept by the reconciler for the rewrite (see the block identity results).
 - The CodeMirror collaboration package was not used; the transform is a few lines over `ChangeSet`, with the authority's version counter in Rust. Whether to adopt `@codemirror/collab` for its update log and rebase helpers is open.
 

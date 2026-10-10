@@ -258,6 +258,19 @@ async function run(e: Engine) {
       await within(r.settled(), "T22 undo");
       result("T22 Ctrl-Z reverts exactly the Agent's change; the author's earlier edit stays; both sides agree", afterAgent.includes("Agent 重写的乙。") && r.doc() === afterOwn && afterOwn !== original22 && same(), `after undo equals the state before the Agent: ${r.doc() === afterOwn}`);
 
+      // T22b: the SAME with the keyboard: Cmd-Z and Shift-Cmd-Z (the shortcut, not the command)
+      await within(r.load(NOTE), "T22b load");
+      const o22b = r.doc();
+      await agentDone(() => r.agent({ op: "replace_block", id: idOf("乙段落"), text: "Agent 为键盘撤销改写的乙。" }), "T22b agent");
+      const a22b = r.doc();
+      r.pressKey({ key: "z", code: "KeyZ", keyCode: 90, metaKey: true });
+      await within(r.settled(), "T22b undo");
+      const undone = r.doc() === o22b && same();
+      // a real keyboard reports an upper-case key and a keyCode when Shift is held
+      r.pressKey({ key: "Z", code: "KeyZ", keyCode: 90, metaKey: true, shiftKey: true });
+      await within(r.settled(), "T22b redo");
+      result("T22b Cmd-Z undoes the Agent's change and Shift-Cmd-Z restores it, through the keyboard shortcut; both sides agree", undone && r.doc() === a22b && same(), `undone=${undone} redone=${r.doc() === a22b} equal=${same()}`);
+
       // T23: randomized interleaving of the author's edits, Agent operations and undo, without waiting in between
       await within(r.load(NOTE + "\n- 项一\n- 项二\n\n> 引用一段\n\n末段在这里。\n"), "T23 load");
       let seed = 0x9e3779b1;

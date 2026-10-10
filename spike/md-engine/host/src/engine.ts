@@ -30,6 +30,8 @@ export interface RustApi {
   onEvent(cb: (line: string) => void): void;
   /** the author's Ctrl-Z */
   undo(): void;
+  /** press a key chord on the editor like the keyboard does (key event dispatched on the content element) */
+  pressKey(init: KeyboardEventInit): void;
   stats(): { remoteApplied: number; remoteTransformed: number };
   detach(): void;
 }
