@@ -1,5 +1,6 @@
 import type { Engine } from "./engine";
 import { CORPUS, MARKERS, repeated } from "./corpus";
+import { FIXTURES } from "./fixtures";
 
 declare global {
   interface Window { ipc: { postMessage(m: string): void }; __MODE__?: string }
@@ -91,6 +92,22 @@ async function run(e: Engine) {
       if (got === want) exactOff++; else bad.push(`${m}: ${got} vs ${want}`);
     }
     result(`T9 caret maps to the exact source offset (${exactOff}/${probe.length})`, exactOff === probe.length, bad.join("; "));
+
+    // T10: the editor's own parser splits the text into the same top-level blocks as the Rust parser
+    if (e.blockKinds) {
+      const CLASS: Record<string, string> = { Paragraph: "paragraph", Blockquote: "quote", BulletList: "list", OrderedList: "list", FencedCode: "code", CodeBlock: "code", FootnoteDefinition: "footnote", HTMLBlock: "html", CommentBlock: "html", ProcessingInstructionBlock: "html", HorizontalRule: "rule", Table: "table", LinkReference: "linkref" };
+      const cls = (n: string) => (/^(ATX|Setext)Heading/.test(n) ? "heading" : CLASS[n] ?? "other:" + n);
+      let same = 0;
+      const bad: string[] = [];
+      for (const f of FIXTURES) {
+        e.load(f.text);
+        const got = e.blockKinds().map((b) => ({ class: cls(b.name), startLine: b.startLine, endLine: b.endLine })).filter((b) => b.class !== "linkref");
+        const key = (b: { class: string; startLine: number; endLine: number }) => `${b.class}[${b.startLine}-${b.endLine}]`;
+        if (got.length === f.rust.length && got.every((b, i) => key(b) === key(f.rust[i]))) same++;
+        else bad.push(`${f.name}: editor ${got.map(key).join(" ")} vs Rust ${f.rust.map(key).join(" ")}`);
+      }
+      result(`T10 editor parser = Rust parser on ${FIXTURES.length} texts incl. footnotes (${same}/${FIXTURES.length})`, same === FIXTURES.length, bad.join("; "));
+    }
 
     // T6: performance on long chapters
     for (const reps of [20, 200, 1000]) {

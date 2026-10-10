@@ -4,6 +4,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { history } from "@codemirror/commands";
 import type { Engine } from "./engine";
+import { Footnote } from "./footnote";
 
 class ImageWidget extends WidgetType {
   constructor(readonly src: string, readonly alt: string) { super(); }
@@ -46,6 +47,11 @@ function build(view: EditorView): DecorationSet {
         if (name === "Emphasis") out.push(Decoration.mark({ class: "cm-em" }).range(node.from, node.to));
         if (name === "StrongEmphasis") out.push(Decoration.mark({ class: "cm-strong" }).range(node.from, node.to));
         if (name === "InlineCode") out.push(Decoration.mark({ class: "cm-icode" }).range(node.from, node.to));
+        if (name === "FootnoteDefinition") {
+          for (let p = doc.lineAt(node.from).number; p <= doc.lineAt(node.to).number; p++) {
+            out.push(Decoration.line({ class: "cm-footnote" }).range(doc.line(p).from));
+          }
+        }
         if (name === "Blockquote") {
           for (let p = doc.lineAt(node.from).number; p <= doc.lineAt(node.to).number; p++) {
             out.push(Decoration.line({ class: "cm-quote" }).range(doc.line(p).from));
@@ -123,6 +129,7 @@ const theme = EditorView.theme({
   ".cm-strong": { fontWeight: "700" },
   ".cm-icode": { fontFamily: "ui-monospace, monospace", background: "#eee" },
   ".cm-link": { color: "#2a62c9", textDecoration: "underline" },
+  ".cm-footnote": { fontSize: "0.9em", color: "#555", borderLeft: "2px solid #ddd", paddingLeft: "10px" },
   ".cm-quote": { borderLeft: "3px solid #bbb", paddingLeft: "10px", color: "#555" },
 });
 
@@ -144,7 +151,7 @@ export function createCm(): Engine {
     mount(el) {
       view = new EditorView({
         parent: el,
-        state: EditorState.create({ doc: "", extensions: [history(), markdown({ base: markdownLanguage }), EditorView.lineWrapping, livePreview, theme] }),
+        state: EditorState.create({ doc: "", extensions: [history(), markdown({ base: markdownLanguage, extensions: [Footnote] }), EditorView.lineWrapping, livePreview, theme] }),
       });
     },
     load(md) {
@@ -155,6 +162,16 @@ export function createCm(): Engine {
     },
     getMarkdown: () => view.state.doc.toString(),
     blockRanges: () => loaded,
+    blockKinds() {
+      syntaxTree(view.state);
+      const out: { name: string; startLine: number; endLine: number }[] = [];
+      const doc = view.state.doc;
+      for (let n = syntaxTree(view.state).topNode.firstChild; n; n = n.nextSibling) {
+        const end = n.from + doc.sliceString(n.from, n.to).trimEnd().length;
+        out.push({ name: n.name, startLine: doc.lineAt(n.from).number - 1, endLine: doc.lineAt(Math.max(n.from, end - 1)).number - 1 });
+      }
+      return out;
+    },
     insertAfter(m, text) { view.dispatch({ changes: { from: posAfter(m), insert: text } }); },
     caretAfter(m) { view.dispatch({ selection: { anchor: posAfter(m) } }); },
     caretAtStart() { view.dispatch({ selection: { anchor: 0 } }); },

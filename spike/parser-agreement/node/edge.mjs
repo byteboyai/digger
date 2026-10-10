@@ -8,6 +8,12 @@ const add = (id, text, section) => C.push({ id, source: "edge", section, text })
 add("footnote-1", "正文[^1]。\n\n[^1]: 脚注内容\n\n下一段\n", "footnote");
 add("footnote-multi", "正文[^a]。\n\n[^a]: 第一段\n\n    第二段仍属于脚注\n\n下一段\n", "footnote");
 add("footnote-in-list", "- 项目[^x]\n\n[^x]: 脚注\n", "footnote");
+add("footnote-adjacent", "[^1]: 一\n[^2]: 二\n[^3]: 三\n", "footnote");
+add("footnote-under-paragraph", "一段文字\n[^1]: 紧跟的定义\n\n后文\n", "footnote");
+add("footnote-lazy", "[^1]: 第一行\n续行没有缩进\n\n后文\n", "footnote");
+add("footnote-list-inside", "[^1]: 说明:\n\n    - 甲\n    - 乙\n\n后文\n", "footnote");
+add("footnote-fence-inside", "[^1]: 代码:\n\n    ```\n    x = 1\n    ```\n\n后文\n", "footnote");
+add("footnote-indented-is-code", "    [^1]: 缩进代码\n\n后文\n", "footnote");
 add("footnote-end", "最后一段[^z]。\n\n[^z]: 末尾脚注", "footnote");
 // front matter / metadata
 add("front-yaml", "---\ntitle: 书名\nauthor: 某某\n---\n\n# 第一章\n\n正文\n", "front matter");

@@ -3,6 +3,8 @@ export interface Engine {
   mount(el: HTMLElement): void;
   load(md: string): void;
   getMarkdown(): string;
+  /** Top-level blocks by the engine's own parser (name and 0-based line extent); only engines with a Lezer tree implement it. */
+  blockKinds?(): { name: string; startLine: number; endLine: number }[];
   /** Top-level blocks as source ranges of the text that was loaded. */
   blockRanges(): { from: number; to: number }[];
   /** Edit through the editor model: insert `text` right after the first occurrence of `marker`. */
