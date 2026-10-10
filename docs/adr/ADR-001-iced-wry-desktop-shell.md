@@ -6,6 +6,8 @@
 - Applies to: desktop shell, editor, preview, webview hosts, bridge contract, packaging
 - Related: ADR-003 (Project consistency island), ADR-006 (Writing Document Representation), ADR-011 (bytehost application host)
 
+> **Update (2026-10-10, ADR-012):** the premise "a Writing Domain AST is authoritative" no longer holds; Markdown text is. The editor engine in §4.1 (Tiptap, with Milkdown compared) was chosen under that premise and is **re-opened**: it must satisfy the minimal-diff rule (untouched text preserved byte for byte), progressive syntax reveal, and compatibility with Dozer's source-first Markdown editing. CodeMirror 6 live preview becomes a primary candidate rather than a secondary view. The shell, the bridge, the pinned webview settings, the Rust-owned bars and the persistent history remain valid; the block-level delta, `blockId` plugin and block merge in the spike are ProseMirror/AST-specific and will be reworked. Results below were measured under the earlier premise.
+
 ## Context
 
 Digger is a desktop-first, local-first application whose authority boundary is a single Rust process (Technical Architecture §4.1, principle 1). The UI must show Project structure, history, Diff/Result review and Agent activity, and must host a structured rich-text editor.
@@ -87,7 +89,7 @@ One editor host instance edits one document (`documentId`). It is created and de
 
 ### 4.1 Editor library choice
 
-The editor library is an adapter choice under ADR-006, so what matters is the native document model and block-ID support, not direct Markdown I/O. Markdown remains an exchange format.
+*Superseded in part by ADR-012: this section was written when the AST was authoritative and Markdown was only an exchange format. The comparison below is kept as measured; the choice is re-opened.* The editor library is an adapter choice, so what matters is the native document model and block-ID support.
 
 | Candidate | Core | Fit |
 |---|---|---|

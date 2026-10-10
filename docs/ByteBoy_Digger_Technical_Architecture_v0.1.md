@@ -284,22 +284,29 @@ Domain crates must not depend on iced, wry, SQLx, HTTP clients or the TypeScript
 
 ## 6. Local Project Layout
 
-Each Project is portable as a directory:
+Each Project is portable as a directory. Per [ADR-012](adr/ADR-012-markdown-text-as-authoritative-content.md) it has a user-visible Markdown mirror and an internal authoritative directory:
 
 ```text
-My Project.digger/
-├── project.db
-├── manifest.json
-├── resources/
-│   └── objects/
-│       └── ab/cd/<sha256>
-├── working/
-│   ├── runs/
-│   └── previews/
-├── exports/
-├── backups/
-└── logs/                    # optional, privacy policy applies
+MyBook/
+├── book.yaml                # mirror: title, chapter order, metadata
+├── chapters/
+│   └── 01-introduction.md   # mirror of each Document
+├── assets/                  # mirror of image assets
+└── .digger/                 # authoritative state; ignored by Git by default
+    ├── project.db
+    ├── manifest.json
+    ├── resources/
+    │   └── objects/
+    │       └── ab/cd/<sha256>
+    ├── working/
+    │   ├── runs/
+    │   └── previews/
+    ├── exports/
+    ├── backups/
+    └── logs/                # optional, privacy policy applies
 ```
+
+`project.db` remains the only consistency island (ADR-003). The `.md` files are written from it after each Commit and are re-imported through the same merge when they change outside Digger.
 
 Application-level state is separate:
 
@@ -556,16 +563,20 @@ For trusted low-risk Human edits, debounce and auto-commit policy may make the i
 
 Editor crash recovery uses a separate buffer journal. Recovery offers a candidate change; it does not overwrite Official State automatically.
 
-The accepted representation decision is:
+The representation decision (ADR-012, amending ADR-006) is:
 
 ```text
-Writing Domain AST = authoritative manuscript state
-ProseMirror JSON   = editor session projection
-Markdown / HTML    = exchange and preview
-DOCX / EPUB / PDF  = import, compile or publication
+Markdown text (per Document, in project.db) = authoritative chapter content
+Block tree + source map                     = derived on every Commit; rebuildable
+Block identity (block_id, semantic_id, Agent history) = authoritative metadata in project.db
+.md files in the Project folder             = mirror, re-imported through the three-way merge
+Editor session state                        = projection (the engine is being re-decided)
+DOCX / EPUB / PDF                           = import, compile or publication
 ```
 
-The canonical AST uses versioned deterministic JSON and stable block IDs. HTML is never authoritative. Conversion, semantic operations, recovery and schema evolution are specified in [ADR-006](adr/ADR-006-writing-document-representation.md).
+Changes are text patches with a base version and hash; the semantic operations of ADR-006 compile to them. Untouched text is never rewritten. The editor engine is **re-opened** by this decision (ADR-001): Tiptap/ProseMirror is no longer assumed, because it normalizes Markdown on save. Reconciliation of block identity, merge and the mirror are specified in ADR-012.
+
+> The paragraph above on "Tiptap/ProseMirror is an editor adapter" still holds as a principle: whatever the engine, it never defines Official State.
 
 ---
 
@@ -1070,6 +1081,7 @@ The following decisions should be captured as ADRs during implementation:
 9. ADR-009: first model provider abstraction and structured output policy.
 10. ADR-010: Project backup/export package format.
 11. ADR-011: embedding bytehost as the application host. **Proposed.**
+12. ADR-012: Markdown text as the authoritative chapter content (amends ADR-006). **Accepted.**
 
 ---
 

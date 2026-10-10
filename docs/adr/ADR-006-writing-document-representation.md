@@ -1,6 +1,6 @@
 # ADR-006: Writing Document Representation
 
-- Status: Accepted
+- Status: Accepted — **amended by [ADR-012](ADR-012-markdown-text-as-authoritative-content.md) (2026-10-10)**: the Writing Domain AST is no longer the authority; Markdown text is. The semantic operations, Agent interaction, import/export reports, crash recovery and separation of chapter structure from content stay in force; the canonical AST encoding, AST hashing and AST schema evolution are superseded.
 - Date: 2026-10-01
 - Decision owners: Digger Architecture
 - Applies to: Writing Domain, desktop editor, import/export, Agent changes
