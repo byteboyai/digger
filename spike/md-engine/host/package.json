@@ -1,0 +1,29 @@
+{
+  "name": "md-engine-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": { "build": "ENGINE=cm vite build && ENGINE=pm vite build" },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.0.0",
+    "@types/markdown-it": "^14.1.0"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.7.0",
+    "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.36.0",
+    "@lezer/markdown": "^1.4.0",
+    "markdown-it": "^14.1.0",
+    "prosemirror-commands": "^1.6.0",
+    "prosemirror-history": "^1.4.0",
+    "prosemirror-markdown": "^1.13.0",
+    "prosemirror-model": "^1.24.0",
+    "prosemirror-state": "^1.4.0",
+    "prosemirror-transform": "^1.10.0",
+    "prosemirror-view": "^1.37.0"
+  }
+}

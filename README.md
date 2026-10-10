@@ -12,5 +12,6 @@
 - [ADR-006: Writing Document Representation](docs/adr/ADR-006-writing-document-representation.md)
 - [ADR-011: Embedding bytehost as the Application Host](docs/adr/ADR-011-bytehost-app-host-embedding.md)
 - [ADR-012: Markdown Text as the Authoritative Chapter Content](docs/adr/ADR-012-markdown-text-as-authoritative-content.md)
+- Engine spike: `spike/md-engine` (CodeMirror 6 vs ProseMirror under ADR-012)
 - [Markdown editor initial requirements (Dozer and Digger)](docs/byteboy_markdown_editor_initial_requirements.md)
 - [GitHub projects code feature analysis v0.1](docs/ByteBoy_Digger_GitHub_Projects_Code_Feature_Analysis_v0.1.md)

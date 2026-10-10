@@ -126,9 +126,43 @@ ADR-001 chose Tiptap/ProseMirror under the premise that an AST is authoritative.
 - IME correctness for Chinese and Japanese, long chapters, inline image widgets, block drag and reorder;
 - compatible with Dozer's source-first Markdown editing (Dozer already hosts CodeMirror).
 
-Two candidates follow: a **CodeMirror 6 live-preview editor** (the document is the Markdown text, syntax is hidden by decorations outside the caret; its change sets are range edits, which match text patches, and its collaboration module rebases updates over concurrent ones) and a **ProseMirror editor with source-preserving serialization** (untouched blocks keep their original text, only changed blocks are reserialized). Neither is chosen here; a spike decides.
+Two candidates follow: a **CodeMirror 6 live-preview editor** (the document is the Markdown text, syntax is hidden by decorations outside the caret; its change sets are range edits, which match text patches, and its collaboration module rebases updates over concurrent ones) and a **ProseMirror editor with source-preserving serialization** (untouched blocks keep their original text, only changed blocks are reserialized). The engine spike below compares them; it favours CodeMirror 6, pending the manual IME check.
 
 A second parser exists in the editor (for example Lezer for CodeMirror) beside the Rust parser. **Rust is authoritative for block boundaries.** The two must agree on the dialect's corpus, which is a validation item.
+
+## Engine spike results (2026-10-10, `spike/md-engine`)
+
+Both engines run the same checks in a real WKWebView against one realistic chapter (Chinese prose, setext headings, `_`/`__` emphasis, `1)` lists, hard breaks, reference links, footnotes, a table, an HTML comment, an image). The ProseMirror side is a source-preserving variant I built for the test: each top-level block remembers its original Markdown and gap; an unchanged block is emitted verbatim, a changed block goes through `prosemirror-markdown`'s normalizing serializer; tables and HTML are raw blocks. Versions: CodeMirror view 6.43, ProseMirror model 1.25.
+
+| Check | CodeMirror 6 live preview | ProseMirror, source-preserving |
+|---|---|---|
+| T1 open and save without edits is byte-exact | pass | pass |
+| T2 a one-character edit changes only that character | **18 of 18 blocks** | **9 of 18**: edits in a setext heading, `_`/`__` emphasis, a hard-break paragraph, `1)` lists, nested lists, quotes, reference-link and footnote paragraphs rewrote 38–107 extra characters of the block |
+| T3 heading marker hidden away from the caret, shown with it | pass | pass |
+| T4 inline marks hidden away, shown with the caret | pass (whole block) | pass (only the marked span) |
+| T5a image rendered as an image | pass | pass |
+| T5b image source revealed and editable as Markdown | pass | **fail** (would need a custom node view) |
+| T7 move a block: blocks verbatim, nothing lost or invented | pass | pass |
+| T9 caret → exact source offset (8 probes) | 8/8, native | 8/8, via a greedy text alignment heuristic that is not general |
+| 130k chars (~3,200 blocks): load, keystroke mean, DOM nodes | 33 ms, 1.4 ms, 137 | 100 ms, 2.0 ms, 7,800 |
+| 658k chars (~16,000 blocks) | 33 ms, 1.4 ms, 140 | 383 ms, 12.3 ms, 39,000 |
+| Tables, footnotes, HTML comments | plain text, always preserved | tables/HTML raw blocks, footnote text re-escaped on edit, reference definitions live in gaps and are invisible in the editor |
+
+Reading the results:
+
+- The deciding difference is T2. Under the minimal-diff rule (a requirement of this ADR) block-level preservation is not enough: as soon as the author edits a block written in a non-default style, the whole block is normalized. About half of the block kinds in a realistic chapter did. Avoiding that in ProseMirror means mapping each editing step back to a text patch on the original source, which makes the source text the real model again.
+- Chapter-sized documents (a few thousand to tens of thousands of characters) perform acceptably in both. CodeMirror virtualizes (about 140 DOM nodes regardless of size); ProseMirror does not and degrades past roughly 300k characters (12 ms per keystroke at 658k).
+- Progressive syntax reveal works in both. ProseMirror reveals only the marked span, CodeMirror the whole block. The CodeMirror version needs no extra mapping because the document already is the source.
+- The ProseMirror variant is my minimal implementation and the CodeMirror one is a first live-preview plugin; both are test-sized, not product-quality. A finer ProseMirror variant was not built.
+
+**Not verified here (manual or later):**
+
+- **IME composition with live-preview decorations** is the main risk for CodeMirror: hidden syntax and widgets changing while a composition is active. The plugin keeps decorations mapped during composition and rebuilds after it, but this was not exercised with a real IME. Run `ENGINE=cm cargo run` in `spike/md-engine` and type Chinese and Japanese, including at the start of a line, next to `**` and inside a heading.
+- Caret movement across hidden ranges, selection toolbars, drag handles for blocks, visual table editing, accessibility, undo semantics around Agent changes.
+- That the Rust parser and Lezer agree on block boundaries (validation 5), and that block identity reconciliation works (validation 2); neither was part of this spike.
+- Reuse with Dozer's existing CodeMirror host (validation 7).
+
+**Recommendation, pending the IME check:** use CodeMirror 6 live preview as the Digger chapter editor, and share the Markdown language and live-preview extension with Dozer's CodeMirror host. Keep ProseMirror only as a fallback if the IME check fails or if rich structured blocks (visual tables) turn out to need it.
 
 ## Consequences
 

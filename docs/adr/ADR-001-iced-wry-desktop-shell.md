@@ -6,6 +6,8 @@
 - Applies to: desktop shell, editor, preview, webview hosts, bridge contract, packaging
 - Related: ADR-003 (Project consistency island), ADR-006 (Writing Document Representation), ADR-011 (bytehost application host)
 
+> **Engine spike (2026-10-10):** `spike/md-engine` compared CodeMirror 6 live preview with a source-preserving ProseMirror variant under the new rules; results and the recommendation (CodeMirror 6, pending a manual IME check) are in ADR-012, "Engine spike results".
+
 > **Update (2026-10-10, ADR-012):** the premise "a Writing Domain AST is authoritative" no longer holds; Markdown text is. The editor engine in §4.1 (Tiptap, with Milkdown compared) was chosen under that premise and is **re-opened**: it must satisfy the minimal-diff rule (untouched text preserved byte for byte), progressive syntax reveal, and compatibility with Dozer's source-first Markdown editing. CodeMirror 6 live preview becomes a primary candidate rather than a secondary view. The shell, the bridge, the pinned webview settings, the Rust-owned bars and the persistent history remain valid; the block-level delta, `blockId` plugin and block merge in the spike are ProseMirror/AST-specific and will be reworked. Results below were measured under the earlier premise.
 
 ## Context
