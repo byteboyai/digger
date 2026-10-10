@@ -215,6 +215,35 @@ Similarity is the larger of a token Dice score and the share of unchanged senten
 - The property thresholds were set just inside the measured values, so they catch regressions but not every possible bug: breaking the split rule was caught by a dedicated unit test and **not** by the stream thresholds. The simulator also uses synthetic text and a fixed set of operations; real manuscripts and real editor behaviour (autosave timing, paste of whole sections, IME) are not covered.
 - The block structure here comes from pulldown-cmark. Agreement with the editor's own parser (validation item 5) is untested.
 
+## Parser agreement results (2026-10-10, `spike/parser-agreement`)
+
+The question: the Rust parser (pulldown-cmark, authoritative for block boundaries and ids) and the editor's parser (Lezer, as used by CodeMirror 6) must split a chapter into the same top-level blocks. Both were run over the same texts and compared per document on (kind, first line, last line) of every top-level block, with commonmark.js (the CommonMark reference implementation) as the judge of disagreements. Link reference definitions are not blocks for pulldown-cmark, so Lezer's `LinkReference` nodes were set aside. Lezer was run with a footnote extension written for this spike (below).
+
+| Corpus | Documents | Identical block structure |
+|---|---|---|
+| CommonMark 0.31.2 examples | 652 | 649 (99.5%) |
+| GFM extension examples (tables, task lists, strikethrough, autolinks) | 24 | 24 (100%) |
+| Markdown files of this workspace (Chinese and English, 144,000 blocks) | 1,519 | 1,515 (99.7%) |
+| Random chapters from the block-identity generator | 300 | 300 (100%) |
+| 74 hand-written manuscript cases (footnotes, front matter, math, CJK indents, table edge cases, CRLF, BOM, emoji, 100k-character line…) | 74 | 72 (97.3%); 67 (90.5%) without the footnote extension |
+| 2,100 intermediate states while typing | 2,100 | 2,065 (98.3%) |
+
+- **Lezer's incremental tree equals its full parse** in all 2,100 edits (random insertions and deletions that create half-typed fences, tables, lists, quotes and HTML). The tree the editor holds is the tree a fresh parse would give.
+- **Every static disagreement was judged by commonmark.js, and pulldown-cmark was right in all of them.** Lezer deviates from CommonMark in: a tab after `#` (not a heading), `<textarea>` (not a raw-text HTML block), an empty list item followed by an indented paragraph (the list should end), a list whose continuation is indented by four spaces, and an HTML block starting with an `<img …>` tag line. These are 7 of 2,570 static documents, 4 of them in this workspace's real files.
+- **Conformance to the CommonMark reference on the 652 examples:** pulldown-cmark 650 (99.7%), Lezer 647 (99.2%), markdown-it 643 (98.6%), comrak 640 (98.2%). This supports pulldown-cmark as the Rust parser; comrak (a port of GitHub's cmark-gfm) was tried as an alternative and is less conformant on these examples.
+- **Footnotes need an editor-side extension.** Lezer has no footnote support: `[^1]: …` becomes a link reference, and a multi-paragraph footnote becomes a link reference plus a code block. A composite-block extension (about 25 lines, in `node/footnote.mjs`) makes all five footnote cases agree, including multi-paragraph and in-list ones. It must be part of the editor's CodeMirror configuration.
+- **Half-typed tables and one quote/list case disagree during typing (35 of 2,100 states, five root causes).** A table row that is only `|`, a row with a line break inside, or a malformed delimiter row such as `|---- --|`: pulldown-cmark and comrak end the table or accept the table differently from Lezer and markdown-it (the two Rust parsers agree with each other on 31 of these 35 states; Lezer agrees with markdown-it). There is no authoritative judge for these: the GFM text does not settle them and implementations split. A quote followed by a line starting `2.`: commonmark.js agrees with the Rust parser. All of these are transient; they resolve when the line is finished.
+- **Front matter:** `---` YAML front matter is parsed by both parsers as a thematic break plus a setext heading. Neither treats it as metadata unless the corresponding option is enabled on each side. If front matter is adopted, both must be configured identically.
+
+**What this means for the design**
+
+- The existing rule stands and is now backed by data: **Rust is authoritative for block boundaries and ids.** Disagreement with the editor's tree is about 0.3% of real documents and about 1.7% of half-typed states, so the editor must not use its own tree for anything that changes data. Block ranges for typed selection, Agent context and id lookup come from Rust, sent to the editor after each Commit; the Lezer tree is used only for live-preview decoration.
+- A disagreement only moves where syntax is revealed while the caret is in that region; it cannot change block identity.
+- Add the footnote extension to the CodeMirror configuration, and keep `spike/parser-agreement/run-all.sh` as a conformance test: it fails on any new disagreement outside a short list of known, explained deviations, and on more than 2% disagreement in typing states.
+- Autosave can commit a half-typed table. The Rust blocks at that moment (for example a table followed by a one-line paragraph) differ from the finished table, so a row being typed can briefly be its own block with its own id and then be absorbed. The id reconciliation tolerates this, but Agent history should not be anchored to a block whose kind changed in the same Commit.
+
+**Limits of this check:** only top-level block boundaries were compared, not inline structure (emphasis, links) or nested blocks. The workspace documents are mostly engineering text, not prose manuscripts. The typing states come from a random edit generator, not from real sessions. Only macOS-independent logic was tested (both parsers run outside the webview; Lezer is the same package version as in the editor bundle). Whether pulldown-cmark or Lezer is closer to what GitHub renders for half-typed tables was not settled.
+
 ## Consequences
 
 Positive:
@@ -244,7 +273,7 @@ To be reworked: the block model and block delta (`doc.rs`), the block-level merg
 2. **Block id survival:** property tests over simulated edit streams (typing, paste, split, merge, move, thousands of characters inserted earlier) measuring how many ids survive and how many matches are wrong. **Done in simulation; see "Block identity spike results".** Real manuscripts and editor behaviour remain to be checked.
 3. **Text merge:** automatic merge of disjoint edits inside one block, conflict on overlap, fuzzed against a reference.
 4. **Mirror:** atomic file write, crash between Commit and mirror write, external edit imported through the merge, wholesale replacement handled as WorkingState, no silent loss in either direction.
-5. **Parser agreement:** the Rust and editor parsers agree on block boundaries over the CommonMark and GFM example corpora plus a real manuscript.
+5. **Parser agreement:** the Rust and editor parsers agree on block boundaries over the CommonMark and GFM example corpora plus a real manuscript. **Done; see "Parser agreement results".** A real prose manuscript and real typing sessions are still to be added to the corpus.
 6. **CodeMirror live-preview spike:** progressive reveal, Chinese and Japanese IME, image widgets, long-chapter performance, block drag; compare with ProseMirror under the same checks.
 7. **Dozer reuse:** confirm how much of Dozer's existing CodeMirror host and Markdown handling can be shared.
 8. **Prose diff:** design the word-level diff plus paragraph and section moves on top of text patches.

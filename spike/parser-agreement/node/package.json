@@ -1,0 +1,13 @@
+{
+  "name": "parser-agreement-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@lezer/markdown": "1.8.0",
+    "commonmark": "^0.31.2",
+    "markdown-it": "^14.3.2"
+  }
+}

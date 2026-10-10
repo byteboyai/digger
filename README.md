@@ -14,5 +14,6 @@
 - [ADR-012: Markdown Text as the Authoritative Chapter Content](docs/adr/ADR-012-markdown-text-as-authoritative-content.md)
 - Engine spike: `spike/md-engine` (CodeMirror 6 vs ProseMirror under ADR-012)
 - Block identity spike: `spike/block-identity` (stable block ids across edits, with property tests)
+- Parser agreement spike: `spike/parser-agreement` (Rust vs Lezer block boundaries, with a conformance check)
 - [Markdown editor initial requirements (Dozer and Digger)](docs/byteboy_markdown_editor_initial_requirements.md)
 - [GitHub projects code feature analysis v0.1](docs/ByteBoy_Digger_GitHub_Projects_Code_Feature_Analysis_v0.1.md)
