@@ -1,7 +1,7 @@
 //! 编辑器宿主 spike(ADR-001 验证项 1–4):iced 窗口 + wry 子视图 + Tiptap 宿主。
 //!
 //! `SELFTEST=<mode>` 自动执行并打印 PASS/FAIL:
-//!   basic | merge | crash-a | crash-b-accept | crash-b-discard | crash-b-stale
+//!   basic | merge | perf | crash-a | crash-b-accept | crash-b-discard | crash-b-stale
 //! crash-b-* 需要 `SPIKE_DIR` 指向 crash-a 留下的数据目录,见 run_recovery_test.sh。
 
 mod bridge;
@@ -26,7 +26,13 @@ const LEFT_W: f32 = 340.0;
 const TOP_BAR_H: f32 = 40.0;
 const RECOVERY_BAR_H: f32 = 44.0;
 const MAX_FRAME: usize = 2 * 1024 * 1024;
-const HOST_HTML: &str = include_str!("../host/dist/index.html");
+const HOST_TIPTAP: &str = include_str!("../host/dist-tiptap/tiptap.html");
+const HOST_MILKDOWN: &str = include_str!("../host/dist-milkdown/milkdown.html");
+
+/// `HOST=milkdown` 选 Milkdown 宿主,默认 Tiptap。
+fn host_html() -> &'static str {
+    if std::env::var("HOST").as_deref() == Ok("milkdown") { HOST_MILKDOWN } else { HOST_TIPTAP }
+}
 
 thread_local! {
     static HOST: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
@@ -58,6 +64,8 @@ enum Mode {
     Interactive,
     Basic,
     Merge,
+    Perf,
+    InputRule,
     CrashA,
     CrashB(Crash),
 }
@@ -130,6 +138,8 @@ impl State {
         let mode = match std::env::var("SELFTEST").as_deref() {
             Err(_) => Mode::Interactive,
             Ok("merge") => Mode::Merge,
+            Ok("perf") => Mode::Perf,
+            Ok("inputrule") => Mode::InputRule,
             Ok("crash-a") => Mode::CrashA,
             Ok("crash-b-accept") => Mode::CrashB(Crash::Accept),
             Ok("crash-b-discard") => Mode::CrashB(Crash::Discard),
@@ -148,11 +158,18 @@ impl State {
                 panel_id: uuid::Uuid::now_v7().to_string(),
                 document_id: uuid::Uuid::now_v7().to_string(),
             };
-            let blocks = vec![
+            let mut blocks = vec![
                 Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Heading(1), text: "第一章 开端".into() },
                 Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Paragraph, text: "夜色渐深，城市的灯火一盏盏亮起。".into() },
                 Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Paragraph, text: "他推开门，雨声涌了进来。".into() },
             ];
+            if mode == Mode::Perf {
+                let n: usize = std::env::var("BLOCKS").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
+                let line = "夜色渐深，城市的灯火一盏盏亮起，他推开门，雨声涌了进来，所有的往事像潮水一样漫过脚踝。";
+                for i in 0..n {
+                    blocks.push(Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Paragraph, text: format!("{i}. {line}") });
+                }
+            }
             let p = Persisted { binding, rev: 1, history: BTreeMap::from([(1, blocks.clone())]), blocks };
             store.save(&p);
             p
@@ -361,11 +378,12 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
             let bounds = s.bounds();
             let script = format!("window.__DIGGER_BINDING__ = {};", serde_json::to_string(&s.binding).unwrap());
             let tx = TX.get().unwrap().clone();
+            let html = host_html();
             let build = window::run(id, move |w| {
                 let wv = wry::WebViewBuilder::new()
                     .with_bounds(bounds)
                     .with_initialization_script(script)
-                    .with_html(HOST_HTML)
+                    .with_html(html)
                     .with_devtools(false)
                     .with_ipc_handler(move |req| {
                         let _ = tx.send(req.into_body());
@@ -432,6 +450,11 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
             match s.mode {
                 Mode::Interactive => load,
                 Mode::Basic => seq(vec![load, window::resize(win, Size::new(900.0, 600.0)), st(win, "selftest", json!({}))]),
+                Mode::InputRule => seq(vec![load, st(win, "st_inputrule", json!({}))]),
+                Mode::Perf => {
+                    s.stage = 1;
+                    seq(vec![load, st(win, "st_perf", json!({}))])
+                }
                 Mode::Merge => {
                     s.stage = 1;
                     seq(vec![load, st(win, "st_type", json!({"block": 1, "text": " [本地]"})), st(win, "st_report", json!({}))])
@@ -571,7 +594,48 @@ fn hook(s: &mut State, win: window::Id, event: &str) -> Task<Message> {
     }
 }
 
+fn on_perf(s: &mut State, r: &Value) -> Task<Message> {
+    let p = &r["perf"];
+    // Rust 侧代价:把整篇候选作为一条 edit 帧收下并解析、diff(单块有改动)。
+    let mut local = s.blocks.clone();
+    let mid = local.len() / 2;
+    local[mid].text.push('字');
+    let frame = json!({"hostKind":"editor","binding":s.binding,"seq":1,"type":"edit",
+        "payload":{"baseRev": state_ref(&s.binding, s.rev), "doc": doc::to_pm(&local)}})
+    .to_string();
+    let mut v = Validator::new(s.binding.clone(), MAX_FRAME);
+    let t = std::time::Instant::now();
+    let env = v.accept(&frame);
+    let accept_ms = t.elapsed().as_secs_f64() * 1e3;
+    let t = std::time::Instant::now();
+    let parsed = env.as_ref().ok().and_then(|e| doc::parse_pm(&e.payload["doc"]).ok());
+    let parse_ms = t.elapsed().as_secs_f64() * 1e3;
+    let t = std::time::Instant::now();
+    let ops = parsed.as_ref().map(|(b, _)| doc::diff(&s.blocks, b).len()).unwrap_or(0);
+    let diff_ms = t.elapsed().as_secs_f64() * 1e3;
+    println!(
+        "PERF {} | blocks {} | load {:.1} ms | getJSON {:.1} ms ({} KB) | tx mean {:.2} ms p95 {:.2} ms | tx→paint {:.1} ms | Rust: frame {} KB accept {:.1} ms parse {:.1} ms diff {:.2} ms ({} op)",
+        p["adapter"].as_str().unwrap_or("?"), p["blocks"], p["loadMs"].as_f64().unwrap_or(0.0), p["getJsonMs"].as_f64().unwrap_or(0.0),
+        p["jsonBytes"].as_u64().unwrap_or(0) / 1024, p["txMeanMs"].as_f64().unwrap_or(0.0), p["txP95Ms"].as_f64().unwrap_or(0.0),
+        p["txToPaintMs"].as_f64().unwrap_or(0.0), frame.len() / 1024, accept_ms, parse_ms, diff_ms, ops
+    );
+    s.check("perf: edit frame fits the bridge size limit", env.is_ok());
+    s.check("perf: single-block change yields exactly one semantic op", ops == 1);
+    finish(s)
+}
+
 fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
+    if !r["inputrule"].is_null() {
+        let i = &r["inputrule"];
+        println!("INPUTRULE {i}");
+        s.check("input rule '## ' fired", i["handled"] == true);
+        s.check("paragraph became a heading", i["type"] == "heading" && i["level"] == 2);
+        s.check("block id preserved across the type change", i["before"] == i["after"] && i["after"].is_string());
+        return finish(s);
+    }
+    if !r["perf"].is_null() {
+        return on_perf(s, r);
+    }
     let texts = texts_of(&r["doc"]);
     let off: Vec<String> = s.blocks.iter().map(|b| b.text.clone()).collect();
     let sess = |t: Task<Message>| t;

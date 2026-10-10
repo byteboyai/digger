@@ -198,7 +198,37 @@ Findings:
 
 Manual check (2026-10-10, macOS, run by the project owner): Chinese and Japanese IME composition in the Tiptap editor host works with no problems observed. Details such as candidate-window position were not separately recorded. Windows/Linux IME remains unverified.
 
-Not done (still required before Accepted): Milkdown comparison; CodeMirror source-mode round trip; layering with a native overlay window (the in-window push-down rule is verified for two iced bars, the native-window route is not); pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
+Not done (still required before Accepted): CodeMirror source-mode round trip; layering with a native overlay window (the in-window push-down rule is verified for two iced bars, the native-window route is not); pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
+
+## Milkdown comparison (2026-10-10, same spike, `HOST=milkdown`)
+
+Both adapters run behind the same host core (bridge, debounce/in-flight protocol, rebase/conflict, scripted tests); each only builds a ProseMirror `EditorView` and installs two shared plugins (`blockId`, change notification). Versions: Tiptap 3.31.4, Milkdown kit 7.22.2 (commonmark preset + history only). Rust side is identical.
+
+Automated results — identical on both: `basic` (block-id stability, split, delete, viewport), `merge` (auto-merge, conflict, keep-mine/take-official, clean host), crash recovery (accept/discard/stale journal), and the Markdown input-rule test below. All pass on both.
+
+| Aspect | Tiptap | Milkdown |
+|---|---|---|
+| Adding a `blockId` attribute | `addGlobalAttributes` on a list of node types; one declaration | No global API: `extendSchema` per node returns a **new** plugin that must be registered *after* the preset, otherwise it is silently overridden (first attempt failed this way: every block lost its id) |
+| Same ProseMirror JSON from Rust accepted | yes (`paragraph`/`heading`, `level`) | yes; heading also gets its own `id` attr from the preset, ignored by Rust |
+| Bundle (single file, minified) | 388 KB | 383 KB |
+| Load of N blocks (release build, ms) | 500: 26 · 2000: 70 · 6000: 174 | 500: 27 · 2000: 71 · 6000: 187 |
+| Per-keystroke transaction, mean (ms) | 0.35 · 0.90 · 1.88 | 0.33 · 0.85 · 2.17 |
+| Transaction → paint (ms) | 5 · 16 · 10 | 9 · 10 · 20 |
+| Markdown typing (`## ` etc.) | StarterKit input rules | preset input rules; heading rule reads the *selection*, not the typed position |
+| Markdown (de)serialization | needs an extension; not used (Rust converts) | built in; not used (Rust converts) |
+
+Timer resolution in WKWebView is ~1 ms, so sub-millisecond differences and the single-sample paint times are noise. For this document model the two are equivalent in measured performance.
+
+Library-independent findings from the comparison:
+
+1. **An in-place type change loses the block id in both libraries.** Typing `## ` at the start of a paragraph re-creates the node with default attributes, so the Markdown input rule silently changed the block's identity. The shared `blockId` plugin now maps a block without an id back through the transaction and inherits the old id; both adapters pass `SELFTEST=inputrule` with it. Without this, every "turn paragraph into heading" would look like delete + insert to Rust and break provenance, comments and Agent references.
+2. Any host-side rule that reads the editor selection (Milkdown's heading rule) must be tested with the caret in place; a synthetic call with the wrong selection produced level 3 instead of 2.
+3. **Rust's `doc::diff` is quadratic** (26.7 ms for 6000 blocks, one changed). Fix before large chapters; it does not depend on the editor.
+4. A 6000-paragraph chapter (~450k Chinese characters) sends a 1.48 MB `edit` frame against the 2 MB bridge limit, and `getJSON` stays under 1 ms but the frame parse/diff cost grows linearly. Confirms that whole-document `edit` payloads must become block-scoped before chapters of that size.
+
+Manual checks still needed on Milkdown (cannot be automated here): Chinese/Japanese IME composition, and the subjective "typing Markdown" feel — run `HOST=milkdown cargo run` in `spike/editor-host`.
+
+**Recommendation (pending the manual IME check):** keep **Tiptap** as the primary editor. Measured behaviour is equal, so the deciding factors are structural: Tiptap's global-attribute and per-extension model matches ADR-006's "every extension declares its AST mapping" rule directly, and does not have the silent schema-override ordering pitfall. Milkdown's advantage is built-in Markdown (de)serialization, which this design does not use because Rust performs the conversion. Re-open the choice only if the manual feel test strongly favours Milkdown.
 
 ## Open questions
 
@@ -208,4 +238,4 @@ Not done (still required before Accepted): Milkdown comparison; CodeMirror sourc
 - Windows/Linux editor-host verification schedule and IME coverage.
 - Which byteui components Digger reuses unchanged versus proposes upstream.
 - Whether the CodeMirror source mode ships in v1 or follows the first Writing slice.
-- Final editor library after the Tiptap vs Milkdown comparison (§4.1).
+- Confirm the editor library after the manual Milkdown feel/IME check (recommendation above: Tiptap).
