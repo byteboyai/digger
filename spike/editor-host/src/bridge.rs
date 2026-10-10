@@ -43,7 +43,6 @@ const EDITOR_INBOUND: &[&str] = &[
     "title",
     "snapshot",
     "closing",
-    "resolve",
     "resync",
     "selftest_done",
     "selftest_report",

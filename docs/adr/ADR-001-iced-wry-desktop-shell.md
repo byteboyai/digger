@@ -77,7 +77,7 @@ One editor host instance edits one document (`documentId`). It is created and de
 
 **Edit.** The host sends `edit` messages carrying the base `StateRef` and a **block-scoped delta** against its baseline (which equals Rust's version at that `StateRef`): the changed blocks, the removed ids, and anchor placements for blocks whose predecessor changed (Technical Architecture §9.2). It does not write to anything. Rust validates against the supported-subset table in ADR-006 and turns accepted input into a Draft Change with a `BaseStateRef`. Only the Writing Domain applies a Change. Trusted, low-risk Human edits may auto-commit by policy, but still pass through Change → Commit.
 
-**Stale base.** If the Official `StateRef` advances while the host has uncommitted edits (Agent apply, other Change), Rust sends `rebase` or `conflict` and the host shows the choice. The host never silently reloads over unsent edits, and Rust never overwrites a dirty session.
+**Stale base.** If the Official `StateRef` advances while the host has uncommitted edits (Agent apply, other Change), Rust merges at block level and sends `rebase`; if the same block changed on both sides it holds the decision itself: the conflict is shown in an **iced bar owned by Rust** (the host rectangle is pushed down by the bar's height) and the user chooses there. The host is only told to stop waiting for an answer; it receives no conflict content and has no message with which to decide (`resolve` is not in the inbound allow-list). The host never silently reloads over unsent edits, and Rust never overwrites a dirty session.
 
 **Recovery journal.** The host periodically sends buffer snapshots (debounced, size-bounded). Rust persists them in a recovery journal separate from Official State. After a crash, Rust offers a *candidate change* from the journal. It never writes it to Official State automatically. A journal write failure surfaces as a persistent warning on the editor panel.
 
@@ -192,7 +192,7 @@ Findings:
 5. Edits typed after an answered edit but before its `rebase` arrives cannot be replayed onto the merged document without step-level rebasing. The spike's rule: while the host has unsent edits it ignores `rebase`/`official_advanced` and lets its next edit go stale again, so Rust merges it against the original base. This kept the tested flows correct but means the host can see a merged document only when it is clean.
 6. ~~`edit` carries the whole document JSON.~~ Resolved by the block-scoped delta below.
 7. The merge does not merge block moves: order follows the official version, and local insertions land after their local predecessor. A real implementation must treat concurrent reordering explicitly.
-8. The conflict choice lives in the host DOM and the self-test triggers it with a synthetic click. A production host must only send `resolve` for real user input, and Rust should not rely on the host to enforce that alone. Placing the conflict bar in iced (like the recovery bar) would avoid the problem and is worth deciding in the next spike.
+8. ~~The conflict choice lives in the host DOM.~~ Resolved: see "Conflict bar in iced" below.
 9. Persistence in the spike is JSON files (atomic rename + fsync), not SQLite; crash testing used SIGABRT, not power loss. Data loss window on a crash is bounded by the snapshot interval (300 ms in the spike), which was not measured under load.
 10. The spike's CSP uses `script-src 'unsafe-inline'`; the nonce/hash policy from §6 is not yet implemented.
 
@@ -216,6 +216,17 @@ Measured (release build, Tiptap host; Milkdown goes through the same code):
 - Host cost to build the delta: ≤ 1 ms at 6,000 blocks, 4 ms at 20,000.
 - A structural edit sent as an id list first cost 234 KB at 6,000 blocks and was rejected by the tighter limit at 20,000. Anchor placements fixed that.
 - Unit tests cover insert at start/middle/end, delete, move, in-place edit, and every rejection (unknown/duplicate id, new block without placement, missing anchor, two blocks claiming one predecessor, cycle, placing a removed id). Linear-time tests exist for both `diff` and `apply_delta` at 20,000 blocks. Functional modes (basic, merge, input rule, crash recovery) all pass on both hosts with the new protocol; the journal also stores deltas now.
+
+## Conflict bar in iced (2026-10-10, `spike/editor-host`)
+
+Change: the conflict decision moved out of the page into an iced bar, like the recovery bar. A page that had a "keep mine / take official" button, even with a trusted-event check, left a decision that changes Official State in untrusted script's hands.
+
+- On a same-block conflict Rust stores the pending conflict (the base, the host's candidate, the conflicting texts) and shows the bar; nothing is committed. The host only receives a minimal `conflict {rev, stateRef}` so it stops waiting; its DOM has no banner and no buttons.
+- `resolve` was removed from the editor inbound allow-list. A page-forged `resolve` is rejected as an unknown type, the conflict stays pending and nothing is committed (automated check).
+- The bar is counted in the host rectangle: a single `host_top()` sums the top bar and every iced bar above the host (recovery bar, conflict bar). The rectangle follows the bar automatically (a conflict makes the viewport 680 → 636 and resolution restores it), including when both bars exist or when an automatic merge removes the conflict.
+- After the user clicks an iced button, keyboard focus is in the iced window; Rust gives it back to the editor host (`WebView::focus`) before sending the `rebase`, so typing can continue. The same applies after accepting a recovery.
+- Verification: the merge scenario drives the same Rust handler the buttons use, on both hosts, for keep-mine and take-official, and checks the bar's presence, the pushed-down rectangle, the final documents and that the rectangle is restored. **Real mouse clicks on the iced buttons are not exercised by the automated run** (it sends the button's message directly). Run `HOLD_AT_CONFLICT=1 SELFTEST=merge cargo run` to stop at a pending conflict and click the real buttons.
+- `document.hasFocus()` was true after resolving in the automated run, but it was not compared against a run without `focus_host`, so it is informational, not proof that the focus hand-back works.
 
 ## Pinned webview settings (2026-10-10, `spike/editor-host/src/hosts.rs`, `probes.rs`)
 

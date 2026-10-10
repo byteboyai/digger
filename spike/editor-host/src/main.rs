@@ -17,7 +17,7 @@ use bytehost_webview as _;
 use doc::{Block, Kind, Op};
 use iced::futures::SinkExt;
 use iced::widget::{Space, button, column, container, row, scrollable, text};
-use iced::{Element, Length, Size, Subscription, Task, window};
+use iced::{Background, Color, Element, Length, Size, Subscription, Task, window};
 use merge::{Resolution, merge};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -29,6 +29,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 const LEFT_W: f32 = 340.0;
 const TOP_BAR_H: f32 = 40.0;
 const RECOVERY_BAR_H: f32 = 44.0;
+const CONFLICT_BAR_H: f32 = 44.0;
 const MAX_FRAME: usize = 2 * 1024 * 1024;
 const HOST_TIPTAP: &str = include_str!("../host/dist-tiptap/tiptap.html");
 const HOST_MILKDOWN: &str = include_str!("../host/dist-milkdown/milkdown.html");
@@ -52,6 +53,8 @@ enum Message {
     Bridge(String),
     RecoveryAccept,
     RecoveryDiscard,
+    /// 冲突条上的按钮(由 Rust 持有;页面里没有任何能做这个决定的东西)。
+    ConflictChoose(Resolution),
     Report,
     Timeout,
 }
@@ -87,6 +90,8 @@ struct PendingConflict {
     local: Vec<Block>,
     /// 产生该冲突的那条 edit 的 seq:解决后的 rebase 只对它有效。
     seq: u64,
+    /// 冲突块的 (我的文本, 正式版本文本),给冲突条显示。
+    items: Vec<(String, String)>,
 }
 
 struct State {
@@ -123,6 +128,8 @@ struct State {
     down_bytes: usize,
     down_max: usize,
     apply_ms_max: f64,
+    unknown_rejects: u32,
+    applied_top: std::cell::Cell<f32>,
     probe_idx: usize,
     probe_port: u16,
     probe_results: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
@@ -244,6 +251,8 @@ impl State {
             down_bytes: 0,
             down_max: 0,
             apply_ms_max: 0.0,
+            unknown_rejects: 0,
+            applied_top: std::cell::Cell::new(0.0),
             probe_idx: 0,
             probe_port: 0,
             probe_results: Default::default(),
@@ -288,9 +297,32 @@ impl State {
         }
     }
 
+    /// 宿主矩形的上边:顶栏 + 其下每一个 iced 条(恢复条、冲突条)的高度。webview 恒在 iced 之上,
+    /// 所以任何盖在宿主上的 iced 元素都必须把它下推。
+    fn host_top(&self) -> f32 {
+        TOP_BAR_H
+            + if self.recovery.is_some() { RECOVERY_BAR_H } else { 0.0 }
+            + if self.pending_conflict.is_some() { CONFLICT_BAR_H } else { 0.0 }
+    }
+
+    /// 每次消息处理完后调用:条的显隐变了就同步宿主矩形。
+    fn sync_bounds(&self) {
+        if (self.host_top() - self.applied_top.get()).abs() > f32::EPSILON {
+            self.apply_bounds();
+        }
+    }
+
+    fn focus_host(&self) {
+        HOST.with(|h| {
+            if let Some(wv) = h.borrow().as_ref() {
+                let _ = wv.focus();
+            }
+        });
+    }
+
     fn bounds(&self) -> wry::Rect {
         use wry::dpi::{LogicalPosition, LogicalSize};
-        let top = TOP_BAR_H + if self.recovery.is_some() { RECOVERY_BAR_H } else { 0.0 };
+        let top = self.host_top();
         wry::Rect {
             position: LogicalPosition::new(LEFT_W as f64, top as f64).into(),
             size: LogicalSize::new((self.size.width - LEFT_W).max(1.0) as f64, (self.size.height - top).max(1.0) as f64).into(),
@@ -298,6 +330,7 @@ impl State {
     }
 
     fn apply_bounds(&self) {
+        self.applied_top.set(self.host_top());
         let b = self.bounds();
         HOST.with(|h| {
             if let Some(wv) = h.borrow().as_ref() {
@@ -427,6 +460,7 @@ impl State {
         self.store.clear_journal();
         self.note(format!("recovery accepted → Commit rev {} [{summary}]", self.rev));
         self.apply_bounds();
+        self.focus_host();
         let m = self.advance_msg(None);
         send_host(win, "official_advanced", m)
     }
@@ -521,11 +555,18 @@ fn delayed_report() -> Task<Message> {
 }
 
 fn update(s: &mut State, msg: Message) -> Task<Message> {
+    let t = update_inner(s, msg);
+    s.sync_bounds();
+    t
+}
+
+fn update_inner(s: &mut State, msg: Message) -> Task<Message> {
     match msg {
         Message::Ready(id, size) => {
             s.window = Some(id);
             s.size = size;
             let bounds = s.bounds();
+            s.applied_top.set(s.host_top());
             let script = format!("window.__DIGGER_BINDING__ = {};", serde_json::to_string(&s.binding).unwrap());
             let tx = TX.get().unwrap().clone();
             let html = host_html();
@@ -547,7 +588,7 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
                 Ok(())
             })
             .map(Message::HostBuilt);
-            if s.selftest() {
+            if s.selftest() && std::env::var("HOLD_AT_CONFLICT").is_err() {
                 Task::batch([build, Task::perform(tokio::time::sleep(std::time::Duration::from_secs(60)), |_| Message::Timeout)])
             } else {
                 build
@@ -573,6 +614,7 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
             s.discard_recovery();
             Task::none()
         }
+        Message::ConflictChoose(res) => s.window.map(|w| resolve_conflict(s, w, res)).unwrap_or_else(Task::none),
         Message::Report => s.window.map(|w| st(w, "st_report", json!({}))).unwrap_or_else(Task::none),
         Message::Bridge(raw) => {
             let Some(win) = s.window else { return Task::none() };
@@ -581,6 +623,9 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
             }
             match s.validator.accept(&raw) {
                 Err(r) => {
+                    if r == bridge::Reject::UnknownType {
+                        s.unknown_rejects += 1;
+                    }
                     s.note(format!("REJECT {r:?}"));
                     Task::none()
                 }
@@ -629,20 +674,6 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
             }
         }
         "edit" => on_edit(s, win, p, env.seq),
-        "resolve" => {
-            let Some(pc) = s.pending_conflict.take() else {
-                s.note("← resolve without a pending conflict (dropped)");
-                return Task::none();
-            };
-            let res = if p["choice"] == "mine" { Resolution::Mine } else { Resolution::Official };
-            let base = s.history.blocks_at(pc.base_rev).expect("conflict base is in the history");
-            let m = merge(&base, &pc.local, &s.blocks, Some(res));
-            if m.blocks != s.blocks {
-                let summary = s.commit(m.blocks, "resolved");
-                s.note(format!("← resolve({:?}) → Commit rev {} [{summary}]", res, s.rev));
-            }
-            send_rebase(s, win, "resolved", pc.seq, &pc.local)
-        }
         "resync" => {
             s.resyncs += 1;
             s.note(format!("← resync requested ({}) → full reload", p["reason"].as_str().unwrap_or("?")));
@@ -700,6 +731,20 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
     }
 }
 
+/// 用户在 iced 冲突条上做出选择。宿主页面没有任何路径能触发它(`resolve` 不在入站白名单里)。
+fn resolve_conflict(s: &mut State, win: window::Id, res: Resolution) -> Task<Message> {
+    let Some(pc) = s.pending_conflict.take() else { return Task::none() };
+    let base = s.history.blocks_at(pc.base_rev).expect("conflict base is in the history");
+    let m = merge(&base, &pc.local, &s.blocks, Some(res));
+    if m.blocks != s.blocks {
+        let summary = s.commit(m.blocks, "resolved");
+        s.note(format!("conflict resolved ({res:?}) → Commit rev {} [{summary}]", s.rev));
+    }
+    // 点击 iced 按钮后键盘焦点在 iced 窗口里:还给编辑器,用户可以继续打字。
+    s.focus_host();
+    send_rebase(s, win, "resolved", pc.seq, &pc.local)
+}
+
 /// 下行 rebase:相对宿主"已发送快照"(= `sent`,即宿主在发出 ack_seq 那条 edit 时的文档)的块级增量。
 fn send_rebase(s: &mut State, win: window::Id, reason: &str, ack_seq: u64, sent: &[Block]) -> Task<Message> {
     let delta = doc::make_delta(sent, &s.blocks);
@@ -752,18 +797,18 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value, edit_seq: u64) -> Task<Mes
         send_rebase(s, win, "merged", edit_seq, &local)
     } else {
         s.note(format!("← edit on stale base {base_rev}: CONFLICT on {} block(s), nothing committed", m.conflicts.len()));
-        let items: Vec<Value> = m
+        let items: Vec<(String, String)> = m
             .conflicts
             .iter()
             .map(|id| {
                 let mine = local.iter().find(|b| &b.id == id).map(|b| b.text.clone()).unwrap_or_default();
                 let off = s.blocks.iter().find(|b| &b.id == id).map(|b| b.text.clone()).unwrap_or_default();
-                json!({"blockId": id, "mine": mine, "official": off})
+                (mine, off)
             })
             .collect();
-        s.pending_conflict = Some(PendingConflict { base_rev, local, seq: edit_seq });
-        let mut msg = s.doc_msg();
-        msg["conflicts"] = json!(items);
+        s.pending_conflict = Some(PendingConflict { base_rev, local, seq: edit_seq, items });
+        // 宿主只需要知道"别再等这条 edit 的回答了";冲突的内容和选择都在 iced 里。
+        let msg = json!({"rev": s.rev, "stateRef": state_ref(&s.binding, s.rev)});
         send_host(win, "conflict", msg).chain(hook(s, win, "conflict"))
     }
 }
@@ -772,13 +817,14 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value, edit_seq: u64) -> Task<Mes
 fn hook(s: &mut State, win: window::Id, event: &str) -> Task<Message> {
     let report = st(win, "st_report", json!({}));
     match (s.mode, s.stage, event) {
-        (Mode::Merge, 3, "rebase") | (Mode::Merge, 9, "rebase") | (Mode::Merge, 15, "rebase") | (Mode::Merge, 24, "rebase") => {
+        (Mode::Merge, 3, "rebase") | (Mode::Merge, 24, "rebase") => {
             s.stage += 1;
             report
         }
-        (Mode::Merge, 7, "conflict") | (Mode::Merge, 13, "conflict") => {
+        // 冲突条出现/消失会下推/恢复宿主矩形,宿主要过一会儿才报告新的视口:延迟报告。
+        (Mode::Merge, 7, "conflict") | (Mode::Merge, 13, "conflict") | (Mode::Merge, 9, "rebase") | (Mode::Merge, 15, "rebase") => {
             s.stage += 1;
-            report
+            delayed_report()
         }
         _ => Task::none(),
     }
@@ -861,7 +907,7 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
         (Mode::Merge, 4) => {
             s.check("S1 disjoint edits auto-merged: host has both", contains(&texts, 1, "[本地]") && contains(&texts, 2, "[Agent]"));
             s.check("S1 official has both", contains(&off, 1, "[本地]") && contains(&off, 2, "[Agent]"));
-            s.check("S1 no conflict banner", r["conflictVisible"] == false && s.pending_conflict.is_none());
+            s.check("S1 no conflict bar for disjoint edits", s.pending_conflict.is_none());
             s.check("S1 host clean and based on latest rev", r["clean"] == true && r["rev"] == s.rev);
             s.stage = 5;
             seq(vec![st(win, "st_type", json!({"block": 1, "text": " [X]"})), st(win, "st_report", json!({}))])
@@ -878,15 +924,30 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
             st(win, "st_flush", json!({}))
         }
         (Mode::Merge, 8) => {
-            s.check("S2 same-block edits → conflict banner shown", r["conflictVisible"] == true);
-            s.check("S2 nothing committed while conflicted", s.rev == s.mark_rev && s.pending_conflict.is_some());
+            s.check("S2 same-block edits → the iced conflict bar is shown", s.pending_conflict.is_some() && s.pending_conflict.as_ref().is_some_and(|p| !p.items.is_empty()));
+            s.check("S2 host rect pushed down by the bar (viewport h = 720-40-44 = 636)", s.viewports.last().is_some_and(|v| (v.1 - 636.0).abs() < 2.0));
+            s.check("S2 nothing committed while conflicted", s.rev == s.mark_rev);
             s.check("S2 host still shows my text", contains(&texts, 1, "[X]"));
+            if std::env::var("HOLD_AT_CONFLICT").is_ok() {
+                // 手动测试:停在冲突上,用真实鼠标点 iced 冲突条上的按钮(自动测试直接发消息,不经过鼠标)。
+                println!("HOLDING at a pending conflict: click “保留我的” or “采用正式版本” in the yellow bar; the window stays open.");
+                return Task::none();
+            }
+            // 被攻陷的页面试图自己替用户做决定:`resolve` 不在白名单里。
+            s.stage = 81;
+            seq(vec![st(win, "st_forge_resolve", json!({})), delayed_report()])
+        }
+        (Mode::Merge, 81) => {
+            s.check("S2 a page-forged `resolve` was rejected by the allow-list", s.unknown_rejects >= 1);
+            s.check("S2 the conflict is still pending and nothing was committed", s.pending_conflict.is_some() && s.rev == s.mark_rev);
             s.stage = 9;
-            st(win, "st_click", json!({"which": "mine"}))
+            resolve_conflict(s, win, Resolution::Mine)
         }
         (Mode::Merge, 10) => {
             s.check("S2 keep-mine: official has my text", contains(&off, 1, "[X]"));
-            s.check("S2 keep-mine: host == official, banner gone", texts == off && r["conflictVisible"] == false);
+            s.check("S2 keep-mine: host == official", texts == off);
+            s.check("S2 bar gone and host rect restored (viewport h = 680)", s.pending_conflict.is_none() && s.viewports.last().is_some_and(|v| (v.1 - 680.0).abs() < 2.0));
+            s.note(format!("host document.hasFocus() after resolving: {} (informational: depends on the test window being key)", r["hasFocus"]));
             s.stage = 11;
             seq(vec![st(win, "st_type", json!({"block": 1, "text": " [Y]"})), st(win, "st_report", json!({}))])
         }
@@ -900,13 +961,14 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
             st(win, "st_flush", json!({}))
         }
         (Mode::Merge, 14) => {
-            s.check("S3 conflict banner shown", r["conflictVisible"] == true);
+            s.check("S3 iced conflict bar shown, host pushed down", s.pending_conflict.is_some() && s.viewports.last().is_some_and(|v| (v.1 - 636.0).abs() < 2.0));
             s.stage = 15;
-            st(win, "st_click", json!({"which": "official"}))
+            resolve_conflict(s, win, Resolution::Official)
         }
         (Mode::Merge, 16) => {
             s.check("S3 take-official: official keeps agent text", off.get(1).map(String::as_str) == Some("AGENT2"));
             s.check("S3 take-official: host shows official text", texts == off && !contains(&texts, 1, "[Y]"));
+            s.check("S3 bar gone, host rect restored", s.pending_conflict.is_none() && s.viewports.last().is_some_and(|v| (v.1 - 680.0).abs() < 2.0));
             s.mark_commits = s.commits;
             s.agent_edit(2, |t| format!("{t}!"));
             s.mark_commits = s.commits; // agent 提交不算宿主提交
@@ -1117,6 +1179,28 @@ fn view(s: &State) -> Element<'_, Message> {
             .padding([6, 14])
             .height(Length::Fixed(RECOVERY_BAR_H))
             .width(Length::Fill),
+        );
+    }
+    if let Some(pc) = &s.pending_conflict {
+        let short = |t: &str| -> String {
+            let c: Vec<char> = t.chars().collect();
+            if c.len() > 14 { format!("{}…", c[..14].iter().collect::<String>()) } else { t.to_string() }
+        };
+        let preview = pc.items.iter().take(2).map(|(m, o)| format!("“{}” ↔ “{}”", short(m), short(o))).collect::<Vec<_>>().join("；");
+        right = right.push(
+            container(
+                row![
+                    text(format!("{} 个块同时被修改：{preview}", pc.items.len())).size(13).color(Color::BLACK),
+                    Space::new().width(Length::Fill),
+                    button("保留我的").on_press(Message::ConflictChoose(Resolution::Mine)),
+                    button("采用正式版本").on_press(Message::ConflictChoose(Resolution::Official)),
+                ]
+                .spacing(8),
+            )
+            .padding([6, 14])
+            .height(Length::Fixed(CONFLICT_BAR_H))
+            .width(Length::Fill)
+            .style(|_| container::Style { background: Some(Background::Color(Color::from_rgb(1.0, 0.95, 0.8))), ..Default::default() }),
         );
     }
     right = right.push(Space::new().width(Length::Fill).height(Length::Fill));

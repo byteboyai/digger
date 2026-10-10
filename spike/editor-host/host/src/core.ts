@@ -282,16 +282,6 @@ export function startHost(view: any, adapter: string) {
   }
   let marked: Map<string, any> | undefined; // self-test: node identity probe
 
-  const banner = document.getElementById("conflict")!;
-  const hideConflict = () => { banner.style.display = "none"; };
-  function showConflict(items: { mine: string; official: string }[]) {
-    document.getElementById("conflict-text")!.textContent =
-      `${items.length} 个块同时被修改：` + items.map((i) => `“${i.mine}” ↔ “${i.official}”`).join("；");
-    banner.style.display = "block";
-  }
-  document.getElementById("conflict-mine")!.addEventListener("click", () => send("resolve", { choice: "mine" }));
-  document.getElementById("conflict-official")!.addEventListener("click", () => send("resolve", { choice: "official" }));
-
   window.addEventListener("error", (e) => send("failed", { message: String(e.message), line: e.lineno }));
   window.addEventListener("unhandledrejection", (e) => send("failed", { message: String((e as PromiseRejectionEvent).reason) }));
   const viewport = () => ({ w: window.innerWidth, h: window.innerHeight });
@@ -388,12 +378,13 @@ export function startHost(view: any, adapter: string) {
           inflight = false;
           if (editTimer === undefined && !dirty) {
             if (p.ackSeq !== lastSentSeq) { send("resync", { haveRev: rev, reason: "ackSeq mismatch" }); break; }
-            if (applyOrResync(p.delta)) { baseRev = p.stateRef; rev = p.rev; hideConflict(); }
+            if (applyOrResync(p.delta)) { baseRev = p.stateRef; rev = p.rev; }
           } else if (dirty) sendEdit(); // typed after the answered edit: let Rust merge it against the original base
           break;
         case "conflict":
+          // The choice is made in the Rust-owned (iced) conflict bar, never in the page. The host keeps its text
+          // and just stops waiting for an answer; the eventual `rebase` arrives after the user decides.
           inflight = false;
-          showConflict(p.conflicts);
           break;
         case "selftest": void basicSelfTest(); break;
         case "st_perf": void perf(); break;
@@ -414,12 +405,12 @@ export function startHost(view: any, adapter: string) {
         case "st_type": view.dispatch(view.state.tr.insertText(p.text, blockEnd(p.block))); break;
         case "st_flush": flushEdit(); break;
         case "st_mark": marked = new Map(blocksNow().nodes); break;
-        case "st_click": (document.getElementById("conflict-" + p.which) as HTMLElement).click(); break;
+        case "st_forge_resolve": send("resolve", { choice: "mine" }); break; // a compromised page trying to decide
         case "st_report":
           const cur = blocksNow().nodes;
           const identity: Record<string, boolean> = {};
           marked?.forEach((n, id) => { if (cur.has(id)) identity[id] = cur.get(id) === n; });
-          send("selftest_report", { doc: getJSON(), rev, baseRev, clean: isClean(), conflictVisible: banner.style.display !== "none", identity, lastApplyMs });
+          send("selftest_report", { doc: getJSON(), rev, baseRev, clean: isClean(), hasFocus: document.hasFocus(), identity, lastApplyMs });
           break;
       }
     },
