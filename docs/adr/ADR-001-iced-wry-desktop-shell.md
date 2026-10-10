@@ -187,7 +187,9 @@ Findings:
 5. `edit` currently carries the whole document JSON. That is fine for the spike but will not scale to large chapters; steps or block-scoped payloads should be evaluated.
 6. The spike's CSP uses `script-src 'unsafe-inline'`; the nonce/hash policy from §6 is not yet implemented.
 
-Not done (still required before Accepted): IME composition (Chinese/Japanese) — manual check only; Milkdown comparison; CodeMirror source-mode round trip; stale-base `rebase`/`conflict` handling; crash recovery offering a candidate change on restart; layering with a native overlay window; pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
+Manual check (2026-10-10, macOS, run by the project owner): Chinese and Japanese IME composition in the Tiptap editor host works with no problems observed. Details such as candidate-window position were not separately recorded. Windows/Linux IME remains unverified.
+
+Not done (still required before Accepted): Milkdown comparison; CodeMirror source-mode round trip; stale-base `rebase`/`conflict` handling; crash recovery offering a candidate change on restart; layering with a native overlay window; pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
 
 ## Open questions
 
