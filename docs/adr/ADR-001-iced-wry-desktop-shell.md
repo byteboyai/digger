@@ -226,9 +226,9 @@ Library-independent findings from the comparison:
 3. **Rust's `doc::diff` is quadratic** (26.7 ms for 6000 blocks, one changed). Fix before large chapters; it does not depend on the editor.
 4. A 6000-paragraph chapter (~450k Chinese characters) sends a 1.48 MB `edit` frame against the 2 MB bridge limit, and `getJSON` stays under 1 ms but the frame parse/diff cost grows linearly. Confirms that whole-document `edit` payloads must become block-scoped before chapters of that size.
 
-Manual checks still needed on Milkdown (cannot be automated here): Chinese/Japanese IME composition, and the subjective "typing Markdown" feel — run `HOST=milkdown cargo run` in `spike/editor-host`.
+Manual check on Milkdown (2026-10-10, macOS, run by the project owner via `HOST=milkdown cargo run`): no problems reported with IME input or Markdown typing. Specific observations were not recorded.
 
-**Recommendation (pending the manual IME check):** keep **Tiptap** as the primary editor. Measured behaviour is equal, so the deciding factors are structural: Tiptap's global-attribute and per-extension model matches ADR-006's "every extension declares its AST mapping" rule directly, and does not have the silent schema-override ordering pitfall. Milkdown's advantage is built-in Markdown (de)serialization, which this design does not use because Rust performs the conversion. Re-open the choice only if the manual feel test strongly favours Milkdown.
+**Recommendation:** keep **Tiptap** as the primary editor. Measured behaviour is equal, so the deciding factors are structural: Tiptap's global-attribute and per-extension model matches ADR-006's "every extension declares its AST mapping" rule directly, and does not have the silent schema-override ordering pitfall. Milkdown's advantage is built-in Markdown (de)serialization, which this design does not use because Rust performs the conversion. Both libraries passed the manual check, so nothing contradicts that choice; Milkdown remains a drop-in alternative because both sit on ProseMirror and share the host core.
 
 ## Open questions
 
@@ -238,4 +238,4 @@ Manual checks still needed on Milkdown (cannot be automated here): Chinese/Japan
 - Windows/Linux editor-host verification schedule and IME coverage.
 - Which byteui components Digger reuses unchanged versus proposes upstream.
 - Whether the CodeMirror source mode ships in v1 or follows the first Writing slice.
-- Confirm the editor library after the manual Milkdown feel/IME check (recommendation above: Tiptap).
+- Confirm Tiptap as the editor library (recommendation above; the manual check found no problem with either).
