@@ -85,6 +85,27 @@ One editor host instance edits one document (`documentId`). It is created and de
 
 **Unsupported constructs.** Anything outside the declared extension mapping is rejected with a conversion warning, not stored in Official AST (ADR-006).
 
+### 4.1 Editor library choice
+
+The editor library is an adapter choice under ADR-006, so what matters is the native document model and block-ID support, not direct Markdown I/O. Markdown remains an exchange format.
+
+| Candidate | Core | Fit |
+|---|---|---|
+| Tiptap (chosen) | ProseMirror | framework-independent; nodes can carry `blockId`; each extension declares its AST mapping |
+| Milkdown (Crepe) | ProseMirror + remark | framework-independent; strongest Markdown typing feel; block IDs need a custom plugin |
+| ProseMirror directly | ProseMirror | maximum control, but toolbar, menus and keymaps are built by hand |
+| CodeMirror 6 | text + decorations | no structured model; suitable as a secondary source mode only (already used in Dozer) |
+| Lexical | Meta's own | usable, but diverges from the ADR-006 / Tiptap line with no clear gain |
+| BlockNote | ProseMirror/Tiptap | block model fits the AST, but depends on React, which conflicts with this ADR |
+| Vditor | own DOM | no structured model; hard to map to AST and semantic operations |
+
+Decisions:
+
+- Tiptap is the primary editor.
+- A CodeMirror 6 **source mode** is offered as a secondary view of the same document. Switching goes through Rust (AST ↔ Markdown conversion with its `ConversionResult` report). The two views never synchronize text with each other directly.
+- Milkdown is compared against Tiptap in the validation spike. Switching is low-cost because both are ProseMirror.
+- Maintenance status and versions of the candidates were not re-verified when this ADR was written; confirm them in the spike before the library is pinned.
+
 ### 5. Bridge contract
 
 All host ↔ Rust traffic is the `HostEnvelope` defined in Technical Architecture §9.2:
@@ -138,7 +159,7 @@ Negative / costs:
 
 ## Validation required before Accepted
 
-1. **Editor host spike (macOS):** iced window with one wry editor host loading a Tiptap document from a Rust-provided projection; edits return as `edit`; Rust turns one into a Draft Change; IME composition (Chinese and Japanese) works.
+1. **Editor host spike (macOS):** iced window with one wry editor host loading a Tiptap document from a Rust-provided projection; edits return as `edit`; Rust turns one into a Draft Change; IME composition (Chinese and Japanese) works. Build a minimal Milkdown variant for comparison on IME, `blockId` stability across edits and large-chapter performance; also verify the CodeMirror 6 source-mode round trip through Rust.
 2. **Binding and allow-list tests:** foreign binding, unknown type, oversized frame and replayed `seq` are all rejected without crashing.
 3. **Stale-base test:** an Official advance during a dirty session produces `rebase`/`conflict` and never overwrites unsent edits.
 4. **Recovery test:** kill the process mid-edit; next launch offers a candidate from the journal and Official State is unchanged until the user accepts.
@@ -154,3 +175,5 @@ Negative / costs:
 - Initial size and latency budgets for the editor host.
 - Windows/Linux editor-host verification schedule and IME coverage.
 - Which byteui components Digger reuses unchanged versus proposes upstream.
+- Whether the CodeMirror source mode ships in v1 or follows the first Writing slice.
+- Final editor library after the Tiptap vs Milkdown comparison (§4.1).
