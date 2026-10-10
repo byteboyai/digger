@@ -23,7 +23,8 @@ HOST=milkdown cargo run                       # 以上任一命令加 HOST=milkd
 
 - `src/bridge.rs` — `HostEnvelope`、入站校验(绑定、封闭白名单、大小上限、seq 严格递增)。
 - `src/merge.rs` — 块级三方合并(base/local/official),冲突返回 id 列表,可按 Mine/Official 解决。
-- `src/store.rs` — 正式状态 + 历史 + 恢复日志的 JSON 持久化(原子 rename + fsync;SQLite 的替身)。
+- `src/history.rs` — 持久化的增量历史:追加式日志(每版一条带 CRC 的块级增量 + 每 32 版一个检查点)、按需重建任意旧版本、崩溃时截断半条记录、压缩、`verify()`。`cargo test --release -- --ignored --nocapture history_bench` 跑 6000 块基准。
+- `src/store.rs` — 恢复日志(崩溃后的未提交缓冲区)。
 - `src/doc.rs` — `Delta`(块级增量:changed / removed / placements)的解析与 `apply_delta`、线性 `diff`;
    极简 AST(段落/标题)、AST→ProseMirror 投影、候选文档解析(拒缺失/重复 blockId、不支持节点)、语义操作 diff。
 - `src/main.rs` — iced 窗口;`window::run` 里 `build_as_child` 建 wry 子视图;`evaluate_script` 下行,`ipc_handler` 经 channel 上行;`resize_events` 同步子视图 bounds。

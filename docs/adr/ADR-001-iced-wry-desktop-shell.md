@@ -217,6 +217,23 @@ Measured (release build, Tiptap host; Milkdown goes through the same code):
 - A structural edit sent as an id list first cost 234 KB at 6,000 blocks and was rejected by the tighter limit at 20,000. Anchor placements fixed that.
 - Unit tests cover insert at start/middle/end, delete, move, in-place edit, and every rejection (unknown/duplicate id, new block without placement, missing anchor, two blocks claiming one predecessor, cycle, placing a removed id). Linear-time tests exist for both `diff` and `apply_delta` at 20,000 blocks. Functional modes (basic, merge, input rule, crash recovery) all pass on both hosts with the new protocol; the journal also stores deltas now.
 
+## Persistent delta history (2026-10-10, `spike/editor-host/src/history.rs`)
+
+Before: Rust kept a full copy of every Official version in memory and rewrote the whole state file on every commit, so cost grew with blocks × revisions. Now:
+
+- **Append-only log** `log.jsonl`, one line per record: `<crc32> <json>`. The first record is a checkpoint (full block list). Each revision N adds one `delta` record (block-scoped delta against N−1, the same shape as the bridge) and, when N is a multiple of 32, a `checkpoint` record. A commit is one `write` plus one `fsync`; nothing is rewritten.
+- **Reconstruction:** revision R = nearest checkpoint ≤ R + replay of the deltas after it, through a small cache. `history[baseRev]` lookups from hosts, merges and the recovery journal use this.
+- **Order of effects:** the commit is appended and synced *before* in-memory state changes, so memory is never ahead of disk.
+- **Crash behaviour:** on open every line's CRC is checked. A half-written record at the very end (the crash case) is dropped and the file truncated; the log stays appendable. A torn checkpoint keeps the delta before it. Corruption anywhere else is an error, never silently skipped. Non-consecutive revisions and a missing first checkpoint are rejected. `verify()` replays deltas between checkpoints and compares them with the stored checkpoints.
+- **Compaction:** rewrites the log from the checkpoint at or below a floor and swaps it in with an atomic rename; revisions older than that are gone (`blocks_at` returns none).
+- **Crash test now proves durability:** after the forced abort, the surviving process's commit is checked by reopening the log from disk independently (head revision, rebuilt blocks and `verify()` all match), instead of by reading in-memory state.
+
+Measured (release build): 2,000 blocks × 200 revisions → 756 KB log vs 20,194 KB as full copies (3.7%). 6,000 blocks × 400 revisions → 13.5 MB vs 397 MB (3.4%; about 95% of the log is the 13 checkpoints, the 400 deltas are ~0.5 MB). Append: median 6.9 ms, p99 29.8 ms, including fsync (checkpoints are the slow ones). Cold rebuild of the worst-case revision (31 deltas to replay): 43 ms; cached: under 1 µs. Reopen of 400 revisions: 154 ms. Full verify: 538 ms.
+
+Tests (10 history tests plus the integration runs): every revision of a 100-revision randomized history rebuilds exactly; reopen gives identical history; appending after reopen continues the log; torn tail and torn checkpoint recover; middle corruption is an error; gaps and a missing checkpoint are rejected; compaction keeps recent revisions, drops old ones, survives reopen and further appends; size ratio bound.
+
+**Mapping to the real store (ADR-003 SQLite):** the same model fits SQLite directly and removes the file-level machinery. A `revision(rev, label, delta_json, created_at)` table and a `checkpoint(rev, blocks)` table written in the same transaction as the Commit and Outbox row; reconstruction and the checkpoint interval are unchanged; torn-tail handling and CRCs are replaced by SQLite's transactional guarantees; compaction becomes a `DELETE` below a floor in a transaction. Retention must respect the oldest live host baseline and the recovery journal's base.
+
 ## Block-scoped downstream (2026-10-10, `spike/editor-host`)
 
 Change: `official_advanced` and `rebase` now carry block deltas too (Technical Architecture §9.2). Only `load` (and the answer to `resync`) carries a whole document. Rust computes the delta with `make_delta` (the inverse of `apply_delta`); the host applies it in place.
@@ -269,7 +286,8 @@ Manual check on Milkdown (2026-10-10, macOS, run by the project owner via `HOST=
 ## Open questions
 
 - Whether review/Diff views are pure iced or a preview host (leaning iced for semantic block diffs derived from the AST).
-- Rust keeps a full copy of every Official version in `history` and rewrites the whole state on each commit (O(blocks × revisions)); a persistent or delta-based history is needed beyond the spike.
+- Opening a long history parses every record including checkpoint bodies (154 ms for 400 revisions of 6,000 blocks); checkpoint bodies can be skipped on open and parsed lazily.
+- Compaction drops old revisions. A host whose baseline is older than the oldest kept revision would get `unknown base` forever. The floor must never exceed the oldest live host baseline (Rust knows it as `host_rev`) or the recovery journal's base; the spike only compacts at startup, before any host exists, and honours the journal base.
 - Initial size and latency budgets for the editor host.
 - Windows/Linux editor-host verification schedule and IME coverage.
 - Which byteui components Digger reuses unchanged versus proposes upstream.

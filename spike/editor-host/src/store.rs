@@ -1,18 +1,7 @@
-//! 极简持久化(SQLite 的 spike 替身):正式状态 + 历史版本 + 恢复日志。
+//! 恢复日志(崩溃后的未提交缓冲区)的存放处。正式状态与历史在 `history.rs`。
 
-use crate::bridge::Binding;
-use crate::doc::Block;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-#[derive(Serialize, Deserialize)]
-pub struct Persisted {
-    pub binding: Binding,
-    pub rev: u64,
-    pub blocks: Vec<Block>,
-    pub history: BTreeMap<u64, Vec<Block>>,
-}
 
 #[derive(Serialize, Deserialize)]
 pub struct Journal {
@@ -40,17 +29,11 @@ impl Store {
         std::fs::create_dir_all(&dir).expect("create data dir");
         Self { dir }
     }
-    fn state_path(&self) -> PathBuf {
-        self.dir.join("state.json")
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
     pub fn journal_path(&self) -> PathBuf {
         self.dir.join("journal.json")
-    }
-    pub fn load(&self) -> Option<Persisted> {
-        serde_json::from_slice(&std::fs::read(self.state_path()).ok()?).ok()
-    }
-    pub fn save(&self, p: &Persisted) {
-        write_durable(&self.state_path(), &serde_json::to_vec_pretty(p).unwrap()).expect("save state");
     }
     pub fn load_journal(&self) -> Option<Journal> {
         serde_json::from_slice(&std::fs::read(self.journal_path()).ok()?).ok()

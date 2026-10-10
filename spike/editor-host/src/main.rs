@@ -6,6 +6,7 @@
 
 mod bridge;
 mod doc;
+mod history;
 mod merge;
 mod store;
 
@@ -17,9 +18,9 @@ use iced::{Element, Length, Size, Subscription, Task, window};
 use merge::{Resolution, merge};
 use serde_json::{Value, json};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
-use store::{Journal, Persisted, Store};
+use history::History;
+use store::{Journal, Store};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 const LEFT_W: f32 = 340.0;
@@ -92,7 +93,8 @@ struct State {
     validator: Validator,
     blocks: Vec<Block>,
     rev: u64,
-    history: BTreeMap<u64, Vec<Block>>,
+    /// 持久化的增量历史:追加式日志 + 检查点,按需重建任意旧版本。
+    history: History,
     commits: u32,
     log: Vec<String>,
     changes: Vec<String>,
@@ -164,8 +166,11 @@ impl State {
             Err(_) if mode == Mode::Interactive => std::env::temp_dir().join("digger-spike"),
             Err(_) => std::env::temp_dir().join(format!("digger-spike-{}", uuid::Uuid::new_v4())),
         };
-        let store = Store::new(dir);
-        let persisted = store.load().unwrap_or_else(|| {
+        let store = Store::new(dir.clone());
+        let hist_dir = dir.join("history");
+        let history = if History::exists(&hist_dir) {
+            History::open(&hist_dir).expect("open history (corrupt log?)")
+        } else {
             let binding = Binding {
                 project_id: uuid::Uuid::now_v7().to_string(),
                 panel_id: uuid::Uuid::now_v7().to_string(),
@@ -184,20 +189,30 @@ impl State {
                     blocks.push(Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Paragraph, text: format!("{i}. {line}") });
                 }
             }
-            let p = Persisted { binding, rev: 1, history: BTreeMap::from([(1, blocks.clone())]), blocks };
-            store.save(&p);
-            p
-        });
+            History::create(&hist_dir, binding, 1, &blocks, history::DEFAULT_CHECKPOINT_EVERY).expect("create history")
+        };
+        let mut history = history;
+        // 保留策略:历史超过 2000 个版本时,在启动时压缩到最近 500 个版本之前的检查点;
+        // 恢复日志仍引用的基线不能丢。宿主基线都是本次会话内的新版本,不受影响。
+        if history.head() - history.oldest() > 2000 {
+            let journal_base = store.load_journal().map(|j| j.base_rev).unwrap_or(u64::MAX);
+            let floor = history.head().saturating_sub(500).min(journal_base);
+            if floor > history.oldest() {
+                let _ = history.compact(floor);
+            }
+        }
+        let head = history.head();
+        let head_blocks = history.blocks_at(head).expect("rebuild head").as_ref().clone();
         let mut s = Self {
             window: None,
             size: Size::new(1100.0, 720.0),
-            validator: Validator::new(persisted.binding.clone(), MAX_FRAME),
-            binding: persisted.binding,
-            original_ids: persisted.blocks.iter().map(|b| b.id.clone()).collect(),
-            blocks: persisted.blocks,
-            rev: persisted.rev,
-            disk_rev: persisted.rev,
-            history: persisted.history,
+            validator: Validator::new(history.binding.clone(), MAX_FRAME),
+            binding: history.binding.clone(),
+            original_ids: head_blocks.iter().map(|b| b.id.clone()).collect(),
+            blocks: head_blocks,
+            rev: head,
+            disk_rev: head,
+            history,
             store,
             commits: 0,
             log: vec![],
@@ -278,23 +293,15 @@ impl State {
         });
     }
 
-    fn persist(&self) {
-        self.store.save(&Persisted {
-            binding: self.binding.clone(),
-            rev: self.rev,
-            blocks: self.blocks.clone(),
-            history: self.history.clone(),
-        });
-    }
-
     /// 提交一个新的正式版本(spike 里 Draft Change → Commit 合为一步)。
     fn commit(&mut self, blocks: Vec<Block>, label: &str) -> String {
         let summary = doc::diff(&self.blocks, &blocks).iter().map(describe).collect::<Vec<_>>().join("; ");
+        let rev = self.rev + 1;
+        // 先落盘(追加一条增量并 fsync),成功后才改内存:崩溃时磁盘与内存不会出现"内存领先"。
+        self.history.append(rev, &self.blocks, &blocks, label).expect("append to history log");
         self.blocks = blocks;
-        self.rev += 1;
+        self.rev = rev;
         self.commits += 1;
-        self.history.insert(self.rev, self.blocks.clone());
-        self.persist();
         self.changes.push(format!("rev {} [{label}]: {summary}", self.rev));
         // 日志里的缓冲区若已等于正式状态,就不再需要。
         if let Some(j) = self.store.load_journal() {
@@ -314,9 +321,9 @@ impl State {
 
     /// 还原日志里的缓冲区:把增量应用到它所基于的历史版本上。
     fn journal_blocks(&self, j: &Journal) -> Option<Vec<Block>> {
-        let base = self.history.get(&j.base_rev)?;
+        let base = self.history.blocks_at(j.base_rev)?;
         let (delta, _) = doc::parse_delta(&j.delta).ok()?;
-        doc::apply_delta(base, &delta).ok()
+        doc::apply_delta(&base, &delta).ok()
     }
 
     fn rnd(&mut self, n: usize) -> usize {
@@ -330,7 +337,8 @@ impl State {
     /// `claim_from` 仅供自测伪造错误的 fromRev。
     fn advance_msg(&mut self, claim_from: Option<u64>) -> Value {
         let from = self.host_rev;
-        let delta = doc::make_delta(&self.history[&from], &self.blocks);
+        let base = self.history.blocks_at(from).expect("host baseline revision is still in the history");
+        let delta = doc::make_delta(&base, &self.blocks);
         self.host_rev = self.rev;
         let m = json!({"fromRev": claim_from.unwrap_or(from), "rev": self.rev, "stateRef": state_ref(&self.binding, self.rev), "delta": delta.to_json()});
         let n = m.to_string().len();
@@ -384,12 +392,12 @@ impl State {
         let (candidate, conflicts) = if j.base_rev == self.rev {
             (local, vec![])
         } else {
-            let base = self.history.get(&j.base_rev)?;
-            let m = merge(base, &local, &self.blocks, None);
+            let base = self.history.blocks_at(j.base_rev)?;
+            let m = merge(&base, &local, &self.blocks, None);
             if m.conflicts.is_empty() {
                 (m.blocks, vec![])
             } else {
-                (merge(base, &local, &self.blocks, Some(Resolution::Mine)).blocks, m.conflicts)
+                (merge(&base, &local, &self.blocks, Some(Resolution::Mine)).blocks, m.conflicts)
             }
         };
         if candidate == self.blocks {
@@ -558,7 +566,7 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
                 return Task::none();
             };
             let res = if p["choice"] == "mine" { Resolution::Mine } else { Resolution::Official };
-            let base = s.history[&pc.base_rev].clone();
+            let base = s.history.blocks_at(pc.base_rev).expect("conflict base is in the history");
             let m = merge(&base, &pc.local, &s.blocks, Some(res));
             if m.blocks != s.blocks {
                 let summary = s.commit(m.blocks, "resolved");
@@ -585,8 +593,8 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
             let delta_bytes = p.to_string().len();
             let local = s
                 .history
-                .get(&base_rev)
-                .and_then(|base| doc::parse_delta(p).ok().and_then(|(d, _)| doc::apply_delta(base, &d).ok()));
+                .blocks_at(base_rev)
+                .and_then(|base| doc::parse_delta(p).ok().and_then(|(d, _)| doc::apply_delta(&base, &d).ok()));
             let equal = local.as_ref().is_some_and(|b| *b == s.blocks);
             if equal {
                 s.store.clear_journal();
@@ -597,7 +605,10 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
             }
             s.note(format!("← snapshot #{} ({delta_bytes} B) {}", s.snapshots, if equal { "(= official, journal cleared)" } else { "→ journal" }));
             if s.mode == Mode::CrashA && !equal {
-                let disk_ok = s.store.load().is_some_and(|d| d.rev == s.rev && d.blocks == s.blocks);
+                // 独立重新打开磁盘上的日志:证明提交确实已落盘,而不是只存在于内存。
+                let disk_ok = History::open(&s.store.dir().join("history"))
+                    .ok()
+                    .is_some_and(|h| h.head() == s.rev && h.blocks_at(h.head()).is_some_and(|b| *b == s.blocks) && h.verify().is_ok());
                 println!("CRASH-A: journal fsynced, official on disk unchanged = {disk_ok}; aborting now");
                 std::process::abort();
             }
@@ -636,7 +647,7 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value, edit_seq: u64) -> Task<Mes
         return send_host(win, "rejected", json!({"reason": "bad base"}));
     };
     // 宿主的基线 == history[baseRev]:增量只能应用在它之上,而不是当前正式版本之上。
-    let Some(base_blocks) = s.history.get(&base_rev).cloned() else {
+    let Some(base_blocks) = s.history.blocks_at(base_rev) else {
         s.rejected.push("unknown base".into());
         return send_host(win, "rejected", json!({"reason": "unknown base"}));
     };
@@ -1002,7 +1013,7 @@ fn view(s: &State) -> Element<'_, Message> {
     let left = container(
         column![
             text("editor-host spike").size(18),
-            text(format!("rev {}  commits {}  snapshots {}", s.rev, s.commits, s.snapshots)).size(12),
+            text(format!("rev {}  commits {}  snapshots {}  history {} KB (rev {}..{})", s.rev, s.commits, s.snapshots, s.history.file_len() / 1024, s.history.oldest(), s.history.head())).size(12),
             blocks,
             changes,
             text("bridge log").size(14),
