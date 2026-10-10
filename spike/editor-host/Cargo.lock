@@ -353,6 +353,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "bytehost-apps"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bytehost-webview"
+version = "0.1.0"
+dependencies = [
+ "bytehost-apps",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -918,10 +935,12 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 name = "editor-host-spike"
 version = "0.0.0"
 dependencies = [
+ "bytehost-webview",
  "iced",
  "serde",
  "serde_json",
  "tokio",
+ "url",
  "uuid",
  "wry",
 ]

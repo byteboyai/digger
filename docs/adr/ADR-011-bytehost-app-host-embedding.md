@@ -157,6 +157,10 @@ Negative / costs:
 4. Crash test: kill Digger with a running Python app; the next launch reclaims the orphan.
 5. CI dependency-closure check from §3.
 
+## Spike results (2026-10-10)
+
+The app-webview parts of the validation list were exercised in `spike/editor-host` (see ADR-001, "Pinned webview settings"): cross-site, cross-app-origin, `file:` and `data:` navigation and `window.open` are refused; downloads are refused; no Digger custom protocol is reachable; forged IPC (no or guessed nonce) is rejected and synthetic events produce no host message; same-origin navigation works; an app with a different data-store id cannot read another app's `localStorage` even on the same origin, and the same id sees its own data. Not covered: the full `AppService` in-process embedding (validation item 1), orphan reclamation after a crash with a running process app (item 4), overlay layering (item 3), camera/microphone gating, and non-macOS platforms.
+
 ## Open questions
 
 - Whether a Project may pin "recommended apps" (a manifest hint only, never auto-install).

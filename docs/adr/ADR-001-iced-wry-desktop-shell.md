@@ -217,6 +217,29 @@ Measured (release build, Tiptap host; Milkdown goes through the same code):
 - A structural edit sent as an id list first cost 234 KB at 6,000 blocks and was rejected by the tighter limit at 20,000. Anchor placements fixed that.
 - Unit tests cover insert at start/middle/end, delete, move, in-place edit, and every rejection (unknown/duplicate id, new block without placement, missing anchor, two blocks claiming one predecessor, cycle, placing a removed id). Linear-time tests exist for both `diff` and `apply_delta` at 20,000 blocks. Functional modes (basic, merge, input rule, crash recovery) all pass on both hosts with the new protocol; the journal also stores deltas now.
 
+## Pinned webview settings (2026-10-10, `spike/editor-host/src/hosts.rs`, `probes.rs`)
+
+Every wry child view, including the production editor host in the spike, is now built through one function. A single table, `pinned(Class)`, decides each option for the three host classes (editor, preview, app); `builder` writes every decided option explicitly (devtools, clipboard, downloads, new windows, custom protocols, navigation, IPC, autoplay, hotkey zoom, incognito, per-app data store, first-mouse, back/forward gestures) and returns the list it applied. A unit test fails if the list and `DECIDED` differ in either direction, and a `debug_assert` stops a builder that skips an option at development time. Navigation and the data-store id for apps come from `bytehost-webview` (path dependency in the spike), not from a copy.
+
+Table highlights: devtools on only for editor/preview in debug builds, never for apps (a release-mode test asserts they are off); downloads and `window.open` refused for all classes; no custom protocol for any class (always empty for apps); editor/preview navigation limited to the initial document, apps to their own origin; editor/preview use a non-persistent store, each app its own persistent store.
+
+**Behaviour probes in a real WKWebView (`SELFTEST=policy`)** check that the settings actually take effect, with untrusted pages that try to break out:
+
+| Class | What the page tried | Result |
+|---|---|---|
+| Editor, Preview | `window.open`, blob download, `location.assign(https://…)`, `fetch(digger://…)` | open returned null and the host was told; download refused; navigation refused and the page stayed; protocol unreachable; only `about:blank` was ever allowed; `window.ipc` present |
+| App | the same, plus navigation to another app's origin on the same port, `file:///`, `data:`; forged `window.ipc.postMessage` with no/guessed nonce; synthetic mouse events | all refused; the page stayed put; a same-origin navigation loaded; 2 forged IPC messages rejected and none accepted; synthetic events produced no host message |
+| App stores | app-a writes `localStorage`; a second webview on the **same origin** with another data-store id reads it; a third with the same id reads it | the other id saw `null`; the same id saw the value |
+
+Three runs were stable. The probes were checked for sensitivity by loosening four settings on purpose (app downloads, app new windows, app per-app store, editor/preview downloads): each produced the expected failures and nothing else, and the file was restored.
+
+Findings and limits:
+
+1. `file:///` navigation from an http page never reaches the navigation handler (WebKit blocks it first); `data:` does and is refused. The probe therefore asserts the outcome (it never takes effect), not that the handler saw it.
+2. wry has no hook for media (camera/microphone) permission requests, and devtools cannot be probed from inside the page, so those two are pinned by the table and, for devtools, a release-mode assertion — **not** behaviourally verified. The ADR-011 rule stands: do not declare camera/microphone usage descriptions until a grant-keyed gate exists.
+3. `clipboard` is pinned on for apps (a manifest grant should govern it); no grant gate exists yet.
+4. The probe server and pages are test scaffolding; the app webview here loads from `*.localhost` on a loopback listener, which also confirms `*.localhost` resolves inside WKWebView on this macOS (bytehost V5 for other platforms is still open).
+
 ## Persistent delta history (2026-10-10, `spike/editor-host/src/history.rs`)
 
 Before: Rust kept a full copy of every Official version in memory and rewrote the whole state file on every commit, so cost grew with blocks × revisions. Now:
@@ -289,6 +312,7 @@ Manual check on Milkdown (2026-10-10, macOS, run by the project owner via `HOST=
 - Opening a long history parses every record including checkpoint bodies (154 ms for 400 revisions of 6,000 blocks); checkpoint bodies can be skipped on open and parsed lazily.
 - Compaction drops old revisions. A host whose baseline is older than the oldest kept revision would get `unknown base` forever. The floor must never exceed the oldest live host baseline (Rust knows it as `host_rev`) or the recovery journal's base; the spike only compacts at startup, before any host exists, and honours the journal base.
 - Initial size and latency budgets for the editor host.
+- The probes cover macOS/WKWebView only; WebView2 and WebKitGTK need their own run, and their wry defaults differ.
 - Windows/Linux editor-host verification schedule and IME coverage.
 - Which byteui components Digger reuses unchanged versus proposes upstream.
 - Whether the CodeMirror source mode ships in v1 or follows the first Writing slice.

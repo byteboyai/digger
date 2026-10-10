@@ -14,3 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v7", "v4"] }
 tokio = { version = "1", features = ["time", "sync"] }
+# 应用 webview 的导航策略 / 数据存储标识 / IPC nonce 的唯一真相(ADR-011:不得在 Digger 里重抄)。
+# spike 用兄弟仓库的路径依赖;正式接入按 git tag 引用。
+bytehost-webview = { path = "../../../bytehost/crates/bytehost-webview" }
+url = "2"

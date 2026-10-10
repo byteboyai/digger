@@ -1,16 +1,19 @@
 //! 编辑器宿主 spike(ADR-001 验证项 1–4):iced 窗口 + wry 子视图 + Tiptap 宿主。
 //!
 //! `SELFTEST=<mode>` 自动执行并打印 PASS/FAIL:
-//!   basic | merge | fuzz | perf | inputrule | crash-a | crash-b-accept | crash-b-discard | crash-b-stale
+//!   basic | merge | fuzz | perf | inputrule | policy | crash-a | crash-b-accept | crash-b-discard | crash-b-stale
 //! crash-b-* 需要 `SPIKE_DIR` 指向 crash-a 留下的数据目录,见 run_recovery_test.sh。
 
 mod bridge;
 mod doc;
 mod history;
+mod hosts;
 mod merge;
+mod probes;
 mod store;
 
 use bridge::{Binding, Validator};
+use bytehost_webview as _;
 use doc::{Block, Kind, Op};
 use iced::futures::SinkExt;
 use iced::widget::{Space, button, column, container, row, scrollable, text};
@@ -67,6 +70,7 @@ enum Mode {
     Merge,
     Perf,
     Fuzz,
+    Policy,
     InputRule,
     CrashA,
     CrashB(Crash),
@@ -119,6 +123,10 @@ struct State {
     down_bytes: usize,
     down_max: usize,
     apply_ms_max: f64,
+    probe_idx: usize,
+    probe_port: u16,
+    probe_results: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    probe_recs: std::collections::HashMap<String, hosts::Recorder>,
 }
 
 fn state_ref(b: &Binding, rev: u64) -> String {
@@ -154,6 +162,7 @@ impl State {
             Ok("merge") => Mode::Merge,
             Ok("perf") => Mode::Perf,
             Ok("fuzz") => Mode::Fuzz,
+            Ok("policy") => Mode::Policy,
             Ok("inputrule") => Mode::InputRule,
             Ok("crash-a") => Mode::CrashA,
             Ok("crash-b-accept") => Mode::CrashB(Crash::Accept),
@@ -235,6 +244,10 @@ impl State {
             down_bytes: 0,
             down_max: 0,
             apply_ms_max: 0.0,
+            probe_idx: 0,
+            probe_port: 0,
+            probe_results: Default::default(),
+            probe_recs: Default::default(),
         };
         if mode == Mode::CrashB(Crash::Stale) {
             // 应用关闭期间 Agent 已经改过正式状态(与未提交缓冲区不冲突的块)。
@@ -426,6 +439,55 @@ impl State {
     }
 }
 
+thread_local! {
+    static PROBES: RefCell<Vec<wry::WebView>> = const { RefCell::new(Vec::new()) };
+}
+
+fn launch_probe(s: &mut State, win: window::Id) -> Task<Message> {
+    let p = &probes::PROBES[s.probe_idx];
+    let rec = hosts::Recorder::default();
+    s.probe_recs.insert(p.tag.to_string(), rec.clone());
+    let origin_url = format!("http://policy-a.localhost:{}/", s.probe_port);
+    let is_app = p.class == hosts::Class::App;
+    let spec = hosts::Build {
+        class: p.class,
+        bounds: s.bounds(),
+        app: is_app.then(|| (bytehost_webview::AppOrigin::from_url(&origin_url).expect("app origin"), p.store_id.to_string())),
+        tag: Some(p.tag.to_string()),
+        forward: TX.get().unwrap().clone(),
+        rec,
+    };
+    let load_url = format!("{origin_url}?t={}&m={}", p.tag, p.mode);
+    s.note(format!("probe `{}` ({:?})", p.tag, p.class));
+    window::run(win, move |w| {
+        let (wb, _) = hosts::builder(&spec);
+        let wb = if is_app { wb.with_url(&load_url) } else { wb.with_html(probes::EDITOR_PROBE_HTML) };
+        let wv = wb.build_as_child(&w).map_err(|e| e.to_string())?;
+        PROBES.with(|v| v.borrow_mut().push(wv));
+        Ok(())
+    })
+    .map(Message::HostBuilt)
+}
+
+fn policy_event(s: &mut State, win: window::Id, raw: &str) -> Task<Message> {
+    let Some((tag, k, v)) = probes::parse_event(raw) else { return Task::none() };
+    s.probe_results.entry(tag.clone()).or_default().insert(k.clone(), v);
+    if k != "done" || Some(tag.as_str()) != probes::PROBES.get(s.probe_idx).map(|p| p.tag) {
+        return Task::none();
+    }
+    let p = &probes::PROBES[s.probe_idx];
+    let results = probes::evaluate(p, &s.probe_results[&tag], &s.probe_recs[&tag]);
+    for (name, ok) in results {
+        s.check(&name, ok);
+    }
+    s.probe_idx += 1;
+    if s.probe_idx < probes::PROBES.len() {
+        launch_probe(s, win)
+    } else {
+        finish(s)
+    }
+}
+
 fn boot() -> (State, Task<Message>) {
     let (tx, rx) = unbounded_channel();
     let _ = TX.set(tx);
@@ -467,15 +529,18 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
             let script = format!("window.__DIGGER_BINDING__ = {};", serde_json::to_string(&s.binding).unwrap());
             let tx = TX.get().unwrap().clone();
             let html = host_html();
+            let policy_mode = s.mode == Mode::Policy;
+            if policy_mode {
+                s.probe_port = probes::start_server(tx.clone());
+                return launch_probe(s, id);
+            }
+            // 生产路径与探针共用 `hosts::builder`:编辑器宿主的每项 wry 设置都来自 `hosts::pinned(Class::Editor)`。
+            let spec = hosts::Build { class: hosts::Class::Editor, bounds, app: None, tag: None, forward: tx, rec: hosts::Recorder::default() };
             let build = window::run(id, move |w| {
-                let wv = wry::WebViewBuilder::new()
-                    .with_bounds(bounds)
+                let (wb, _) = hosts::builder(&spec);
+                let wv = wb
                     .with_initialization_script(script)
                     .with_html(html)
-                    .with_devtools(false)
-                    .with_ipc_handler(move |req| {
-                        let _ = tx.send(req.into_body());
-                    })
                     .build_as_child(&w)
                     .map_err(|e| e.to_string())?;
                 HOST.with(|h| *h.borrow_mut() = Some(wv));
@@ -483,7 +548,7 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
             })
             .map(Message::HostBuilt);
             if s.selftest() {
-                Task::batch([build, Task::perform(tokio::time::sleep(std::time::Duration::from_secs(40)), |_| Message::Timeout)])
+                Task::batch([build, Task::perform(tokio::time::sleep(std::time::Duration::from_secs(60)), |_| Message::Timeout)])
             } else {
                 build
             }
@@ -511,6 +576,9 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
         Message::Report => s.window.map(|w| st(w, "st_report", json!({}))).unwrap_or_else(Task::none),
         Message::Bridge(raw) => {
             let Some(win) = s.window else { return Task::none() };
+            if s.mode == Mode::Policy {
+                return policy_event(s, win, &raw);
+            }
             match s.validator.accept(&raw) {
                 Err(r) => {
                     s.note(format!("REJECT {r:?}"));
@@ -539,6 +607,7 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
             match s.mode {
                 Mode::Interactive => load,
                 Mode::Basic => seq(vec![load, window::resize(win, Size::new(900.0, 600.0)), st(win, "selftest", json!({}))]),
+                Mode::Policy => Task::none(), // 探针模式没有编辑器宿主
                 Mode::InputRule => seq(vec![load, st(win, "st_inputrule", json!({}))]),
                 Mode::Fuzz => {
                     s.stage = 1;
