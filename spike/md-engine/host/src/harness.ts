@@ -199,6 +199,96 @@ async function run(e: Engine) {
       const pairRefused = r.rejects().length === b2 + 1 && /BadPosition/.test(r.rejects()[b2]);
       await within(r.load(r.doc()), "resync");
       result("T17 stale patch and a position inside a surrogate pair are refused by Rust; a reload resynchronizes", refused && pairRefused && r.rustHash() === r.editorHash(), `rejects: ${JSON.stringify(r.rejects().slice(before))}`);
+      // T19–T23: the Agent (Rust) changes the text and the editor integrates it, also while the author is typing
+      const until = async (pred: () => boolean, what: string, ms = 8000) => {
+        const t0 = performance.now();
+        while (!pred()) {
+          if (performance.now() - t0 > ms) throw new Error("timeout: " + what);
+          await new Promise((res) => setTimeout(res, 15));
+        }
+      };
+      const agentDone = async (apply: () => void, what: string) => {
+        const n = r.stats().remoteApplied + r.agentErrors().length;
+        apply();
+        await until(() => r.stats().remoteApplied + r.agentErrors().length > n, what + " (Agent reply)");
+        await within(r.settled(), what);
+      };
+      const NOTE = "# 题\n\n甲段落的内容在这里，足够长一些。\n\n乙段落的内容也在这里，同样足够长。\n";
+      const idOf = (m: string) => r.blocks().find((b) => r.doc().slice(b.from, b.to).includes(m))!.id;
+      const same = () => r.rustHash() === r.editorHash();
+
+      // T19: the Agent rewrites a block that is addressed by its id; the author is idle
+      await within(r.load(NOTE), "T19 load");
+      const idA = idOf("甲段落"), idB = idOf("乙段落"), v19 = r.version();
+      await agentDone(() => r.agent({ op: "replace_block", id: idA, text: "Agent 改写后的甲段落😀，更精炼。" }), "T19");
+      result("T19 Agent patch addressed by block id reaches the editor; ids of untouched blocks kept; texts equal", r.doc().includes("Agent 改写后的甲段落😀") && r.doc().includes("乙段落") && idOf("乙段落") === idB && r.version() === v19 + 1 && same(), `version ${v19}→${r.version()} equal=${same()}`);
+
+      // T20: the Agent's change reaches Rust first, then the author's keystrokes (sent on the old version) are refused,
+      //      transformed over the Agent's change in the editor and sent again; nothing is lost on either side
+      await within(r.load(NOTE), "T20 load");
+      const idA20 = idOf("甲段落"), t0 = r.stats().remoteTransformed;
+      const typeAt = r.doc().indexOf("乙段落") + 3;
+      r.agent({ op: "replace_block", id: idA20, text: "Agent 在上方改写这一段。" });
+      r.replace(typeAt, typeAt, "★手写★"); // posted right behind the Agent's request: Rust sees them in this order
+      await until(() => r.stats().remoteApplied >= 1, "T20 agent reply");
+      await within(r.settled(), "T20 settle");
+      result("T20 author types while the Agent edits another block: both changes survive and both sides agree", r.doc().includes("Agent 在上方改写这一段。") && r.doc().includes("★手写★") && same() && r.stats().remoteTransformed > t0, `transformed=${r.stats().remoteTransformed - t0} rejects=${JSON.stringify(r.rejects().slice(-2))}`);
+
+      // T21: the author types INSIDE the block the Agent rewrites: the typing is kept next to the new text, not dropped
+      await within(r.load(NOTE), "T21 load");
+      const idB21 = idOf("乙段落");
+      const inside = r.doc().indexOf("乙段落") + 3;
+      r.agent({ op: "replace_block", id: idB21, text: "Agent 整段改写了乙。" });
+      r.replace(inside, inside, "★我在写★");
+      await until(() => r.stats().remoteApplied >= 1, "T21 agent reply");
+      await within(r.settled(), "T21 settle");
+      result("T21 author types inside the block the Agent rewrites: the Agent's text and the typing both survive", r.doc().includes("Agent 整段改写了乙。") && r.doc().includes("★我在写★") && same(), `result: ${JSON.stringify(r.doc().slice(r.doc().indexOf("甲段落")))}`);
+
+      // T22: one Ctrl-Z takes back the Agent's change and nothing else
+      await within(r.load(NOTE), "T22 load");
+      const original22 = r.doc();
+      const p22 = r.doc().indexOf("甲段落") + 3;
+      r.replace(p22, p22, "A"); // the author's own earlier edit
+      await within(r.settled(), "T22 own edit");
+      const afterOwn = r.doc();
+      await new Promise((res) => setTimeout(res, 600)); // outside CodeMirror's grouping window
+      await agentDone(() => r.agent({ op: "replace_block", id: idOf("乙段落"), text: "Agent 重写的乙。" }), "T22 agent");
+      const afterAgent = r.doc();
+      r.undo();
+      await within(r.settled(), "T22 undo");
+      result("T22 Ctrl-Z reverts exactly the Agent's change; the author's earlier edit stays; both sides agree", afterAgent.includes("Agent 重写的乙。") && r.doc() === afterOwn && afterOwn !== original22 && same(), `after undo equals the state before the Agent: ${r.doc() === afterOwn}`);
+
+      // T23: randomized interleaving of the author's edits, Agent operations and undo, without waiting in between
+      await within(r.load(NOTE + "\n- 项一\n- 项二\n\n> 引用一段\n\n末段在这里。\n"), "T23 load");
+      let seed = 0x9e3779b1;
+      const rnd = (n: number) => { seed ^= seed << 13; seed >>>= 0; seed ^= seed >>> 17; seed ^= seed << 5; seed >>>= 0; return seed % Math.max(1, n); };
+      const boundary = (p: number) => { const d = r.doc(); const c = d.charCodeAt(p); return c >= 0xdc00 && c <= 0xdfff && p > 0 ? p + 1 : p; };
+      const TEXTS = ["字", "ab", "😀", "，", "\n\n", "新的一段话在此。", "𠮷", " "];
+      let agentOps = 0;
+      const base = r.stats();
+      const rejectsBefore = r.rejects().length;
+      for (let step = 0; step < 160; step++) {
+        const k = rnd(100);
+        const d = r.doc();
+        if (k < 40) { const p = boundary(rnd(d.length + 1)); r.replace(p, p, TEXTS[rnd(TEXTS.length)]); }
+        else if (k < 55 && d.length > 20) { const p = boundary(rnd(d.length - 4)); r.replace(p, boundary(Math.min(d.length, p + 1 + rnd(4))), ""); }
+        else if (k < 75) { const bs = r.blocks(); if (bs.length) { agentOps++; r.agent({ op: "replace_block", id: bs[rnd(bs.length)].id, text: `Agent 重写 ${step}：好的😀。` }); } }
+        else if (k < 85) { const bs = r.blocks(); if (bs.length) { agentOps++; r.agent({ op: "insert_after", id: bs[rnd(bs.length)].id, text: `Agent 新增 ${step}。` }); } }
+        else if (k < 90) { agentOps++; r.agent({ op: "append", text: `Agent 追加 ${step}。` }); }
+        else if (k < 94) r.undo();
+        else await new Promise((res) => setTimeout(res, rnd(40)));
+      }
+      await until(() => r.stats().remoteApplied - base.remoteApplied + (r.agentErrors().length) >= agentOps, "T23 all Agent replies", 20000);
+      await within(r.settled(), "T23 settle");
+      const endDoc = r.doc(), mappedRanges = r.blocks().map((b) => `${b.from}-${b.to}`).join(" "), ids23 = r.blocks().map((b) => b.id);
+      const eq = same() && endDoc.length === r.docLength16();
+      await within(r.load(endDoc), "T23 fresh parse");
+      const freshRanges = r.blocks().map((b) => `${b.from}-${b.to}`).join(" ");
+      const mine = r.rejects().slice(rejectsBefore);
+      const badRejects = mine.filter((x) => !/StaleBase/.test(x));
+      const badAgentErrors = r.agentErrors().filter((x) => !/^no block with id/.test(x));
+      result("T23 160 random author edits, Agent operations and undos in flight together: both sides end identical", eq && mappedRanges === freshRanges && new Set(ids23).size === ids23.length && badRejects.length === 0 && badAgentErrors.length === 0, `agent ops ${agentOps} (applied ${r.stats().remoteApplied - base.remoteApplied}, refused ${r.agentErrors().length}), transformed over pending edits ${r.stats().remoteTransformed - base.remoteTransformed}, stale rejections ${mine.length - badRejects.length}, other rejections ${JSON.stringify(badRejects.slice(0, 3))}, equal=${eq}, ranges equal=${mappedRanges === freshRanges}`);
+
       // round-trip cost of keeping Rust in sync, on long chapters (informational)
       for (const reps of [20, 200]) {
         const text = repeated(reps);

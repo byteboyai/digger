@@ -133,6 +133,23 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
                     };
                     return s.win.map(|w| send_page(w, reply)).unwrap_or_else(Task::none);
                 }
+                Some("agent") => {
+                    // a test hook standing in for the Agent runtime: an operation addressed by block id
+                    let text = v["text"].as_str().unwrap_or("").to_string();
+                    let id = v["id"].as_str().unwrap_or("").to_string();
+                    let op = match v["op"].as_str() {
+                        Some("replace_block") => Some(sync::AgentOp::ReplaceBlock { id, text }),
+                        Some("insert_after") => Some(sync::AgentOp::InsertAfter { id, text }),
+                        Some("append") => Some(sync::AgentOp::Append { text }),
+                        _ => None,
+                    };
+                    let reply = match op.map(|op| s.doc.agent(&op)) {
+                        Some(Ok(patch)) => s.doc.update_message(&patch, "agent"),
+                        Some(Err(e)) => json!({"t": "agent_error", "reason": e}),
+                        None => json!({"t": "agent_error", "reason": "unknown operation"}),
+                    };
+                    return s.win.map(|w| send_page(w, reply)).unwrap_or_else(Task::none);
+                }
                 Some("info") => println!("INFO: {}\n      {}", v["name"].as_str().unwrap_or("?"), v["detail"].as_str().unwrap_or("")),
                 Some("ready") => s.status = format!("engine: {} — type here; try Chinese/Japanese IME, `## `, **bold**, moving the caret between blocks", v["engine"].as_str().unwrap_or("?")),
                 Some("done") => {

@@ -46,11 +46,17 @@ export class RustSync {
   active = false;
   loading = false;
   rejects: string[] = [];
+  agentErrors: string[] = [];
+  /** number of Agent patches integrated, and how many of them had to be transformed over unconfirmed local edits */
+  remoteApplied = 0;
+  remoteTransformed = 0;
   private inflight = false;
+  /** the patch that is out (relative to the last confirmed version) and edits made since (relative to the doc after `sent`) */
+  private sent: ChangeSet | null = null;
   private queued: ChangeSet | null = null;
   private waiters: (() => void)[] = [];
 
-  constructor(private post: (o: unknown) => void, private onBlocks: () => void) {
+  constructor(private post: (o: unknown) => void, private onBlocks: () => void, private applyRemote: (changes: ChangeSet) => void) {
     (window as unknown as { __md: unknown }).__md = { receive: (j: string) => this.receive(JSON.parse(j)) };
   }
 
@@ -59,6 +65,7 @@ export class RustSync {
     this.active = true;
     this.blocks = [];
     this.queued = null;
+    this.sent = null;
     this.inflight = true;
     this.post({ t: "load", text });
     return this.settled();
@@ -77,18 +84,55 @@ export class RustSync {
     if (this.inflight || !this.queued) return;
     const q = this.queued;
     this.queued = null;
+    this.sent = q;
     this.inflight = true;
     const changes: { from: number; to: number; insert: string }[] = [];
     q.iterChanges((a, b, _c, _d, ins) => changes.push({ from: a, to: b, insert: ins.toString() }));
     this.post({ t: "edit", base: this.version, changes });
   }
 
-  private receive(m: { t: string; version: number; hash: string; len16: number; blocks: RBlock[]; reason?: string }) {
+  private mapBlocks(blocks: RBlock[], cs: ChangeSet | null): RBlock[] {
+    return cs ? blocks.map((b) => ({ ...b, from: cs.mapPos(b.from, -1), to: cs.mapPos(b.to, 1) })) : blocks;
+  }
+
+  private receive(m: { t: string; version: number; hash: string; len16: number; blocks: RBlock[]; reason?: string; changes?: { from: number; to: number; insert: string }[] }) {
+    if (m.t === "update") {
+      // An Agent patch, relative to the last version we confirmed. Our own unconfirmed edits (the one that is out
+      // and the ones queued behind it) happened concurrently: transform both ways so everybody ends in the same text.
+      const delta = m.changes!.reduce((a, c) => a + c.insert.length - (c.to - c.from), 0);
+      let R = ChangeSet.of(m.changes!.map((c) => ({ from: c.from, to: c.to, insert: c.insert })), m.len16 - delta);
+      if (this.sent || this.queued) this.remoteTransformed++;
+      if (this.sent) {
+        const A = this.sent, R0 = R;
+        this.sent = A.map(R0, true); // our typing goes before the Agent's insertion at the same place
+        R = R0.map(A, false);
+      }
+      if (this.queued) {
+        const Q = this.queued, R0 = R;
+        this.queued = Q.map(R0, true);
+        R = R0.map(Q, false);
+      }
+      this.applyRemote(R); // R now applies to the editor's current document
+      this.remoteApplied++;
+      this.version = m.version;
+      this.hash = m.hash;
+      this.len16 = m.len16;
+      this.blocks = this.mapBlocks(this.mapBlocks(m.blocks, this.sent), this.queued);
+      this.onBlocks();
+      // `sent` (if any) is now stale: Rust will refuse it; the reject below re-sends it, transformed
+      this.wake();
+      return;
+    }
+    if (m.t === "agent_error") {
+      this.agentErrors.push(m.reason ?? "?");
+      return;
+    }
     if (m.t === "blocks") {
       this.version = m.version;
       this.hash = m.hash;
       this.len16 = m.len16;
       this.inflight = false;
+      this.sent = null;
       const q = this.queued;
       this.blocks = q ? m.blocks.map((b) => ({ ...b, from: q.mapPos(b.from, -1), to: q.mapPos(b.to, 1) })) : m.blocks;
       this.onBlocks();
@@ -96,7 +140,19 @@ export class RustSync {
     } else if (m.t === "reject") {
       this.rejects.push(m.reason ?? "?");
       this.inflight = false;
+      if (/StaleBase/.test(m.reason ?? "") && this.sent) {
+        // the Agent got there first; our patch has been transformed over its change: send it again on the new version
+        this.queued = this.queued ? this.sent.compose(this.queued) : this.sent;
+        this.sent = null;
+        this.flush();
+        return;
+      }
+      this.sent = null;
     }
+    this.wake();
+  }
+
+  private wake() {
     if (!this.inflight && !this.queued) {
       const w = this.waiters;
       this.waiters = [];

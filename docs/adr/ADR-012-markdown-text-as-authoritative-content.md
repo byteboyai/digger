@@ -277,7 +277,35 @@ Rust → editor   reject { reason }                                stale base, p
 - A patch containing a lone surrogate (for example an edit between the two halves of an emoji) is not valid JSON text for the Rust side; it was dropped silently and the editor waited forever. Rust now answers every unparsable message with a `reject`, and positions inside a surrogate pair are refused explicitly (`BadPosition`).
 - The test first compared 3 UTF-16 units with 3 code points and failed on emoji; block heads are therefore defined in code points while positions are in UTF-16 units. Any code that mixes the two will be wrong on exactly the text this product is about (CJK with emoji).
 
-**Not done:** the other direction (Rust or an Agent changing the text and sending a patch to the editor), so the editor never receives text from Rust yet; interplay with the undo stack; behaviour during an IME composition (the live preview keeps its decorations while composing, but patches are still sent); and re-parsing only the changed region instead of the whole document (22 ms is fine at this size, the cost is linear and would matter for much longer documents).
+**Not done:** behaviour during an IME composition (the live preview keeps its decorations while composing, but patches are still sent), and re-parsing only the changed region instead of the whole document (22 ms is fine at this size, the cost is linear and would matter for much longer documents).
+
+### Agent patches: Rust changes the text and the editor integrates it (tests T19 to T23)
+
+An Agent stand-in in Rust performs operations addressed by **block id** (`replace_block`, `insert_after`, `append`). Rust resolves the id to a range at the moment it runs, applies the patch to its current version, and pushes it:
+
+```text
+Rust → editor   update { version, changes: [{ from, to, insert }], hash, len16, blocks }   changes are relative to the previous version
+```
+
+The editor may have edits of its own that Rust has not confirmed (one out, more queued). They happened concurrently with the Agent's patch, so the editor transforms both ways with CodeMirror's `ChangeSet.map` (OT on text ranges): its pending edits are rebased over the Agent's patch, and the Agent's patch is rebased over the pending edits before it is applied to the current document. Both sides end in the same text. Rust refuses the author's old edit as stale (it arrives on an older version); the editor then sends the transformed edit again on the new version. Rust needs no log of past versions: it sends every Agent patch to the editor immediately, in order, before it refuses anything, so the editor always integrates the patch before the refusal arrives.
+
+Tie-break at the same position: the author's typing goes before the Agent's insertion. The Agent's change goes into the author's undo history as its own step.
+
+What the tests show (three consecutive runs, a mutation check, and 22 of 22 checks passing):
+
+- **Idle author (T19):** the Agent rewrites a block (with an emoji in the text); the editor's text equals Rust's, the version advances by one, ids of untouched blocks are kept.
+- **Author types while the Agent edits another block (T20):** the Agent's request is posted first and the keystrokes right behind it, so Rust applies the Agent patch first and then refuses the keystrokes. Both changes survive and both sides agree; the transform path was exercised.
+- **Author types inside the block the Agent rewrites (T21):** neither side loses text. The typing is kept next to the Agent's new text (`…Agent 整段改写了乙。★我在写★`). Where exactly it lands is a consequence of position mapping, not a merge of meaning; the author's characters are never dropped.
+- **Undo (T22):** one Ctrl-Z reverts exactly the Agent's change (an edit made by the author earlier stays), and the revert itself goes to Rust as an ordinary edit.
+- **Randomized (T23):** 160 steps of author inserts and deletes (at code-point boundaries, with CJK, emoji and astral characters), Agent operations of three kinds and Ctrl-Z, fired without waiting. Around 40 to 50 Agent patches were integrated, almost all of them over pending edits, with 6 to 10 stale refusals. At the end both sides hold the same text, the editor's mapped block ranges equal a fresh Rust parse, ids are unique, and no refusal other than "stale" occurred.
+- Removing the transform from the editor makes the tests fail at once.
+
+**Findings and limits:**
+
+- An Agent operation names a block id. In the randomized run 7 to 19 of 58 operations were refused with "no block with id": a block rewritten wholesale gets a new id, so a second operation aimed at its old id (issued from the editor's slightly outdated list) finds nothing. This is the intended behaviour (an explicit error, never a wrong target), but a real Agent runtime should resolve ids inside Rust at execution time and treat "no such block" as a normal outcome.
+- A patch that lands inside the author's current paragraph (T21) does not ask the author anything; the choice made was "keep both". For prose, whether the Agent's rewrite should be applied at all while the author is typing in the same paragraph is a product decision (queue it as a suggestion, or apply and offer undo); this spike shows that applying it is safe, not that it is the right experience.
+- Undo restores text, not ids: after undoing a wholesale rewrite the block gets a new id, because the id of the old text was not kept by the reconciler for the rewrite (see the block identity results).
+- The CodeMirror collaboration package was not used; the transform is a few lines over `ChangeSet`, with the authority's version counter in Rust. Whether to adopt `@codemirror/collab` for its update log and rebase helpers is open.
 
 ## Consequences
 

@@ -1,8 +1,8 @@
-import { EditorState, StateEffect, type Range } from "@codemirror/state";
+import { Annotation, EditorState, StateEffect, Transaction, type Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { history } from "@codemirror/commands";
+import { history, undo } from "@codemirror/commands";
 import type { Engine, RustApi } from "./engine";
 import { RustSync, fnv } from "./rust-sync";
 import { Footnote } from "./footnote";
@@ -21,6 +21,9 @@ class HrWidget extends WidgetType {
 }
 
 const refresh = StateEffect.define<null>();
+
+/** marks a transaction that applies a change which came from Rust (an Agent patch): it must not be sent back */
+const fromRust = Annotation.define<boolean>();
 
 /** When set, the "block that holds the caret" comes from Rust, not from the editor's own tree. */
 let rustTops: () => { from: number; to: number }[] | null = () => null;
@@ -160,6 +163,11 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
     typed() { const r = view.state.selection.main; return sync.typed(r.from, r.to); },
     activeBlockFrom() { const b = sync.blockAt(view.state.selection.main.head); return b ? b.from : null; },
     rejects: () => sync.rejects,
+    docLength16: () => sync.len16,
+    agent(op) { post({ t: "agent", ...op }); },
+    agentErrors: () => sync.agentErrors,
+    undo() { undo(view); },
+    stats: () => ({ remoteApplied: sync.remoteApplied, remoteTransformed: sync.remoteTransformed }),
     detach() { sync.active = false; rustTops = () => null; view.dispatch({ effects: refresh.of(null) }); },
   };
   const blocks = (s: EditorState) => {
@@ -187,12 +195,17 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
             EditorView.lineWrapping,
             livePreview,
             theme,
-            EditorView.updateListener.of((u) => { if (u.docChanged) sync.local(u.changes); }),
+            EditorView.updateListener.of((u) => { if (u.docChanged && !u.transactions.some((t) => t.annotation(fromRust))) sync.local(u.changes); }),
           ],
         }),
       });
       // not inside an update (this is called from the update listener): rebuild the live preview right after it
-      sync = new RustSync(post, () => queueMicrotask(() => view.dispatch({ effects: refresh.of(null) })));
+      sync = new RustSync(
+        post,
+        () => queueMicrotask(() => view.dispatch({ effects: refresh.of(null) })),
+        // The Agent's change goes into the author's undo history like any edit: one Ctrl-Z takes it back.
+        (changes) => view.dispatch({ changes, annotations: [fromRust.of(true), Transaction.userEvent.of("agent")] }),
+      );
     },
     load(md) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: md }, selection: { anchor: 0 } });

@@ -5,6 +5,12 @@ use block_identity_spike::parse::{Kind, Parsed, parse_blocks};
 use block_identity_spike::reconcile::{Config, Tracked, reconcile};
 use serde_json::{Value, json};
 
+pub enum AgentOp {
+    ReplaceBlock { id: String, text: String },
+    InsertAfter { id: String, text: String },
+    Append { text: String },
+}
+
 pub struct Doc {
     pub text: String,
     pub version: u64,
@@ -97,6 +103,37 @@ impl Doc {
         Ok(())
     }
 
+    /// An Agent operation addressed by block id. It is applied to the CURRENT version and returns the patch it made
+    /// (UTF-16 positions in the coordinates of the version before), which the editor must integrate.
+    pub fn agent(&mut self, op: &AgentOp) -> Result<Vec<(usize, usize, String)>, String> {
+        let ids: Vec<String> = self.last.as_ref().ok_or("no document")?.1.iter().map(|(id, _)| id.to_string()).collect();
+        let ranges = self.ranges16();
+        let find = |id: &str| ids.iter().position(|x| x == id).map(|i| ranges[i]).ok_or_else(|| format!("no block with id {id}"));
+        let end16 = self.text.encode_utf16().count();
+        let patch = match op {
+            AgentOp::ReplaceBlock { id, text } => {
+                let (from, to) = find(id)?;
+                vec![(from, to, text.clone())]
+            }
+            AgentOp::InsertAfter { id, text } => {
+                let (_, to) = find(id)?;
+                vec![(to, to, format!("\n\n{text}"))]
+            }
+            AgentOp::Append { text } => vec![(end16, end16, format!("{}{text}\n", if self.text.ends_with("\n\n") { "" } else if self.text.ends_with('\n') { "\n" } else { "\n\n" }))],
+        };
+        self.edit(self.version, &patch).map_err(|e| format!("{e:?}"))?;
+        Ok(patch)
+    }
+
+    /// The `update` message for the editor after an Agent patch: the patch, and the resulting version and blocks.
+    pub fn update_message(&self, patch: &[(usize, usize, String)], origin: &str) -> Value {
+        let mut m = self.blocks_message();
+        m["t"] = json!("update");
+        m["origin"] = json!(origin);
+        m["changes"] = patch.iter().map(|(f, t, i)| json!({"from": f, "to": t, "insert": i})).collect();
+        m
+    }
+
     fn reparse(&mut self) {
         let parsed = parse_blocks(&self.text);
         let mut next = self.next_id;
@@ -106,10 +143,9 @@ impl Doc {
         self.last = Some((parsed, assigned.iter().map(|a| (a.id, format!("{:?}", a.how))).collect()));
     }
 
-    /// The `blocks` message for the editor: ranges in UTF-16 positions.
-    pub fn blocks_message(&self) -> Value {
-        let (parsed, hows) = self.last.as_ref().expect("a document was loaded");
-        // one pass over the text to convert the (sorted) byte offsets to UTF-16 positions
+    /// (from, to) of every block in UTF-16 positions, in document order.
+    fn ranges16(&self) -> Vec<(usize, usize)> {
+        let (parsed, _) = self.last.as_ref().expect("a document was loaded");
         let mut offsets: Vec<usize> = parsed.iter().flat_map(|p| [p.start, p.end]).collect();
         offsets.sort_unstable();
         offsets.dedup();
@@ -122,14 +158,22 @@ impl Doc {
             }
             u += c.len_utf16();
         }
+        parsed.iter().map(|p| (pos16[&p.start], pos16[&p.end])).collect()
+    }
+
+    /// The `blocks` message for the editor: ranges in UTF-16 positions.
+    pub fn blocks_message(&self) -> Value {
+        let (parsed, hows) = self.last.as_ref().expect("a document was loaded");
+        let ranges = self.ranges16();
         let blocks: Vec<Value> = parsed
             .iter()
             .zip(hows)
-            .map(|(p, (id, how))| {
+            .zip(&ranges)
+            .map(|((p, (id, how)), (from, to))| {
                 let (kind, level) = kind_name(&p.kind);
                 let title: Option<String> = level.map(|_| heading_title(&p.text));
                 json!({"id": id.to_string(), "kind": kind, "level": level, "title": title, "how": how,
-                       "from": pos16[&p.start], "to": pos16[&p.end], "head": p.text.chars().take(16).collect::<String>()})
+                       "from": from, "to": to, "head": p.text.chars().take(16).collect::<String>()})
             })
             .collect();
         json!({"t": "blocks", "version": self.version, "hash": fnv(&self.text), "len16": self.text.encode_utf16().count(), "blocks": blocks})
@@ -189,5 +233,28 @@ mod tests {
         assert!(d.text.starts_with("# # 标题"));
         assert!(d.text.ends_with("尾"));
         assert_eq!(d.edit(3, &[(5, 3, String::new())]), Err(EditError::Malformed("changes must be sorted and disjoint")));
+    }
+
+    #[test]
+    fn agent_operations_address_blocks_by_id_and_report_their_patch() {
+        let mut d = Doc::new();
+        d.load("# 题\n\n甲段落内容在这里。\n\n乙段落内容也在这里。\n");
+        let m = d.blocks_message();
+        let id_a = m["blocks"][1]["id"].as_str().unwrap().to_string();
+        let id_b = m["blocks"][2]["id"].as_str().unwrap().to_string();
+        let patch = d.agent(&AgentOp::ReplaceBlock { id: id_a.clone(), text: "改写后的甲段落😀。".into() }).unwrap();
+        assert_eq!(d.version, 2);
+        assert_eq!(patch.len(), 1);
+        assert!(d.text.contains("改写后的甲段落😀。") && d.text.contains("乙段落"));
+        // ids of the untouched blocks are unchanged
+        let m2 = d.blocks_message();
+        assert_eq!(m2["blocks"][2]["id"], id_b.as_str());
+        let up = d.update_message(&patch, "agent");
+        assert_eq!((up["t"].as_str(), up["version"].as_u64(), up["changes"].as_array().map(|c| c.len())), (Some("update"), Some(2), Some(1)));
+        d.agent(&AgentOp::InsertAfter { id: id_b.clone(), text: "新增的一段。".into() }).unwrap();
+        d.agent(&AgentOp::Append { text: "结尾。".into() }).unwrap();
+        assert!(d.text.ends_with("新增的一段。\n\n结尾。\n"), "{:?}", d.text);
+        assert!(d.agent(&AgentOp::ReplaceBlock { id: "nope".into(), text: "x".into() }).is_err());
+        assert_eq!(d.version, 4, "a failed operation does not advance the version");
     }
 }

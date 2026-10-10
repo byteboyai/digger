@@ -17,6 +17,14 @@ export interface RustApi {
   /** which top-level block the live preview treats as the one holding the caret */
   activeBlockFrom(): number | null;
   rejects(): string[];
+  /** length (UTF-16 units) of the text Rust holds */
+  docLength16(): number;
+  /** ask the Agent stand-in in Rust to change the document (addressed by block id) */
+  agent(op: { op: "replace_block" | "insert_after" | "append"; id?: string; text: string }): void;
+  agentErrors(): string[];
+  /** the author's Ctrl-Z */
+  undo(): void;
+  stats(): { remoteApplied: number; remoteTransformed: number };
   detach(): void;
 }
 
