@@ -1,7 +1,7 @@
 //! 编辑器宿主 spike(ADR-001 验证项 1–4):iced 窗口 + wry 子视图 + Tiptap 宿主。
 //!
 //! `SELFTEST=<mode>` 自动执行并打印 PASS/FAIL:
-//!   basic | merge | perf | crash-a | crash-b-accept | crash-b-discard | crash-b-stale
+//!   basic | merge | fuzz | perf | inputrule | crash-a | crash-b-accept | crash-b-discard | crash-b-stale
 //! crash-b-* 需要 `SPIKE_DIR` 指向 crash-a 留下的数据目录,见 run_recovery_test.sh。
 
 mod bridge;
@@ -65,6 +65,7 @@ enum Mode {
     Basic,
     Merge,
     Perf,
+    Fuzz,
     InputRule,
     CrashA,
     CrashB(Crash),
@@ -79,6 +80,8 @@ struct Recovery {
 struct PendingConflict {
     base_rev: u64,
     local: Vec<Block>,
+    /// 产生该冲突的那条 edit 的 seq:解决后的 rebase 只对它有效。
+    seq: u64,
 }
 
 struct State {
@@ -105,6 +108,15 @@ struct State {
     mark_rev: u64,
     mark_commits: u32,
     fails: u32,
+    /// Rust 认为宿主基线所处的正式版本(load / committed / advance / rebase 发出时更新)。
+    host_rev: u64,
+    resyncs: u32,
+    rng: u64,
+    fuzz_steps: u32,
+    fuzz_bad: u32,
+    down_bytes: usize,
+    down_max: usize,
+    apply_ms_max: f64,
 }
 
 fn state_ref(b: &Binding, rev: u64) -> String {
@@ -139,6 +151,7 @@ impl State {
             Err(_) => Mode::Interactive,
             Ok("merge") => Mode::Merge,
             Ok("perf") => Mode::Perf,
+            Ok("fuzz") => Mode::Fuzz,
             Ok("inputrule") => Mode::InputRule,
             Ok("crash-a") => Mode::CrashA,
             Ok("crash-b-accept") => Mode::CrashB(Crash::Accept),
@@ -163,8 +176,9 @@ impl State {
                 Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Paragraph, text: "夜色渐深，城市的灯火一盏盏亮起。".into() },
                 Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Paragraph, text: "他推开门，雨声涌了进来。".into() },
             ];
-            if mode == Mode::Perf {
-                let n: usize = std::env::var("BLOCKS").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
+            if mode == Mode::Perf || mode == Mode::Fuzz {
+                let default = if mode == Mode::Fuzz { 30 } else { 1500 };
+                let n: usize = std::env::var("BLOCKS").ok().and_then(|v| v.parse().ok()).unwrap_or(default);
                 let line = "夜色渐深，城市的灯火一盏盏亮起，他推开门，雨声涌了进来，所有的往事像潮水一样漫过脚踝。";
                 for i in 0..n {
                     blocks.push(Block { id: uuid::Uuid::now_v7().to_string(), kind: Kind::Paragraph, text: format!("{i}. {line}") });
@@ -198,6 +212,14 @@ impl State {
             mark_rev: 0,
             mark_commits: 0,
             fails: 0,
+            host_rev: 0,
+            resyncs: 0,
+            rng: std::env::var("FUZZ_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0x9E37_79B9_7F4A_7C15_u64) | 1,
+            fuzz_steps: 0,
+            fuzz_bad: 0,
+            down_bytes: 0,
+            down_max: 0,
+            apply_ms_max: 0.0,
         };
         if mode == Mode::CrashB(Crash::Stale) {
             // 应用关闭期间 Agent 已经改过正式状态(与未提交缓冲区不冲突的块)。
@@ -297,6 +319,58 @@ impl State {
         doc::apply_delta(base, &delta).ok()
     }
 
+    fn rnd(&mut self, n: usize) -> usize {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng % n.max(1) as u64) as usize
+    }
+
+    /// 下行:相对宿主基线(`history[host_rev]`)的块级增量,宿主只在 `fromRev` 与自己的基线一致且干净时才应用。
+    /// `claim_from` 仅供自测伪造错误的 fromRev。
+    fn advance_msg(&mut self, claim_from: Option<u64>) -> Value {
+        let from = self.host_rev;
+        let delta = doc::make_delta(&self.history[&from], &self.blocks);
+        self.host_rev = self.rev;
+        let m = json!({"fromRev": claim_from.unwrap_or(from), "rev": self.rev, "stateRef": state_ref(&self.binding, self.rev), "delta": delta.to_json()});
+        let n = m.to_string().len();
+        self.down_bytes += n;
+        self.down_max = self.down_max.max(n);
+        m
+    }
+
+    fn fuzz_mutate(&mut self) {
+        let mut b = self.blocks.clone();
+        for _ in 0..1 + self.rnd(3) {
+            match self.rnd(5) {
+                0 if b.len() > 3 => {
+                    let i = self.rnd(b.len());
+                    b.remove(i);
+                }
+                1 => {
+                    let i = self.rnd(b.len());
+                    b[i].text.push('字');
+                }
+                2 => {
+                    let kind = if self.rnd(4) == 0 { Kind::Heading(2) } else { Kind::Paragraph };
+                    let at = self.rnd(b.len() + 1);
+                    b.insert(at, Block { id: uuid::Uuid::new_v4().to_string(), kind, text: format!("新块{}", self.fuzz_steps) });
+                }
+                3 if b.len() > 1 => {
+                    let from = self.rnd(b.len());
+                    let blk = b.remove(from);
+                    let to = self.rnd(b.len() + 1);
+                    b.insert(to, blk);
+                }
+                _ => {
+                    let i = self.rnd(b.len());
+                    b[i].kind = if b[i].kind == Kind::Paragraph { Kind::Heading(2) } else { Kind::Paragraph };
+                }
+            }
+        }
+        self.commit(b, "agent");
+    }
+
     fn doc_msg(&self) -> Value {
         json!({"stateRef": state_ref(&self.binding, self.rev), "rev": self.rev, "doc": doc::to_pm(&self.blocks)})
     }
@@ -332,9 +406,8 @@ impl State {
         self.store.clear_journal();
         self.note(format!("recovery accepted → Commit rev {} [{summary}]", self.rev));
         self.apply_bounds();
-        let mut m = self.doc_msg();
-        m["reason"] = json!("recovery");
-        send_host(win, "rebase", m)
+        let m = self.advance_msg(None);
+        send_host(win, "official_advanced", m)
     }
 
     fn discard_recovery(&mut self) {
@@ -452,12 +525,17 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
             s.note(format!("← ready viewport {}", p["viewport"]));
             s.viewports.push(viewport_of(p));
             let mut load = s.doc_msg();
+            s.host_rev = s.rev;
             load["editDebounceMs"] = json!(s.debounce_ms());
             let load = send_host(win, "load", load);
             match s.mode {
                 Mode::Interactive => load,
                 Mode::Basic => seq(vec![load, window::resize(win, Size::new(900.0, 600.0)), st(win, "selftest", json!({}))]),
                 Mode::InputRule => seq(vec![load, st(win, "st_inputrule", json!({}))]),
+                Mode::Fuzz => {
+                    s.stage = 1;
+                    seq(vec![load, st(win, "st_report", json!({}))])
+                }
                 Mode::Perf => {
                     s.stage = 1;
                     seq(vec![load, st(win, "st_perf", json!({}))])
@@ -473,7 +551,7 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
                 }
             }
         }
-        "edit" => on_edit(s, win, p),
+        "edit" => on_edit(s, win, p, env.seq),
         "resolve" => {
             let Some(pc) = s.pending_conflict.take() else {
                 s.note("← resolve without a pending conflict (dropped)");
@@ -486,7 +564,20 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
                 let summary = s.commit(m.blocks, "resolved");
                 s.note(format!("← resolve({:?}) → Commit rev {} [{summary}]", res, s.rev));
             }
-            send_rebase(s, win, "resolved")
+            send_rebase(s, win, "resolved", pc.seq, &pc.local)
+        }
+        "resync" => {
+            s.resyncs += 1;
+            s.note(format!("← resync requested ({}) → full reload", p["reason"].as_str().unwrap_or("?")));
+            s.host_rev = s.rev;
+            let mut load = s.doc_msg();
+            load["editDebounceMs"] = json!(s.debounce_ms());
+            let t = send_host(win, "load", load);
+            if s.mode == Mode::Merge && s.stage == 19 {
+                s.stage = 20;
+                return t.chain(st(win, "st_report", json!({})));
+            }
+            t
         }
         "snapshot" => {
             s.snapshots += 1;
@@ -529,14 +620,16 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
     }
 }
 
-fn send_rebase(s: &mut State, win: window::Id, reason: &str) -> Task<Message> {
-    let mut m = s.doc_msg();
-    m["reason"] = json!(reason);
+/// 下行 rebase:相对宿主"已发送快照"(= `sent`,即宿主在发出 ack_seq 那条 edit 时的文档)的块级增量。
+fn send_rebase(s: &mut State, win: window::Id, reason: &str, ack_seq: u64, sent: &[Block]) -> Task<Message> {
+    let delta = doc::make_delta(sent, &s.blocks);
+    s.host_rev = s.rev;
+    let m = json!({"ackSeq": ack_seq, "rev": s.rev, "stateRef": state_ref(&s.binding, s.rev), "reason": reason, "delta": delta.to_json()});
     let t = send_host(win, "rebase", m);
     Task::batch([t]).chain(hook(s, win, "rebase"))
 }
 
-fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
+fn on_edit(s: &mut State, win: window::Id, p: &Value, edit_seq: u64) -> Task<Message> {
     let base = p["baseRev"].as_str().unwrap_or("");
     let Some(base_rev) = parse_ref(base) else {
         s.rejected.push("bad base".into());
@@ -564,6 +657,7 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
             s.note("← edit (no semantic change)");
         }
         let m = json!({"stateRef": state_ref(&s.binding, s.rev), "rev": s.rev});
+        s.host_rev = s.rev;
         return send_host(win, "committed", m);
     }
     // 基线过期:正式状态在宿主有未发送编辑期间前进了 → 块级三方合并,绝不覆盖宿主的会话。
@@ -575,7 +669,7 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
             s.note(format!("   → Commit rev {} [{summary}]", s.rev));
         }
         s.pending_conflict = None;
-        send_rebase(s, win, "merged")
+        send_rebase(s, win, "merged", edit_seq, &local)
     } else {
         s.note(format!("← edit on stale base {base_rev}: CONFLICT on {} block(s), nothing committed", m.conflicts.len()));
         let items: Vec<Value> = m
@@ -587,7 +681,7 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
                 json!({"blockId": id, "mine": mine, "official": off})
             })
             .collect();
-        s.pending_conflict = Some(PendingConflict { base_rev, local });
+        s.pending_conflict = Some(PendingConflict { base_rev, local, seq: edit_seq });
         let mut msg = s.doc_msg();
         msg["conflicts"] = json!(items);
         send_host(win, "conflict", msg).chain(hook(s, win, "conflict"))
@@ -598,7 +692,7 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
 fn hook(s: &mut State, win: window::Id, event: &str) -> Task<Message> {
     let report = st(win, "st_report", json!({}));
     match (s.mode, s.stage, event) {
-        (Mode::Merge, 3, "rebase") | (Mode::Merge, 9, "rebase") | (Mode::Merge, 15, "rebase") => {
+        (Mode::Merge, 3, "rebase") | (Mode::Merge, 9, "rebase") | (Mode::Merge, 15, "rebase") | (Mode::Merge, 24, "rebase") => {
             s.stage += 1;
             report
         }
@@ -674,7 +768,7 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
             s.check("S1 host has the typed, unsent edit", contains(&texts, 1, "[本地]") && r["clean"] == false);
             s.agent_edit(2, |t| format!("{t} [Agent]"));
             s.stage = 2;
-            let adv = send_host(win, "official_advanced", s.doc_msg());
+            let adv = { let m = s.advance_msg(None); send_host(win, "official_advanced", m) };
             sess(seq(vec![adv, st(win, "st_report", json!({}))]))
         }
         (Mode::Merge, 2) => {
@@ -695,7 +789,7 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
         (Mode::Merge, 5) => {
             s.agent_edit(1, |_| "AGENT-P1".into());
             s.stage = 6;
-            seq(vec![send_host(win, "official_advanced", s.doc_msg()), st(win, "st_report", json!({}))])
+            seq(vec![{ let m = s.advance_msg(None); send_host(win, "official_advanced", m) }, st(win, "st_report", json!({}))])
         }
         (Mode::Merge, 6) => {
             s.check("S2 host kept [X] despite official_advanced", contains(&texts, 1, "[X]"));
@@ -719,7 +813,7 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
         (Mode::Merge, 11) => {
             s.agent_edit(1, |_| "AGENT2".into());
             s.stage = 12;
-            seq(vec![send_host(win, "official_advanced", s.doc_msg()), st(win, "st_report", json!({}))])
+            seq(vec![{ let m = s.advance_msg(None); send_host(win, "official_advanced", m) }, st(win, "st_report", json!({}))])
         }
         (Mode::Merge, 12) => {
             s.stage = 13;
@@ -737,7 +831,7 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
             s.agent_edit(2, |t| format!("{t}!"));
             s.mark_commits = s.commits; // agent 提交不算宿主提交
             s.stage = 17;
-            seq(vec![send_host(win, "official_advanced", s.doc_msg()), st(win, "st_report", json!({}))])
+            seq(vec![{ let m = s.advance_msg(None); send_host(win, "official_advanced", m) }, st(win, "st_report", json!({}))])
         }
         (Mode::Merge, 17) => {
             s.check("S4 clean host applies official_advanced", texts == off);
@@ -746,8 +840,85 @@ fn on_report(s: &mut State, win: window::Id, r: &Value) -> Task<Message> {
         }
         (Mode::Merge, 18) => {
             s.check("S4 applying official state produced no spurious edit/commit", s.commits == s.mark_commits);
+            s.check("S4 block-scoped downstream needed no resync", s.resyncs == 0);
+            // S5: a downstream delta that claims the wrong baseline must NOT be applied; the host asks for a resync.
+            s.agent_edit(2, |t| format!("{t}?"));
+            let wrong = s.rev + 7;
+            let m = s.advance_msg(Some(wrong));
+            s.stage = 19;
+            send_host(win, "official_advanced", m)
+        }
+        (Mode::Merge, 20) => {
+            s.check("S5 mismatching fromRev → host asked for exactly one resync", s.resyncs == 1);
+            s.check("S5 after the resync the host equals the official state", texts == off);
+            // S6: a correct delta changes only the changed block; untouched nodes keep their identity.
+            let (id0, id1, id2) = (s.blocks[0].id.clone(), s.blocks[1].id.clone(), s.blocks[2].id.clone());
+            s.original_ids = vec![id0, id1, id2];
+            s.agent_edit(2, |t| format!("{t}#"));
+            s.stage = 21;
+            let m = s.advance_msg(None);
+            seq(vec![st(win, "st_mark", json!({})), send_host(win, "official_advanced", m), st(win, "st_report", json!({}))])
+        }
+        (Mode::Merge, 21) => {
+            let [id0, id1, id2] = [0, 1, 2].map(|i| s.original_ids[i].clone());
+            s.check("S6 host equals official after in-place delta", texts == off);
+            s.check("S6 untouched blocks keep node identity", r["identity"][&id0] == true && r["identity"][&id1] == true);
+            s.check("S6 the changed block was replaced", r["identity"][&id2] == false);
+            s.stage = 22;
+            seq(vec![st(win, "st_type", json!({"block": 1, "text": " [Z]"})), st(win, "st_mark", json!({})), st(win, "st_report", json!({}))])
+        }
+        (Mode::Merge, 22) => {
+            // S7: dirty host ignores the advance; the merged rebase is a delta and leaves untouched blocks alone.
+            s.agent_edit(2, |t| format!("{t}@"));
+            s.stage = 23;
+            let m = s.advance_msg(None);
+            seq(vec![send_host(win, "official_advanced", m), st(win, "st_report", json!({}))])
+        }
+        (Mode::Merge, 23) => {
+            s.check("S7 dirty host kept its text and ignored the advance", contains(&texts, 1, "[Z]") && !contains(&texts, 2, "@"));
+            s.stage = 24;
+            st(win, "st_flush", json!({}))
+        }
+        (Mode::Merge, 25) => {
+            let [id0, id1, _] = [0, 1, 2].map(|i| s.original_ids[i].clone());
+            s.check("S7 rebase delta merged both sides", texts == off && contains(&texts, 1, "[Z]") && contains(&texts, 2, "@"));
+            s.check("S7 rebase left the typed block and the heading as the same nodes", r["identity"][&id0] == true && r["identity"][&id1] == true);
+            s.check("S7 no resync was needed", s.resyncs == 1);
             s.check("no stale/invalid rejections in merge flow", s.rejected.is_empty());
             finish(s)
+        }
+        // ---------------- fuzz: random structural downstream deltas ----------------
+        (Mode::Fuzz, 1) => {
+            s.check("F0 initial load equals official", doc::parse_pm(&r["doc"]).is_ok_and(|(b, _)| b == s.blocks));
+            s.fuzz_mutate();
+            s.stage = 2;
+            let m = s.advance_msg(None);
+            seq(vec![send_host(win, "official_advanced", m), st(win, "st_report", json!({}))])
+        }
+        (Mode::Fuzz, 2) => {
+            s.apply_ms_max = s.apply_ms_max.max(r["lastApplyMs"].as_f64().unwrap_or(0.0));
+            let same = doc::parse_pm(&r["doc"]).is_ok_and(|(b, _)| b == s.blocks);
+            if !same {
+                s.fuzz_bad += 1;
+                println!("fuzz mismatch at step {}: host {} blocks vs official {}", s.fuzz_steps, texts.len(), s.blocks.len());
+                if let Ok((hb, _)) = doc::parse_pm(&r["doc"]) {
+                    let official: std::collections::HashSet<&str> = s.blocks.iter().map(|b| b.id.as_str()).collect();
+                    for (i, b) in hb.iter().enumerate().filter(|(_, b)| !official.contains(b.id.as_str())) {
+                        println!("  extra in host: index {i} of {} kind {:?} text {:?}", hb.len(), b.kind, b.text);
+                    }
+                    println!("  official last block kind: {:?}", s.blocks.last().map(|b| &b.kind));
+                }
+            }
+            s.fuzz_steps += 1;
+            if s.fuzz_bad > 0 || s.fuzz_steps >= std::env::var("FUZZ_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(80) {
+                s.check(&format!("fuzz: host == official after each of {} random structural steps", s.fuzz_steps), s.fuzz_bad == 0);
+                s.check("fuzz: never needed a resync", s.resyncs == 0);
+                println!("FUZZ {} blocks, {} steps: downstream avg {} B, max {} B | host apply max {:.1} ms", s.blocks.len(), s.fuzz_steps, s.down_bytes / s.fuzz_steps.max(1) as usize, s.down_max, s.apply_ms_max);
+                return finish(s);
+            }
+            s.fuzz_mutate();
+            let m = s.advance_msg(None);
+            seq(vec![send_host(win, "official_advanced", m), st(win, "st_report", json!({}))])
         }
         // ---------------- crash recovery (second process) ----------------
         (Mode::CrashB(kind), 1) => {

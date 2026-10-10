@@ -70,6 +70,21 @@ export function changePlugin(Plugin: any, PluginKey: any) {
   });
 }
 
+// Indices of one longest strictly increasing subsequence of `a`, O(n log n).
+function lis(a: number[]): number[] {
+  const tails: number[] = []; // tails[l] = index in `a` of the smallest tail of an increasing run of length l+1
+  const prev: number[] = new Array(a.length).fill(-1);
+  for (let i = 0; i < a.length; i++) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (a[tails[mid]] < a[i]) lo = mid + 1; else hi = mid; }
+    if (lo > 0) prev[i] = tails[lo - 1];
+    tails[lo] = i;
+  }
+  const out: number[] = [];
+  for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = prev[i]) out.push(i);
+  return out;
+}
+
 export function startHost(view: any, adapter: string) {
   const binding = window.__DIGGER_BINDING__;
   let seq = 0;
@@ -123,8 +138,12 @@ export function startHost(view: any, adapter: string) {
   }
   let sent: Blocks | undefined;
 
-  const send = (type: string, payload: unknown) =>
-    window.ipc.postMessage(JSON.stringify({ hostKind: "editor", binding, seq: ++seq, type, payload }));
+  const send = (type: string, payload: unknown): number => {
+    const mine = ++seq;
+    window.ipc.postMessage(JSON.stringify({ hostKind: "editor", binding, seq: mine, type, payload }));
+    return mine;
+  };
+  let lastSentSeq = 0; // seq of the in-flight/last edit: a `rebase` is only valid for the edit it answers
   const isClean = () => !inflight && !dirty && editTimer === undefined;
   const getJSON = () => view.state.doc.toJSON();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -144,7 +163,7 @@ export function startHost(view: any, adapter: string) {
     inflight = true;
     dirty = false;
     sent = blocksNow();
-    send("edit", { baseRev, ...buildDelta(sent, baseline) });
+    lastSentSeq = send("edit", { baseRev, ...buildDelta(sent, baseline) });
   }
   function acked() {
     inflight = false;
@@ -175,6 +194,93 @@ export function startHost(view: any, adapter: string) {
     baseline = blocksNow(); // the document now equals what Rust sent
     lastLoadMs = performance.now() - t0;
   }
+
+  // Block-scoped downstream: apply Rust's delta to the live document in place. Untouched blocks keep their
+  // node identity, so the caret, selection and IME composition outside the changed blocks are undisturbed.
+  // Throws before dispatching anything if the delta is inconsistent (the caller then asks for a resync).
+  let lastApplyMs = 0;
+  function applyDelta(d: { changed: any[]; removed: string[]; placements?: { id: string; after: string | null }[] }) {
+    const t0 = performance.now();
+    const schema = view.state.schema;
+    const tr = view.state.tr;
+    type Ent = { id: string; node: any };
+    const cur: Ent[] = [];
+    view.state.doc.forEach((n: any) => cur.push({ id: n.attrs.blockId, node: n }));
+    const changed = new Map<string, any>();
+    for (const j of d.changed) changed.set(j.attrs.blockId, schema.nodeFromJSON(j));
+    const removed = new Set(d.removed);
+    const startsOf = () => {
+      const out: number[] = [];
+      let p = 0;
+      for (const e of cur) { out.push(p); p += e.node.nodeSize; }
+      return out;
+    };
+    // 1. removals and 2. in-place replacements, back to front so earlier positions stay valid.
+    let starts = startsOf();
+    for (let i = cur.length - 1; i >= 0; i--) {
+      if (removed.has(cur[i].id)) { tr.delete(starts[i], starts[i] + cur[i].node.nodeSize); cur.splice(i, 1); }
+    }
+    starts = startsOf();
+    for (let i = cur.length - 1; i >= 0; i--) {
+      const n = changed.get(cur[i].id);
+      if (n) { tr.replaceWith(starts[i], starts[i] + cur[i].node.nodeSize, n); cur[i].node = n; }
+    }
+    // 3. order: predecessor map (baseline minus removed, overridden by placements) → one chain.
+    const pred = new Map<string, string | null>();
+    let prev: string | null = null;
+    for (const e of cur) { pred.set(e.id, prev); prev = e.id; }
+    for (const pl of d.placements ?? []) pred.set(pl.id, pl.after);
+    const next = new Map<string | null, string>();
+    for (const [id, p] of pred) {
+      if (next.has(p)) throw new Error("two blocks claim one predecessor");
+      next.set(p, id);
+    }
+    const target: string[] = [];
+    for (let c: string | null = null; next.has(c); ) {
+      const id: string = next.get(c)!;
+      target.push(id);
+      c = id;
+      if (target.length > pred.size) throw new Error("cycle in placements");
+    }
+    if (target.length !== pred.size) throw new Error("placements do not form one chain");
+    // Move the fewest blocks: the longest increasing subsequence of the surviving blocks (by target position)
+    // stays where it is; every other surviving block is lifted out and re-inserted, new blocks are inserted.
+    const targetIdx = new Map<string, number>();
+    target.forEach((id, i) => targetIdx.set(id, i));
+    const seqIdx = cur.map((e) => targetIdx.get(e.id));
+    if (seqIdx.some((x) => x === undefined)) throw new Error("block missing from target order");
+    const keep = new Set<number>(lis(seqIdx as number[]));
+    const lifted = new Map<string, any>();
+    starts = startsOf();
+    for (let i = cur.length - 1; i >= 0; i--) {
+      if (keep.has(i)) continue;
+      tr.delete(starts[i], starts[i] + cur[i].node.nodeSize);
+      lifted.set(cur[i].id, cur[i].node);
+      cur.splice(i, 1);
+    }
+    // Walk the target order left to right; everything before `pos` is already final, so no rescanning.
+    let pos = 0;
+    let k = 0; // index into the kept blocks
+    for (const id of target) {
+      if (k < cur.length && cur[k].id === id) { pos += cur[k].node.nodeSize; k++; continue; }
+      const node = lifted.get(id) ?? changed.get(id);
+      if (!node) throw new Error("unknown block " + id);
+      tr.insert(pos, node);
+      pos += node.nodeSize;
+    }
+    hooks.loading = true;
+    try { view.dispatch(tr.setMeta("addToHistory", false)); } finally { hooks.loading = false; }
+    baseline = blocksNow();
+    lastApplyMs = performance.now() - t0;
+  }
+  // Apply a downstream delta or ask Rust for the whole document. Returns true if applied.
+  function applyOrResync(d: any): boolean {
+    try { applyDelta(d); return true; } catch (e) {
+      send("resync", { haveRev: rev, reason: String(e) });
+      return false;
+    }
+  }
+  let marked: Map<string, any> | undefined; // self-test: node identity probe
 
   const banner = document.getElementById("conflict")!;
   const hideConflict = () => { banner.style.display = "none"; };
@@ -273,14 +379,17 @@ export function startHost(view: any, adapter: string) {
           acked();
           break;
         case "official_advanced":
-          // Never replace a document that has unsent edits: the pending edit goes stale and Rust merges it.
-          if (p.rev > rev && isClean()) { applyDoc(p.doc); baseRev = p.stateRef; rev = p.rev; }
+          // Never touch a document that has unsent edits: the pending edit goes stale and Rust merges it.
+          if (p.rev <= rev || !isClean()) break;
+          if (p.fromRev !== rev) { send("resync", { haveRev: rev, reason: "fromRev mismatch" }); break; }
+          if (applyOrResync(p.delta)) { baseRev = p.stateRef; rev = p.rev; }
           break;
         case "rebase":
           inflight = false;
           if (editTimer === undefined && !dirty) {
-            applyDoc(p.doc); baseRev = p.stateRef; rev = p.rev; hideConflict();
-          } else if (dirty) sendEdit();
+            if (p.ackSeq !== lastSentSeq) { send("resync", { haveRev: rev, reason: "ackSeq mismatch" }); break; }
+            if (applyOrResync(p.delta)) { baseRev = p.stateRef; rev = p.rev; hideConflict(); }
+          } else if (dirty) sendEdit(); // typed after the answered edit: let Rust merge it against the original base
           break;
         case "conflict":
           inflight = false;
@@ -304,9 +413,13 @@ export function startHost(view: any, adapter: string) {
         }
         case "st_type": view.dispatch(view.state.tr.insertText(p.text, blockEnd(p.block))); break;
         case "st_flush": flushEdit(); break;
+        case "st_mark": marked = new Map(blocksNow().nodes); break;
         case "st_click": (document.getElementById("conflict-" + p.which) as HTMLElement).click(); break;
         case "st_report":
-          send("selftest_report", { doc: getJSON(), rev, baseRev, clean: isClean(), conflictVisible: banner.style.display !== "none" });
+          const cur = blocksNow().nodes;
+          const identity: Record<string, boolean> = {};
+          marked?.forEach((n, id) => { if (cur.has(id)) identity[id] = cur.get(id) === n; });
+          send("selftest_report", { doc: getJSON(), rev, baseRev, clean: isClean(), conflictVisible: banner.style.display !== "none", identity, lastApplyMs });
           break;
       }
     },

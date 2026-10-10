@@ -35,18 +35,16 @@ pub enum Invalid {
     BadDelta(String),
 }
 
+pub fn block_to_pm(b: &Block) -> Value {
+    let text = if b.text.is_empty() { json!([]) } else { json!([{"type":"text","text":b.text}]) };
+    match b.kind {
+        Kind::Paragraph => json!({"type":"paragraph","attrs":{"blockId":b.id},"content":text}),
+        Kind::Heading(l) => json!({"type":"heading","attrs":{"blockId":b.id,"level":l},"content":text}),
+    }
+}
+
 pub fn to_pm(blocks: &[Block]) -> Value {
-    let content: Vec<Value> = blocks
-        .iter()
-        .map(|b| {
-            let text = if b.text.is_empty() { json!([]) } else { json!([{"type":"text","text":b.text}]) };
-            match b.kind {
-                Kind::Paragraph => json!({"type":"paragraph","attrs":{"blockId":b.id},"content":text}),
-                Kind::Heading(l) => json!({"type":"heading","attrs":{"blockId":b.id,"level":l},"content":text}),
-            }
-        })
-        .collect();
-    json!({"type":"doc","content":content})
+    json!({"type":"doc","content": blocks.iter().map(block_to_pm).collect::<Vec<_>>()})
 }
 
 fn collect_text(node: &Value, out: &mut String, warnings: &mut Vec<String>) {
@@ -136,6 +134,43 @@ pub fn parse_delta(p: &Value) -> Result<(Delta, Vec<String>), Invalid> {
     }
     warnings.dedup();
     Ok((Delta { changed, removed, placements }, warnings))
+}
+
+impl Delta {
+    /// 与宿主上行增量同形的 JSON(下行消息复用)。
+    pub fn to_json(&self) -> Value {
+        let mut v = json!({
+            "changed": self.changed.iter().map(block_to_pm).collect::<Vec<_>>(),
+            "removed": self.removed,
+        });
+        if !self.placements.is_empty() {
+            v["placements"] = self.placements.iter().map(|(id, after)| json!({"id": id, "after": after})).collect();
+        }
+        v
+    }
+}
+
+/// `apply_delta` 的逆:算出把 `old` 变成 `new` 的最小块级增量,O(n)。
+pub fn make_delta(old: &[Block], new: &[Block]) -> Delta {
+    let old_map: HashMap<&str, &Block> = old.iter().map(|b| (b.id.as_str(), b)).collect();
+    let new_ids: HashSet<&str> = new.iter().map(|b| b.id.as_str()).collect();
+    let changed = new.iter().filter(|b| old_map.get(b.id.as_str()).is_none_or(|o| *o != *b)).cloned().collect();
+    let removed = old.iter().filter(|b| !new_ids.contains(b.id.as_str())).map(|b| b.id.clone()).collect();
+    let mut kept_pred: HashMap<&str, Option<&str>> = HashMap::new();
+    let mut prev: Option<&str> = None;
+    for b in old.iter().filter(|b| new_ids.contains(b.id.as_str())) {
+        kept_pred.insert(b.id.as_str(), prev);
+        prev = Some(b.id.as_str());
+    }
+    let mut placements = Vec::new();
+    prev = None;
+    for b in new {
+        if kept_pred.get(b.id.as_str()) != Some(&prev) {
+            placements.push((b.id.clone(), prev.map(str::to_string)));
+        }
+        prev = Some(b.id.as_str());
+    }
+    Delta { changed, removed, placements }
 }
 
 /// 把增量应用到基线上得到完整候选文档,O(n)。任何不自洽(重复、未知 id、新块无锚点、环、
@@ -391,5 +426,71 @@ mod tests {
         assert_eq!(ops.len(), 1);
         // 平方实现在 20000 块上要数秒;线性实现远低于此(调试构建也如此)。
         assert!(t.elapsed().as_millis() < 500, "diff took {:?}", t.elapsed());
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    #[test]
+    fn make_delta_is_the_inverse_of_apply_delta() {
+        let mut rng = Rng(0x9E3779B97F4A7C15);
+        let mut next_id = 0;
+        for trial in 0..500 {
+            let old = blocks(rng.below(16));
+            let mut new = old.clone();
+            for _ in 0..rng.below(6) {
+                match rng.below(4) {
+                    0 if !new.is_empty() => {
+                        let i = rng.below(new.len());
+                        new.remove(i);
+                    }
+                    1 if !new.is_empty() => {
+                        let i = rng.below(new.len());
+                        new[i].text.push('x');
+                    }
+                    2 => {
+                        next_id += 1;
+                        let at = rng.below(new.len() + 1);
+                        new.insert(at, p(&format!("new{next_id}"), "n"));
+                    }
+                    _ if new.len() > 1 => {
+                        let from = rng.below(new.len());
+                        let b = new.remove(from);
+                        let to = rng.below(new.len() + 1);
+                        new.insert(to, b);
+                    }
+                    _ => {}
+                }
+            }
+            let delta = make_delta(&old, &new);
+            let got = apply_delta(&old, &delta).unwrap_or_else(|e| panic!("trial {trial}: {e:?}"));
+            assert_eq!(got, new, "trial {trial}");
+            // JSON 往返(下行消息的真实路径)
+            let (back, _) = parse_delta(&delta.to_json()).unwrap();
+            assert_eq!(apply_delta(&old, &back).unwrap(), new, "trial {trial} via json");
+        }
+    }
+
+    #[test]
+    fn make_delta_is_minimal_for_local_changes() {
+        let old = blocks(1000);
+        let mut new = old.clone();
+        new[500].text.push('!');
+        let d = make_delta(&old, &new);
+        assert_eq!((d.changed.len(), d.removed.len(), d.placements.len()), (1, 0, 0));
+        let mut new = old.clone();
+        new.insert(500, p("n", "x"));
+        let d = make_delta(&old, &new);
+        assert_eq!((d.changed.len(), d.removed.len(), d.placements.len()), (1, 0, 2));
     }
 }

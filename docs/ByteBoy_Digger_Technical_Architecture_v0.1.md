@@ -495,6 +495,17 @@ EditPayload
 
   In-place typing sends one block and no placements; an insert or move sends one or two placements. Rust reconstructs the candidate by applying the delta to `history[baseRev]` (not to the current Official version), rejecting any inconsistency (unknown or duplicate ids, a new block without a placement, a cycle, two blocks claiming one predecessor). The host advances its baseline only when Rust confirms (`committed`, `rebase`, `official_advanced`, `load`), so a rejected or merged edit leaves later deltas cumulative and correct. `edit` and `snapshot` frames have a tighter size limit (512 KB) than other frames.
 
+Downstream (Rust → host) uses the same delta shape. Only `load` carries a whole document:
+
+```text
+official_advanced   { fromRev, rev, stateRef, delta }   # delta against the host baseline history[fromRev]
+rebase              { ackSeq,  rev, stateRef, delta, reason }   # delta against the snapshot the host sent in edit #ackSeq
+load                { stateRef, rev, doc, editDebounceMs }      # full document: first load and resync
+```
+
+- The host applies a downstream delta **only when it is clean** (nothing unsent, nothing in flight) **and** the message matches its state (`fromRev` equals its baseline revision; `ackSeq` equals its last sent edit). A host with unsent edits ignores `official_advanced` and lets its pending edit go stale, which Rust merges; a mismatch makes the host send `resync`, and Rust answers with a full `load`. A delta is never applied to a state it was not computed against.
+- The host applies the delta in place and moves only the blocks that must move (longest increasing subsequence of the surviving blocks). Untouched blocks keep their ProseMirror node identity, so the caret, selection and IME composition outside the changed blocks are undisturbed. An inconsistent delta is detected before anything is dispatched and also leads to `resync`.
+
 ### 9.3 Events
 
 Commands return durable acceptance or outcomes. Progress and change notifications reach the UI as iced messages:

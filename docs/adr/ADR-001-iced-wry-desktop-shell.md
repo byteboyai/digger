@@ -217,6 +217,25 @@ Measured (release build, Tiptap host; Milkdown goes through the same code):
 - A structural edit sent as an id list first cost 234 KB at 6,000 blocks and was rejected by the tighter limit at 20,000. Anchor placements fixed that.
 - Unit tests cover insert at start/middle/end, delete, move, in-place edit, and every rejection (unknown/duplicate id, new block without placement, missing anchor, two blocks claiming one predecessor, cycle, placing a removed id). Linear-time tests exist for both `diff` and `apply_delta` at 20,000 blocks. Functional modes (basic, merge, input rule, crash recovery) all pass on both hosts with the new protocol; the journal also stores deltas now.
 
+## Block-scoped downstream (2026-10-10, `spike/editor-host`)
+
+Change: `official_advanced` and `rebase` now carry block deltas too (Technical Architecture §9.2). Only `load` (and the answer to `resync`) carries a whole document. Rust computes the delta with `make_delta` (the inverse of `apply_delta`); the host applies it in place.
+
+Safety rules, each covered by an automated check on both hosts:
+
+- A delta is applied only to the state it was computed against: `official_advanced.fromRev` must equal the host's baseline revision and `rebase.ackSeq` must equal the host's last sent edit. A deliberately wrong `fromRev` is **not** applied; the host sends `resync` and ends up equal to the official state after a full `load`.
+- A host with unsent edits ignores `official_advanced` and keeps its text (`rebase` for a stale edit is the merge path, relative to the snapshot the host sent).
+- Untouched blocks keep node identity across an applied delta (verified for both `official_advanced` and a merged `rebase`), so the caret and IME state outside the changed blocks are not disturbed. The previous whole-document `rebase` replaced every node.
+- Property tests: 500 random old/new pairs round-trip through `make_delta` → JSON → `parse_delta` → `apply_delta`. A fuzz mode drives the real hosts with random insert/delete/move/edit/type-change steps and compares the host document with the official one after every step: 7 seeds × 200 steps = 1,400 steps per host, all equal, no resync.
+
+Measured (release build): downstream message averages 566 B and peaks at about 1 KB regardless of chapter size (506 or 6,006 blocks). Host apply time at 6,006 blocks: **18 ms** (Tiptap) / 16 ms (Milkdown). A first version that reconciled order by walking the target left to right took **2.4 s** (Tiptap) / 0.9 s (Milkdown) at the same size because moving one block later made every block after it "move"; it is replaced by a longest-increasing-subsequence reconciliation that moves only the blocks that must move.
+
+Findings:
+
+1. **Tiptap's StarterKit `TrailingNode` adds an empty paragraph after a final heading.** The fuzz run found it as a host with one block more than the official state; in real use it would reach the AST as a phantom insert. It is disabled (`trailingNode: false`). The AST has no such rule. Any extension that edits the document on its own is a risk to the host/AST contract and must be reviewed when enabled (consistent with ADR-006's per-extension mapping rule).
+2. Whole-document frames remain only in test reports, which exceed the 2 MB frame limit at 20,000 blocks; that is a limit of the test harness, not of the protocol.
+3. The delta covers the spike's plain-text blocks. Marks and other attributes are not in the AST yet; when they are, `changed` blocks will carry them and comparison must be on the AST representation, not on ProseMirror JSON.
+
 ## Milkdown comparison (2026-10-10, same spike, `HOST=milkdown`)
 
 Both adapters run behind the same host core (bridge, debounce/in-flight protocol, rebase/conflict, scripted tests); each only builds a ProseMirror `EditorView` and installs two shared plugins (`blockId`, change notification). Versions: Tiptap 3.31.4, Milkdown kit 7.22.2 (commonmark preset + history only). Rust side is identical.
@@ -250,7 +269,6 @@ Manual check on Milkdown (2026-10-10, macOS, run by the project owner via `HOST=
 ## Open questions
 
 - Whether review/Diff views are pure iced or a preview host (leaning iced for semantic block diffs derived from the AST).
-- Block-scoped deltas travel host → Rust only. Rust → host messages (`load`, `rebase`, `official_advanced`) still carry whole documents, and `rebase` replaces the whole host document (cost grows with chapter size and can disturb the caret). A block-scoped downstream message is the next step.
 - Rust keeps a full copy of every Official version in `history` and rewrites the whole state on each commit (O(blocks × revisions)); a persistent or delta-based history is needed beyond the spike.
 - Initial size and latency budgets for the editor host.
 - Windows/Linux editor-host verification schedule and IME coverage.

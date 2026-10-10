@@ -10,6 +10,7 @@ cd .. && cargo test                           # 桥接校验 + AST 投影/diff �
 cargo run                                     # 手工:窗口左侧是 iced 面板,右侧是 Tiptap 宿主
 SELFTEST=basic cargo run                      # 自动:编辑往返、块 ID 稳定、视口随窗口缩放
 SELFTEST=merge cargo run                      # 自动:基线过期 → 自动合并 / 冲突 / 采用哪一方 / 干净宿主接收官方变更
+SELFTEST=fuzz cargo run                       # 自动:随机插入/删除/移动/改类型的下行增量,逐步比对宿主与正式版本(FUZZ_SEED、FUZZ_STEPS、BLOCKS 可调)
 SELFTEST=inputrule cargo run                  # 自动:Markdown 输入规则 "## " 后块 ID 是否保留
 BLOCKS=2000 SELFTEST=perf cargo run --release # 大章节:加载/按键事务/帧大小/Rust 解析与 diff
 HOST=milkdown cargo run                       # 以上任一命令加 HOST=milkdown 即换用 Milkdown 宿主

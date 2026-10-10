@@ -44,6 +44,7 @@ const EDITOR_INBOUND: &[&str] = &[
     "snapshot",
     "closing",
     "resolve",
+    "resync",
     "selftest_done",
     "selftest_report",
 ];

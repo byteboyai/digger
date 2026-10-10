@@ -15,7 +15,9 @@ const Digger = Extension.create({
 
 const editor = new Editor({
   element: document.getElementById("editor")!,
-  extensions: [StarterKit.configure({ heading: { levels: [1, 2] } }), Digger],
+  extensions: [// StarterKit's TrailingNode appends an empty paragraph after a final heading: a block Rust never created,
+  // which would reach the AST as a phantom insert. The AST has no such rule, so it is disabled.
+  StarterKit.configure({ heading: { levels: [1, 2] }, trailingNode: false }), Digger],
   content: "",
 });
 startHost(editor.view, "tiptap");
