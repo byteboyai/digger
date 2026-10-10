@@ -75,7 +75,7 @@ One editor host instance edits one document (`documentId`). It is created and de
 
 **Open.** Rust projects the Domain AST at a `StateRef` into ProseMirror JSON plus projection metadata (ADR-006) and pushes it with a `load` message. The metadata carries `StateRef`, `AggregateVersion`, AST and editor schema versions, block-ID mapping and enabled extensions.
 
-**Edit.** The host sends `edit` messages carrying the base `StateRef` and either semantic operations or a normalized document candidate. It does not write to anything. Rust validates against the supported-subset table in ADR-006 and turns accepted input into a Draft Change with a `BaseStateRef`. Only the Writing Domain applies a Change. Trusted, low-risk Human edits may auto-commit by policy, but still pass through Change → Commit.
+**Edit.** The host sends `edit` messages carrying the base `StateRef` and a **block-scoped delta** against its baseline (which equals Rust's version at that `StateRef`): the changed blocks, the removed ids, and anchor placements for blocks whose predecessor changed (Technical Architecture §9.2). It does not write to anything. Rust validates against the supported-subset table in ADR-006 and turns accepted input into a Draft Change with a `BaseStateRef`. Only the Writing Domain applies a Change. Trusted, low-risk Human edits may auto-commit by policy, but still pass through Change → Commit.
 
 **Stale base.** If the Official `StateRef` advances while the host has uncommitted edits (Agent apply, other Change), Rust sends `rebase` or `conflict` and the host shows the choice. The host never silently reloads over unsent edits, and Rust never overwrites a dirty session.
 
@@ -116,7 +116,7 @@ HostEnvelope { hostKind, binding{projectId,panelId,documentId}, seq, type, paylo
 
 - Rust creates the binding with the host and validates it on every inbound message. Stale or foreign bindings are dropped and logged.
 - The inbound `type` set is a closed, versioned allow-list per host kind (editor: `ready`, `failed`, `edit`, `selection`, `title`, `snapshot`, `closing`, `search_state`; preview: `ready`, `failed`, `title`, `link_request`). Unknown types are rejected.
-- Messages are size-bounded and rate-limited. Oversized or malformed frames fail the host, not the process.
+- Messages are size-bounded (`edit`/`snapshot` tighter than other frames, 512 KB in the spike) and rate-limited. Oversized or malformed frames fail the host, not the process.
 - IPC messages must originate from real user input where they represent user intent (focus, edit, mouseup, zoom). Pages cannot forge them.
 - Rust DTOs derive Serde and JSON Schema; CI generates TypeScript types into `hosts/editor-host/src/generated/` and fails on stale output. Both sides validate at runtime.
 - A host failure (`failed`, crash, bridge timeout) renders a Rust-provided fallback panel with retry and read-only text. It does not take down the app or lose the recovery journal.
@@ -190,7 +190,7 @@ Findings:
 3. Host JS errors must be forwarded as `failed`; without it a script error looked like a silent hang.
 4. Tiptap/ProseMirror copies node attributes on split, so unique `blockId` needs an `appendTransaction` guard. Rust must still validate uniqueness.
 5. Edits typed after an answered edit but before its `rebase` arrives cannot be replayed onto the merged document without step-level rebasing. The spike's rule: while the host has unsent edits it ignores `rebase`/`official_advanced` and lets its next edit go stale again, so Rust merges it against the original base. This kept the tested flows correct but means the host can see a merged document only when it is clean.
-6. `edit` currently carries the whole document JSON. That is fine for the spike but will not scale to large chapters; steps or block-scoped payloads should be evaluated.
+6. ~~`edit` carries the whole document JSON.~~ Resolved by the block-scoped delta below.
 7. The merge does not merge block moves: order follows the official version, and local insertions land after their local predecessor. A real implementation must treat concurrent reordering explicitly.
 8. The conflict choice lives in the host DOM and the self-test triggers it with a synthetic click. A production host must only send `resolve` for real user input, and Rust should not rely on the host to enforce that alone. Placing the conflict bar in iced (like the recovery bar) would avoid the problem and is worth deciding in the next spike.
 9. Persistence in the spike is JSON files (atomic rename + fsync), not SQLite; crash testing used SIGABRT, not power loss. Data loss window on a crash is bounded by the snapshot interval (300 ms in the spike), which was not measured under load.
@@ -199,6 +199,23 @@ Findings:
 Manual check (2026-10-10, macOS, run by the project owner): Chinese and Japanese IME composition in the Tiptap editor host works with no problems observed. Details such as candidate-window position were not separately recorded. Windows/Linux IME remains unverified.
 
 Not done (still required before Accepted): CodeMirror source-mode round trip; layering with a native overlay window (the in-window push-down rule is verified for two iced bars, the native-window route is not); pinned-settings tests for the builder (the spike only sets `devtools=false`); large-chapter performance; screenshot-based visual verification (screen capture was not permitted in this environment).
+
+## Block-scoped edits and linear diff (2026-10-10, `spike/editor-host`)
+
+Change: `edit` and `snapshot` now carry a delta against the host's baseline instead of the whole document, and `doc::diff` was rewritten from O(n²) to O(n). The host compares ProseMirror nodes by reference (they are immutable and structurally shared), so finding changed blocks is a pointer comparison. Order is sent as anchors, not as an id list. The baseline advances only on Rust confirmation, so rejected, merged and conflicting edits stay correct because later deltas are cumulative against an unchanged baseline.
+
+Measured (release build, Tiptap host; Milkdown goes through the same code):
+
+| Blocks | Whole doc | Edit frame before | Edit frame now: type in a block | Edit frame now: split a block |
+|---|---|---|---|---|
+| 2,000 | 325 KB | 493 KB | 233 B | 386 B |
+| 6,000 | 977 KB | 1,482 KB | 234 B | 386 B |
+| 20,000 | 3,270 KB | over the 2 MB limit | 234 B | 386 B |
+
+- Rust accept + parse + apply + diff for one edit: 0.7 ms (2,000 blocks), 2.1 ms (6,000), 7.2 ms (20,000). Still linear because the candidate is rebuilt in full; this is fine for the bridge but not free. The old quadratic diff took 26.7 ms at 6,000 blocks.
+- Host cost to build the delta: ≤ 1 ms at 6,000 blocks, 4 ms at 20,000.
+- A structural edit sent as an id list first cost 234 KB at 6,000 blocks and was rejected by the tighter limit at 20,000. Anchor placements fixed that.
+- Unit tests cover insert at start/middle/end, delete, move, in-place edit, and every rejection (unknown/duplicate id, new block without placement, missing anchor, two blocks claiming one predecessor, cycle, placing a removed id). Linear-time tests exist for both `diff` and `apply_delta` at 20,000 blocks. Functional modes (basic, merge, input rule, crash recovery) all pass on both hosts with the new protocol; the journal also stores deltas now.
 
 ## Milkdown comparison (2026-10-10, same spike, `HOST=milkdown`)
 
@@ -224,7 +241,7 @@ Library-independent findings from the comparison:
 1. **An in-place type change loses the block id in both libraries.** Typing `## ` at the start of a paragraph re-creates the node with default attributes, so the Markdown input rule silently changed the block's identity. The shared `blockId` plugin now maps a block without an id back through the transaction and inherits the old id; both adapters pass `SELFTEST=inputrule` with it. Without this, every "turn paragraph into heading" would look like delete + insert to Rust and break provenance, comments and Agent references.
 2. Any host-side rule that reads the editor selection (Milkdown's heading rule) must be tested with the caret in place; a synthetic call with the wrong selection produced level 3 instead of 2.
 3. **Rust's `doc::diff` is quadratic** (26.7 ms for 6000 blocks, one changed). Fix before large chapters; it does not depend on the editor.
-4. A 6000-paragraph chapter (~450k Chinese characters) sends a 1.48 MB `edit` frame against the 2 MB bridge limit, and `getJSON` stays under 1 ms but the frame parse/diff cost grows linearly. Confirms that whole-document `edit` payloads must become block-scoped before chapters of that size.
+4. A 6000-paragraph chapter (~450k Chinese characters) sent a 1.48 MB whole-document `edit` frame against the 2 MB bridge limit. This led to the block-scoped delta below.
 
 Manual check on Milkdown (2026-10-10, macOS, run by the project owner via `HOST=milkdown cargo run`): no problems reported with IME input or Markdown typing. Specific observations were not recorded.
 
@@ -233,7 +250,8 @@ Manual check on Milkdown (2026-10-10, macOS, run by the project owner via `HOST=
 ## Open questions
 
 - Whether review/Diff views are pure iced or a preview host (leaning iced for semantic block diffs derived from the AST).
-- Whether the editor host operates on ProseMirror steps, a normalized document candidate, or both as the `edit` payload.
+- Block-scoped deltas travel host → Rust only. Rust → host messages (`load`, `rebase`, `official_advanced`) still carry whole documents, and `rebase` replaces the whole host document (cost grows with chapter size and can disturb the caret). A block-scoped downstream message is the next step.
+- Rust keeps a full copy of every Official version in `history` and rewrites the whole state on each commit (O(blocks × revisions)); a persistent or delta-based history is needed beyond the spike.
 - Initial size and latency budgets for the editor host.
 - Windows/Linux editor-host verification schedule and IME coverage.
 - Which byteui components Digger reuses unchanged versus proposes upstream.

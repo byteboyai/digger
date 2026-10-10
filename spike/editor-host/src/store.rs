@@ -18,7 +18,8 @@ pub struct Persisted {
 pub struct Journal {
     pub document_id: String,
     pub base_rev: u64,
-    pub doc: serde_json::Value,
+    /// 块级增量(相对 `history[base_rev]`),与 edit/snapshot 载荷同形。
+    pub delta: serde_json::Value,
 }
 
 pub struct Store {

@@ -276,7 +276,7 @@ impl State {
         self.changes.push(format!("rev {} [{label}]: {summary}", self.rev));
         // 日志里的缓冲区若已等于正式状态,就不再需要。
         if let Some(j) = self.store.load_journal() {
-            if doc::parse_pm(&j.doc).is_ok_and(|(b, _)| b == self.blocks) {
+            if self.journal_blocks(&j).is_some_and(|b| b == self.blocks) {
                 self.store.clear_journal();
             }
         }
@@ -290,6 +290,13 @@ impl State {
         self.commit(b, "agent");
     }
 
+    /// 还原日志里的缓冲区:把增量应用到它所基于的历史版本上。
+    fn journal_blocks(&self, j: &Journal) -> Option<Vec<Block>> {
+        let base = self.history.get(&j.base_rev)?;
+        let (delta, _) = doc::parse_delta(&j.delta).ok()?;
+        doc::apply_delta(base, &delta).ok()
+    }
+
     fn doc_msg(&self) -> Value {
         json!({"stateRef": state_ref(&self.binding, self.rev), "rev": self.rev, "doc": doc::to_pm(&self.blocks)})
     }
@@ -299,7 +306,7 @@ impl State {
         if j.document_id != self.binding.document_id {
             return None;
         }
-        let (local, _) = doc::parse_pm(&j.doc).ok()?;
+        let local = self.journal_blocks(&j)?;
         let (candidate, conflicts) = if j.base_rev == self.rev {
             (local, vec![])
         } else {
@@ -484,13 +491,20 @@ fn on_envelope(s: &mut State, win: window::Id, env: bridge::Envelope) -> Task<Me
         "snapshot" => {
             s.snapshots += 1;
             let base_rev = parse_ref(p["baseRev"].as_str().unwrap_or("")).unwrap_or(0);
-            let equal = doc::parse_pm(&p["doc"]).is_ok_and(|(b, _)| b == s.blocks);
+            let delta_bytes = p.to_string().len();
+            let local = s
+                .history
+                .get(&base_rev)
+                .and_then(|base| doc::parse_delta(p).ok().and_then(|(d, _)| doc::apply_delta(base, &d).ok()));
+            let equal = local.as_ref().is_some_and(|b| *b == s.blocks);
             if equal {
                 s.store.clear_journal();
             } else {
-                s.store.save_journal(&Journal { document_id: s.binding.document_id.clone(), base_rev, doc: p["doc"].clone() });
+                // 无法还原(未知基线/非法增量)的缓冲区也照原样留存:日志是原始缓冲区,不是已校验的状态。
+                s.store.save_journal(&Journal { document_id: s.binding.document_id.clone(), base_rev, delta: json!({
+                    "changed": p["changed"], "removed": p["removed"], "order": p["order"] }) });
             }
-            s.note(format!("← snapshot #{} {}", s.snapshots, if equal { "(= official, journal cleared)" } else { "→ journal" }));
+            s.note(format!("← snapshot #{} ({delta_bytes} B) {}", s.snapshots, if equal { "(= official, journal cleared)" } else { "→ journal" }));
             if s.mode == Mode::CrashA && !equal {
                 let disk_ok = s.store.load().is_some_and(|d| d.rev == s.rev && d.blocks == s.blocks);
                 println!("CRASH-A: journal fsynced, official on disk unchanged = {disk_ok}; aborting now");
@@ -528,7 +542,13 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
         s.rejected.push("bad base".into());
         return send_host(win, "rejected", json!({"reason": "bad base"}));
     };
-    let (local, warnings) = match doc::parse_pm(&p["doc"]) {
+    // 宿主的基线 == history[baseRev]:增量只能应用在它之上,而不是当前正式版本之上。
+    let Some(base_blocks) = s.history.get(&base_rev).cloned() else {
+        s.rejected.push("unknown base".into());
+        return send_host(win, "rejected", json!({"reason": "unknown base"}));
+    };
+    let applied = doc::parse_delta(p).and_then(|(d, w)| doc::apply_delta(&base_blocks, &d).map(|b| (b, w, d.changed.len())));
+    let (local, warnings, n_changed) = match applied {
         Ok(v) => v,
         Err(e) => {
             s.note(format!("← edit REJECTED invalid {e:?}"));
@@ -539,7 +559,7 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
     if base_rev == s.rev {
         if local != s.blocks {
             let summary = s.commit(local, "human");
-            s.note(format!("← edit → Draft Change → Commit rev {} [{summary}] {warnings:?}", s.rev));
+            s.note(format!("← edit Δ{n_changed} block(s) → Commit rev {} [{summary}] {warnings:?}", s.rev));
         } else {
             s.note("← edit (no semantic change)");
         }
@@ -547,10 +567,6 @@ fn on_edit(s: &mut State, win: window::Id, p: &Value) -> Task<Message> {
         return send_host(win, "committed", m);
     }
     // 基线过期:正式状态在宿主有未发送编辑期间前进了 → 块级三方合并,绝不覆盖宿主的会话。
-    let Some(base_blocks) = s.history.get(&base_rev).cloned() else {
-        s.rejected.push("unknown base".into());
-        return send_host(win, "rejected", json!({"reason": "unknown base"}));
-    };
     let m = merge(&base_blocks, &local, &s.blocks, None);
     if m.conflicts.is_empty() {
         s.note(format!("← edit on stale base {base_rev} (official is {}): auto-merged", s.rev));
@@ -596,31 +612,44 @@ fn hook(s: &mut State, win: window::Id, event: &str) -> Task<Message> {
 
 fn on_perf(s: &mut State, r: &Value) -> Task<Message> {
     let p = &r["perf"];
-    // Rust 侧代价:把整篇候选作为一条 edit 帧收下并解析、diff(单块有改动)。
-    let mut local = s.blocks.clone();
-    let mid = local.len() / 2;
-    local[mid].text.push('字');
-    let frame = json!({"hostKind":"editor","binding":s.binding,"seq":1,"type":"edit",
-        "payload":{"baseRev": state_ref(&s.binding, s.rev), "doc": doc::to_pm(&local)}})
-    .to_string();
-    let mut v = Validator::new(s.binding.clone(), MAX_FRAME);
-    let t = std::time::Instant::now();
-    let env = v.accept(&frame);
-    let accept_ms = t.elapsed().as_secs_f64() * 1e3;
-    let t = std::time::Instant::now();
-    let parsed = env.as_ref().ok().and_then(|e| doc::parse_pm(&e.payload["doc"]).ok());
-    let parse_ms = t.elapsed().as_secs_f64() * 1e3;
-    let t = std::time::Instant::now();
-    let ops = parsed.as_ref().map(|(b, _)| doc::diff(&s.blocks, b).len()).unwrap_or(0);
-    let diff_ms = t.elapsed().as_secs_f64() * 1e3;
+    // Rust 侧代价:收下一条真实形状的块级 edit 帧 → 校验 → 解析增量 → 还原 → diff。
+    let mid = s.blocks.len() / 2;
+    let mut edited = s.blocks[mid].clone();
+    edited.text.push('字');
+    let one = doc::to_pm(std::slice::from_ref(&edited))["content"][0].clone();
+    let mut vis = s.blocks.clone();
+    vis.insert(mid, Block { id: "new-block".into(), kind: Kind::Paragraph, text: "新增".into() });
+    let (binding, rev, blocks) = (s.binding.clone(), s.rev, s.blocks.clone());
+    let run = |payload: Value| -> (usize, f64, usize, bool) {
+        let frame = json!({"hostKind":"editor","binding":binding,"seq":1,"type":"edit","payload":payload}).to_string();
+        let mut v = Validator::new(binding.clone(), MAX_FRAME);
+        let t = std::time::Instant::now();
+        let env = v.accept(&frame);
+        let ok = env.as_ref().ok().and_then(|e| doc::parse_delta(&e.payload).ok()).and_then(|(d, _)| doc::apply_delta(&blocks, &d).ok());
+        let ops = ok.as_ref().map(|b| doc::diff(&blocks, b).len()).unwrap_or(0);
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        (frame.len(), ms, ops, env.is_ok())
+    };
+    let (f1, ms1, ops1, ok1) = run(json!({"baseRev": state_ref(&s.binding, rev), "changed": [one], "removed": []}));
+    let newn = doc::to_pm(std::slice::from_ref(&vis[mid]))["content"][0].clone();
+    let after = vis[mid - 1].id.clone();
+    let next = vis[mid + 1].id.clone();
+    let (f2, ms2, ops2, ok2) = run(json!({"baseRev": state_ref(&s.binding, rev), "changed": [newn], "removed": [],
+        "placements": [{"id": "new-block", "after": after}, {"id": next, "after": "new-block"}]}));
+    s.check("perf: single-block edit frame accepted by the bridge", ok1);
+    s.check("perf: insert-block edit frame accepted by the bridge", ok2);
     println!(
-        "PERF {} | blocks {} | load {:.1} ms | getJSON {:.1} ms ({} KB) | tx mean {:.2} ms p95 {:.2} ms | tx→paint {:.1} ms | Rust: frame {} KB accept {:.1} ms parse {:.1} ms diff {:.2} ms ({} op)",
+        "PERF {} | blocks {} | load {:.1} ms | getJSON {:.1} ms ({} KB whole doc) | tx mean {:.2} ms p95 {:.2} ms | tx→paint {:.1} ms | host delta build {:.2} ms",
         p["adapter"].as_str().unwrap_or("?"), p["blocks"], p["loadMs"].as_f64().unwrap_or(0.0), p["getJsonMs"].as_f64().unwrap_or(0.0),
         p["jsonBytes"].as_u64().unwrap_or(0) / 1024, p["txMeanMs"].as_f64().unwrap_or(0.0), p["txP95Ms"].as_f64().unwrap_or(0.0),
-        p["txToPaintMs"].as_f64().unwrap_or(0.0), frame.len() / 1024, accept_ms, parse_ms, diff_ms, ops
+        p["txToPaintMs"].as_f64().unwrap_or(0.0), p["deltaMs"].as_f64().unwrap_or(0.0),
     );
-    s.check("perf: edit frame fits the bridge size limit", env.is_ok());
-    s.check("perf: single-block change yields exactly one semantic op", ops == 1);
+    println!(
+        "PERF   edit frame: host single-block {} B, host split-block {} B | Rust frames: single {} B ({:.2} ms, {} op), insert {} B ({:.2} ms, {} ops)",
+        p["deltaBytes"], p["structuralBytes"], f1, ms1, ops1, f2, ms2, ops2
+    );
+    s.check("perf: single-block edit yields exactly one semantic op", ops1 == 1);
+    s.check("perf: insert yields InsertBlock + ReplaceBlockContent", ops2 == 2);
     finish(s)
 }
 

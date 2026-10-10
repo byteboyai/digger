@@ -482,7 +482,18 @@ Rules:
 - the message-type allow-list is closed and versioned;
 - Rust DTOs for the bridge derive Serde and JSON Schema. CI generates matching TypeScript types into `hosts/editor-host/src/generated/` and fails if committed generated files are stale;
 - runtime validation remains on both sides even when types compile;
-- the editor host sends semantic edits and selections, never SQL-shaped or path-shaped requests.
+- the editor host sends semantic edits and selections, never SQL-shaped or path-shaped requests;
+- `edit` and `snapshot` payloads are **block-scoped deltas**, never the whole document (ADR-001):
+
+```text
+EditPayload
+├── baseRev: StateRef            # the version the host's baseline equals; Rust holds it in history
+├── changed: Block[]             # blocks that differ from the baseline (new or edited), full node JSON
+├── removed: BlockId[]           # baseline blocks that no longer exist
+└── placements?: { id, after: BlockId | null }[]   # only blocks whose predecessor changed
+```
+
+  In-place typing sends one block and no placements; an insert or move sends one or two placements. Rust reconstructs the candidate by applying the delta to `history[baseRev]` (not to the current Official version), rejecting any inconsistency (unknown or duplicate ids, a new block without a placement, a cycle, two blocks claiming one predecessor). The host advances its baseline only when Rust confirms (`committed`, `rebase`, `official_advanced`, `load`), so a rejected or merged edit leaves later deltas cumulative and correct. `edit` and `snapshot` frames have a tighter size limit (512 KB) than other frames.
 
 ### 9.3 Events
 

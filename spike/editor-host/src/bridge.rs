@@ -32,6 +32,9 @@ pub enum Reject {
 }
 
 /// 编辑器宿主入站类型白名单(封闭、带版本)。`selftest_done` 仅 spike 使用。
+/// 块级增量之后,edit / snapshot 不再带整篇文档,可以收紧上限(整篇 `load` 是下行,不受此限)。
+const DELTA_MAX_BYTES: usize = 512 * 1024;
+
 const EDITOR_INBOUND: &[&str] = &[
     "ready",
     "failed",
@@ -69,6 +72,9 @@ impl Validator {
         }
         if !EDITOR_INBOUND.contains(&env.ty.as_str()) {
             return Err(Reject::UnknownType);
+        }
+        if matches!(env.ty.as_str(), "edit" | "snapshot") && raw.len() > DELTA_MAX_BYTES {
+            return Err(Reject::TooLarge);
         }
         if env.seq <= self.last_seq {
             return Err(Reject::ReplayedSeq);
@@ -114,5 +120,16 @@ mod tests {
         assert_eq!(v.accept("not json").unwrap_err(), Reject::Malformed);
         assert_eq!(v.accept(&"x".repeat(257)).unwrap_err(), Reject::TooLarge);
         assert_eq!(v.accept(r#"{"hostKind":"editor"}"#).unwrap_err(), Reject::Malformed);
+    }
+
+    #[test]
+    fn edit_and_snapshot_have_a_tighter_limit_than_other_frames() {
+        let mut v = Validator::new(b("d1"), 2 * 1024 * 1024);
+        let big = |ty: &str, seq: u64| {
+            serde_json::json!({"hostKind":"editor","binding":b("d1"),"seq":seq,"type":ty,"payload":{"pad":"x".repeat(600 * 1024)}}).to_string()
+        };
+        assert_eq!(v.accept(&big("edit", 1)).unwrap_err(), Reject::TooLarge);
+        assert_eq!(v.accept(&big("snapshot", 1)).unwrap_err(), Reject::TooLarge);
+        assert!(v.accept(&big("selftest_report", 1)).is_ok(), "non-delta frames keep the general limit");
     }
 }

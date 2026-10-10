@@ -84,6 +84,45 @@ export function startHost(view: any, adapter: string) {
   let snapTimer: number | undefined;
   let lastLoadMs = 0;
 
+  // ---- block-scoped edits -------------------------------------------------------------------------------
+  // `baseline` = the blocks Rust last confirmed (== Rust's history[baseRev]). An edit/snapshot carries only the
+  // blocks that differ from it (ProseMirror nodes are immutable and structurally shared, so "unchanged" is a
+  // pointer comparison), the ids that disappeared, and the full id order only when the block set/order changed.
+  type Blocks = { ids: string[]; nodes: Map<string, any> };
+  const blocksNow = (): Blocks => {
+    const ids: string[] = [];
+    const nodes = new Map<string, any>();
+    view.state.doc.forEach((n: any) => { ids.push(n.attrs.blockId); nodes.set(n.attrs.blockId, n); });
+    return { ids, nodes };
+  };
+  let baseline: Blocks = { ids: [], nodes: new Map() };
+  function buildDelta(cur: Blocks, base: Blocks) {
+    const changed: unknown[] = [];
+    for (const id of cur.ids) {
+      const n = cur.nodes.get(id);
+      const o = base.nodes.get(id);
+      if (!o || (o !== n && !o.eq(n))) changed.push(n.toJSON());
+    }
+    const removed = base.ids.filter((id) => !cur.nodes.has(id));
+    // Order is expressed by anchors: only blocks whose predecessor differs from the baseline's
+    // (minus removed blocks) are listed. In-place edits send none; an insert/move sends one or two per site.
+    const keptPred = new Map<string, string | null>();
+    let prev: string | null = null;
+    for (const id of base.ids) {
+      if (!cur.nodes.has(id)) continue;
+      keptPred.set(id, prev);
+      prev = id;
+    }
+    const placements: { id: string; after: string | null }[] = [];
+    prev = null;
+    for (const id of cur.ids) {
+      if (!keptPred.has(id) || keptPred.get(id) !== prev) placements.push({ id, after: prev });
+      prev = id;
+    }
+    return { changed, removed, ...(placements.length ? { placements } : {}) };
+  }
+  let sent: Blocks | undefined;
+
   const send = (type: string, payload: unknown) =>
     window.ipc.postMessage(JSON.stringify({ hostKind: "editor", binding, seq: ++seq, type, payload }));
   const isClean = () => !inflight && !dirty && editTimer === undefined;
@@ -104,7 +143,8 @@ export function startHost(view: any, adapter: string) {
     if (inflight) { dirty = true; return; }
     inflight = true;
     dirty = false;
-    send("edit", { baseRev, doc: getJSON() });
+    sent = blocksNow();
+    send("edit", { baseRev, ...buildDelta(sent, baseline) });
   }
   function acked() {
     inflight = false;
@@ -112,7 +152,7 @@ export function startHost(view: any, adapter: string) {
   }
   function scheduleSnapshot() {
     clearTimeout(snapTimer);
-    snapTimer = window.setTimeout(() => send("snapshot", { baseRev, doc: getJSON() }), 300);
+    snapTimer = window.setTimeout(() => send("snapshot", { baseRev, ...buildDelta(blocksNow(), baseline) }), 300);
   }
   hooks.onChange = () => { scheduleSnapshot(); scheduleEdit(); };
 
@@ -132,6 +172,7 @@ export function startHost(view: any, adapter: string) {
       const sel = view.state.selection.constructor;
       view.dispatch(view.state.tr.setSelection((sel as any).between(view.state.doc.resolve(Math.min(from, max)), view.state.doc.resolve(Math.min(to, max)))));
     } catch { /* selection restore is best-effort */ }
+    baseline = blocksNow(); // the document now equals what Rust sent
     lastLoadMs = performance.now() - t0;
   }
 
@@ -196,11 +237,19 @@ export function startHost(view: any, adapter: string) {
     await raf();
     const paintMs = performance.now() - a;
     hooks.loading = false;
+    const dt = performance.now();
+    const delta = buildDelta(blocksNow(), baseline);
+    const deltaMs = performance.now() - dt;
+    const deltaBytes = JSON.stringify(delta).length;
+    // structural edit: split a block in the middle → needs the id order
+    view.dispatch(view.state.tr.split(pos));
+    const st = buildDelta(blocksNow(), baseline);
+    const structuralBytes = JSON.stringify(st).length;
     txMs.sort((x, y) => x - y);
     send("selftest_report", {
       perf: {
         adapter, blocks: view.state.doc.childCount, loadMs: lastLoadMs, getJsonMs, jsonBytes,
-        txMeanMs: txMs.reduce((x, y) => x + y, 0) / N, txP95Ms: txMs[Math.floor(N * 0.95)], txToPaintMs: paintMs,
+        txMeanMs: txMs.reduce((x, y) => x + y, 0) / N, txP95Ms: txMs[Math.floor(N * 0.95)], txToPaintMs: paintMs, deltaMs, deltaBytes, structuralBytes,
       },
     });
   }
@@ -216,6 +265,8 @@ export function startHost(view: any, adapter: string) {
           break;
         case "committed":
           baseRev = p.stateRef; rev = Math.max(rev, p.rev);
+          if (sent) baseline = sent; // Rust now holds exactly what we sent
+          sent = undefined;
           acked();
           break;
         case "rejected":
