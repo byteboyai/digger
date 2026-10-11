@@ -143,9 +143,11 @@ fn update(s: &mut State, msg: Message) -> Task<Message> {
                         Some("append") => Some(sync::AgentOp::Append { text }),
                         _ => None,
                     };
-                    let reply = match op.map(|op| s.doc.agent(&op)) {
-                        Some(Ok(patch)) => s.doc.update_message(&patch, "agent"),
-                        Some(Err(e)) => json!({"t": "agent_error", "reason": e}),
+                    // optional precondition: hash of the block text the Agent read (see Doc::agent_step)
+                    let expect = v["expect"].as_str().map(String::from);
+                    let reply = match op.map(|op| s.doc.agent_plan(&[sync::Step { op, expect }])) {
+                        Some(Ok(mut patches)) => s.doc.update_message(&patches.remove(0), "agent"),
+                        Some(Err((_, e))) => json!({"t": "agent_error", "reason": e.to_string(), "stale": matches!(e, sync::AgentError::Stale { .. })}),
                         None => json!({"t": "agent_error", "reason": "unknown operation"}),
                     };
                     return s.win.map(|w| send_page(w, reply)).unwrap_or_else(Task::none);

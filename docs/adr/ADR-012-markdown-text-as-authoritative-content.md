@@ -332,6 +332,16 @@ Validation item 4, with SQLite (rusqlite) as the authority and the text-merge sp
 - **Randomised check:** 300 random interleavings (app edits, external edits, drains, imports, crashes with restart) of uniquely marked edits: no marker is lost silently (each is in the text, in a parked conflict, or still in the file), and with nothing parked the file equals the database. 182 of the runs ended with a parked item, which is expected because both sides often insert at the same place.
 - **Not covered:** the check-then-rename race (an editor saving between the guard and the rename; needs an OS file lock or a post-rename hash check, to be decided), a real file watcher (the spike calls `import` explicitly), several documents, renames and moves of chapter files, `book.yaml`, and Windows/Linux rename and fsync semantics.
 
+### Agent runtime: ids are resolved in Rust when the step runs (`spike/md-engine`, `sync.rs`)
+
+Follow-up to the finding that 7 to 19 of 58 randomized Agent operations were refused with "no block with id". The rules now implemented in `Doc::agent_plan` / `agent_step`:
+
+- **Resolution at execution time.** A step names the block id the Agent read; Rust resolves it against the current version when the step runs. When a rewrite gives the block a new id, a forwarding entry (old id to new id, tagged with the plan run) is recorded, so a later step of the same plan that still holds the old id reaches the rewritten block.
+- **Precondition for `replace_block`.** The step carries `expect`, the hash of the block text the Agent read. If the block now holds different text (the author changed it), the step is refused as `Stale` with the current text, and nothing is overwritten. The precondition is skipped only when the target is reached through forwarding made by the same run (the Agent's own rewrite); forwarding from an earlier run does not bypass it. `insert_after` and `append` depend only on position and have no precondition. A step without `expect` overwrites on purpose.
+- **Plans are all or nothing.** If any step is `NoBlock` or `Stale`, the document (text, version, forwarding) is restored exactly. Each step yields its own patch in the coordinates of the version before it, so the existing `update` message and the editor's transform are unchanged. `NoBlock` and `Stale` are reported to the Agent as ordinary outcomes.
+- **Results.** 1,500 randomized races (author edits, deletions and new paragraphs between the Agent's read and its plan; plans of 1 to 3 rewrites): 1,073 applied, 204 refused as stale, 223 refused because the block was gone; in every applied plan all author edits survive and every rewrite is present, and every refused plan left the document byte-identical. Removing the precondition, the same-run rule or the rollback each fails tests. The editor suite is unchanged (`ENGINE=cm MODE=test`: 23 passed).
+- **Not done:** what the Agent does after `Stale` (re-read and re-plan, or offer the author a choice) is runtime/product behaviour; forwarding survives only in memory, not across restarts, and is not yet recorded in `block_agent_history`; refusing versus keeping both when the author is typing in the same block (T21) remains a product decision.
+
 ## Consequences
 
 Positive:
