@@ -321,6 +321,17 @@ Validation item 3: a text-level, block-aware three-way merge. Tokens are UAX#29 
 - Mutation checks: removing the sliding, or the gate, is caught by tests.
 - Limits: ambiguity with repeated tokens falls back to conflict, never to a guess; prose diff display and a real-manuscript corpus are not covered; performance on book-length input is not measured here (merge runs per changed block).
 
+## Markdown mirror and external-edit import results (2026-10-10, `spike/md-mirror`)
+
+Validation item 4, with SQLite (rusqlite) as the authority and the text-merge spike as the merge.
+
+- **Write path:** the commit, its history row and an outbox row are one transaction. `drain` writes a temp file under `.digger/tmp/`, fsyncs, renames, fsyncs the directory, and only then records the mirror hash and drops the outbox row (only if no newer version was committed meanwhile). Crashes injected after the temp write and after the rename both converge after restart (`recover` deletes temp files, `import` recognises its own half-finished write because the file's hash equals the database's), with no loss.
+- **Import path:** the file's base is the history row whose hash equals the recorded mirror hash, then a three-way merge against the current text. Clean: new version with actor External, the outbox rewrites the file. Overlap: a `pending` conflict, database and file both untouched, repeated imports do not duplicate it, and the outbox refuses to overwrite the file while it is open. No recorded or findable base (e.g. restored from Git): a working state with the full file text, nothing applied. Resolution commits and moves the mirror hash.
+- **Guard:** the outbox never overwrites a file whose hash is neither the recorded mirror hash nor the database's (an unimported external edit); without it three tests fail, including the random campaign.
+- **Normalisation:** a BOM and CRLF alone are not an edit; invalid UTF-8 is reported and ignored; a deleted mirror file is rewritten, never treated as deleting the chapter. The author's imported file text is kept in history so it can be a base later.
+- **Randomised check:** 300 random interleavings (app edits, external edits, drains, imports, crashes with restart) of uniquely marked edits: no marker is lost silently (each is in the text, in a parked conflict, or still in the file), and with nothing parked the file equals the database. 182 of the runs ended with a parked item, which is expected because both sides often insert at the same place.
+- **Not covered:** the check-then-rename race (an editor saving between the guard and the rename; needs an OS file lock or a post-rename hash check, to be decided), a real file watcher (the spike calls `import` explicitly), several documents, renames and moves of chapter files, `book.yaml`, and Windows/Linux rename and fsync semantics.
+
 ## Consequences
 
 Positive:

@@ -1,0 +1,12 @@
+[package]
+name = "md-mirror-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# ADR-012 validation item 4: SQLite is authoritative, .md files are a mirror with a conflict-aware import path.
+[workspace]
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+text-merge-spike = { path = "../text-merge" }
