@@ -61,18 +61,38 @@ impl RequestKey {
 /// 一个活着且当前有效的请求:派发时登记,回信时核对。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Live {
+    key: RequestKey,
     scope: ScopeId,
     generation: u64,
-    sequence: u64,
     /// 该键是否仍存活(`invalidate_app` / `invalidate_panel` 会把它标死)。
     live: bool,
 }
 
 /// 在途请求台账。线程安全:执行器在后台任务里派发,窗口线程回信。
+///
+/// 内部用**单调递增的 sequence**(只在表内累加,永不因记录被消费而重置)作为每张
+/// ticket 的精确身份,并给每个在途请求各留一条记录。latest-only 的键
+/// ([`RequestKey::latest_only`]) 另有一张索引指向"该键当前有效的那一次";派发新的一次
+/// 只把旧记录标记为作废,**不删除**,所以旧 ticket 的 `sequence` 仍能在表中查到并被
+/// 正确拒绝——不会与之后某个恰好复用了旧序号的请求撞车。
+///
+/// 一次性写动作([`RequestKey::Action`])不进索引,每个动作独立留档:即便多个应用并发
+/// 停止/卸载共用同一个动作 key,各自的回包也能被各自接收。
 #[derive(Debug, Default)]
 pub struct RequestTable {
-    /// (panel, key) → 当前有效的那一次。
-    live: Mutex<HashMap<(PanelInstanceId, RequestKey), Live>>,
+    inner: Mutex<Inner>,
+}
+
+#[derive(Debug, Default)]
+struct Inner {
+    /// 下一个 identity;只增不减。
+    next_sequence: u64,
+    /// sequence → 该次派发。
+    live: HashMap<u64, Live>,
+    /// sequence → 归属面板(便于 `invalidate_panel` 只按面板整批作废)。
+    panels: HashMap<u64, PanelInstanceId>,
+    /// latest-only 键 → 该键当前有效的 sequence。
+    latest: HashMap<(PanelInstanceId, RequestKey), u64>,
 }
 
 impl RequestTable {
@@ -80,7 +100,7 @@ impl RequestTable {
         Self::default()
     }
 
-    /// 登记一次派发;返回该请求的精确身份。同 key 若已有在途,后者取代前者(latest-only)。
+    /// 登记一次派发;返回该请求的精确身份。latest-only 键若已有在途,后者取代前者。
     pub fn dispatch(
         &self,
         scope: ScopeId,
@@ -88,19 +108,26 @@ impl RequestTable {
         generation: u64,
         key: RequestKey,
     ) -> RequestTicket {
-        let mut live = self.live.lock().expect("request table poisoned");
-        let sequence = live
-            .get(&(panel, key))
-            .map_or(0, |previous| previous.sequence.wrapping_add(1));
-        live.insert(
-            (panel, key),
+        let mut inner = self.inner.lock().expect("request table poisoned");
+        let sequence = inner.next_sequence;
+        inner.next_sequence = inner.next_sequence.wrapping_add(1);
+        inner.live.insert(
+            sequence,
             Live {
+                key,
                 scope,
                 generation,
-                sequence,
                 live: true,
             },
         );
+        inner.panels.insert(sequence, panel);
+        if key.latest_only()
+            && let Some(old) = inner.latest.insert((panel, key), sequence)
+            && let Some(entry) = inner.live.get_mut(&old)
+        {
+            // 旧的那次标记作废但保留记录,旧 ticket 仍会被拒且不会误配之后的新序号。
+            entry.live = false;
+        }
         RequestTicket {
             scope,
             panel,
@@ -113,47 +140,92 @@ impl RequestTable {
     /// 回信时核对:实例存活、scope/generation/sequence 都匹配当前有效请求,才算数。
     /// 通过则消费掉这条在途记录(一次性)。
     pub fn accept(&self, ticket: RequestTicket) -> bool {
-        let mut live = self.live.lock().expect("request table poisoned");
-        let Some(current) = live.get(&(ticket.panel, ticket.key)) else {
+        let mut inner = self.inner.lock().expect("request table poisoned");
+        let Some(entry) = inner.live.get(&ticket.sequence) else {
             return false;
         };
-        let ok = current.live
-            && current.scope == ticket.scope
-            && current.generation == ticket.generation
-            && current.sequence == ticket.sequence;
+        // sequence 是精确身份,但还要防伪造 ticket:key/scope/generation 都必须一致。
+        let ok = entry.live
+            && entry.key == ticket.key
+            && entry.scope == ticket.scope
+            && entry.generation == ticket.generation;
         if ok {
-            live.remove(&(ticket.panel, ticket.key));
+            inner.live.remove(&ticket.sequence);
+            inner.panels.remove(&ticket.sequence);
+            if ticket.key.latest_only() {
+                inner.latest.remove(&(ticket.panel, ticket.key));
+            }
         }
         ok
     }
 
     /// 面板关闭:该实例的所有在途请求作废(迟到的结果一律丢弃)。
     pub fn invalidate_panel(&self, panel: PanelInstanceId) {
-        let mut live = self.live.lock().expect("request table poisoned");
-        live.retain(|(p, _), _| *p != panel);
+        let mut inner = self.inner.lock().expect("request table poisoned");
+        inner.invalidate_panel(panel);
     }
 
     /// 应用被卸载:涉及该应用的在途请求作废(不同 key 都覆盖)。
     pub fn invalidate_app(&self, app: AppKeyId) {
-        let mut live = self.live.lock().expect("request table poisoned");
-        live.retain(|(_, key), _| match key {
-            RequestKey::LaunchUrl(k) | RequestKey::Logs(k) => *k != app,
-            RequestKey::List | RequestKey::Action(_) => true,
-        });
+        let mut inner = self.inner.lock().expect("request table poisoned");
+        let doomed: Vec<u64> = inner
+            .live
+            .iter()
+            .filter(|(_, entry)| match entry.key {
+                RequestKey::LaunchUrl(k) | RequestKey::Logs(k) => k == app,
+                RequestKey::List | RequestKey::Action(_) => false,
+            })
+            .map(|(seq, _)| *seq)
+            .collect();
+        for seq in doomed {
+            if let Some(entry) = inner.live.remove(&seq) {
+                inner.panels.remove(&seq);
+                if entry.key.latest_only() {
+                    inner.latest.retain(|_, s| *s != seq);
+                }
+            }
+        }
     }
 
     /// Surface 重建 / 项目切换:旧 generation 的结果全部作废。
     pub fn bump_generation(&self, generation: u64) {
-        let mut live = self.live.lock().expect("request table poisoned");
-        live.retain(|_, entry| entry.generation == generation || !entry.live);
-        // 新 generation 下没有任何在途记录:旧的全丢。
-        live.retain(|_, entry| entry.generation == generation);
+        let mut inner = self.inner.lock().expect("request table poisoned");
+        inner.live.retain(|_, entry| entry.generation == generation);
+        let keep: std::collections::HashSet<u64> = inner.live.keys().copied().collect();
+        inner.panels.retain(|seq, _| keep.contains(seq));
+        inner.latest.retain(|_, seq| keep.contains(seq));
     }
 
     /// 当前在途条数(测试用)。
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.live.lock().expect("request table poisoned").len()
+        self.inner
+            .lock()
+            .expect("request table poisoned")
+            .live
+            .len()
+    }
+}
+
+impl Inner {
+    /// 面板关闭:删掉该面板相关的所有记录与索引。
+    fn invalidate_panel(&mut self, panel: PanelInstanceId) {
+        let doomed: Vec<u64> = self
+            .panels
+            .iter()
+            .filter(|(_, p)| **p == panel)
+            .map(|(seq, _)| *seq)
+            .collect();
+        for seq in doomed {
+            self.panels.remove(&seq);
+            if let Some(entry) = self.live.remove(&seq)
+                && entry.key.latest_only()
+            {
+                self.latest.retain(|_, s| *s != seq);
+            }
+        }
+        // 兜底:latest 索引里若有指向已删 sequence 的项,一并清掉。
+        self.latest.retain(|_, seq| self.live.contains_key(seq));
     }
 }
 
@@ -264,6 +336,34 @@ mod tests {
         let b = t.dispatch(ScopeId(1), PanelInstanceId(1), 0, RequestKey::Action(2));
         assert!(t.accept(a), "不同动作 key 互不覆盖");
         assert!(t.accept(b));
+        assert_eq!(t.len(), 0);
+    }
+
+    /// 发现 1(回归):stale 的旧请求不得在"序号被消费后重用"时冒充新请求。
+    ///
+    /// A(seq0) → B(seq1) → 接收 B → C(seq2)。此时迟到的 A 必须被拒,且不得消费 C 的登记。
+    #[test]
+    fn a_stale_reply_cannot_impersonate_a_newer_request_after_reuse() {
+        let t = RequestTable::new();
+        let a = t.dispatch(ScopeId(1), PanelInstanceId(1), 0, RequestKey::List);
+        let b = t.dispatch(ScopeId(1), PanelInstanceId(1), 0, RequestKey::List);
+        assert!(!t.accept(a), "A 已被 B 取代");
+        assert!(t.accept(b), "B 是最新,接收并消费");
+        let c = t.dispatch(ScopeId(1), PanelInstanceId(1), 0, RequestKey::List);
+        assert_ne!(a.sequence, c.sequence, "序号不得因记录被消费而重置");
+        assert!(!t.accept(a), "迟到的 A 仍被拒");
+        assert!(t.accept(c), "C 的登记未被 A 消费,仍可接收");
+    }
+
+    /// 发现 2(回归):多个写动作即便共用同一个动作 key(不同应用),回包也必须各自接收。
+    #[test]
+    fn concurrent_actions_sharing_one_key_each_receive_their_reply() {
+        let t = RequestTable::new();
+        let stop_a = t.dispatch(ScopeId(1), PanelInstanceId(1), 0, RequestKey::Action(7));
+        let stop_b = t.dispatch(ScopeId(1), PanelInstanceId(1), 0, RequestKey::Action(7));
+        assert_ne!(stop_a.sequence, stop_b.sequence);
+        assert!(t.accept(stop_a), "先发的写动作回包不得被后发的覆盖丢弃");
+        assert!(t.accept(stop_b), "后发的写动作回包也接收");
         assert_eq!(t.len(), 0);
     }
 }

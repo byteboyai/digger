@@ -18,7 +18,7 @@ fn boot() -> (ProductShell, Task<Msg>) {
 
 fn update(shell: &mut ProductShell, msg: Msg) -> Task<Msg> {
     // 窗口消息经宿主泛型包装交给产品;产品不直接处理宿主 enum。
-    bytehost_desktop::Product::update(shell, HostMessage::Product(msg))
+    product::update_host(shell, HostMessage::Product(msg))
 }
 
 fn view(shell: &ProductShell) -> Element<'_, Msg> {

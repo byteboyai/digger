@@ -12,8 +12,11 @@ use std::path::PathBuf;
 
 use bytehost_core::registry::PanelCatalog;
 use bytehost_core::{Layout, PanelId, PanelMeta, Rail};
-use bytehost_desktop::layout::{LegacyPanelAdapter, atomic_save_layout, migrate_legacy_file};
-use bytehost_desktop::{HostMessage, Product, SurfaceEvent, route_lifecycle};
+use bytehost_desktop::layout::{
+    LegacyPanelAdapter, MigrateError, atomic_save_layout, migrate_legacy_file,
+    reconcile_with_catalog,
+};
+use bytehost_desktop::{HostMessage, Product, route_lifecycle};
 use byteui::theme::{color, font};
 
 use iced::{Element, Size, Subscription, Task, window};
@@ -55,13 +58,18 @@ pub struct ProductShell {
     window: Option<window::Id>,
     size: Size,
     catalog: PanelCatalog,
-    layout: Option<Layout>,
+    layout: Layout,
+    /// 非 `None` 表示磁盘上是**不支持的高版本**布局:内存默认布局仅用于显示,**禁止回写**该文件。
+    layout_save_blocked: Option<String>,
     layout_path: PathBuf,
     active: ActivePanel,
     /// 「应用」面板的组合根(状态机 + 执行器 + 内嵌应用服务)。
     apps: crate::apps::AppsState,
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
+    /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
+    #[cfg(test)]
+    surface_callbacks: Vec<bytehost_desktop::SurfaceSlot>,
 }
 
 impl ProductShell {
@@ -84,29 +92,35 @@ impl ProductShell {
             .expect("首次注册 digger.apps");
 
         let layout_path = paths::layout_path();
-        let layout = load_layout(&layout_path, &catalog);
+        let (layout, layout_save_blocked) = load_layout(&layout_path, &catalog).layout();
 
         Self {
             window: None,
             size: default_window_size(),
             catalog,
             layout,
+            layout_save_blocked,
             layout_path,
             active: ActivePanel::Info,
             apps: crate::apps::AppsState::new(),
             boot_note: "尚未打开 Project;业务服务未接通(应用服务在 Task 12/13 接入)。".into(),
+            #[cfg(test)]
+            surface_callbacks: Vec::new(),
         }
     }
 
-    /// 当前应显示的布局(缺省=None 时用内存默认;产品一期只保存不渲染分栏).
+    /// 当前应显示的布局(内存默认或磁盘)。
     fn current_layout(&self) -> &Layout {
-        self.layout
-            .as_ref()
-            .expect("构造时必已装入布局(默认或磁盘)")
+        &self.layout
     }
 
     /// 落盘当前布局(退出/布局变化时调用)。失败不 panic,记入 boot_note。
+    /// 磁盘上是**不支持的高版本**布局时**拒绝回写**(复盘发现 4:绝不覆盖原文件)。
     fn save_layout(&mut self) {
+        if let Some(note) = &self.layout_save_blocked {
+            self.boot_note = format!("布局未保存:{note}");
+            return;
+        }
         let layout = self.current_layout().clone();
         if let Err(e) = atomic_save_layout(&self.layout_path, &layout) {
             self.boot_note = format!("布局保存失败:{e}");
@@ -159,18 +173,81 @@ impl LegacyPanelAdapter for DiggerLayoutAdapter {
     }
 }
 
-/// 读布局:优先迁移磁盘文件;无可用历史 → 默认布局。
-fn load_layout(path: &std::path::Path, catalog: &PanelCatalog) -> Option<Layout> {
-    if let Ok(Some(outcome)) = migrate_legacy_file(path, &DiggerLayoutAdapter) {
-        return Some(outcome.layout);
+/// 布局加载结果。高版本文件必须**拒绝覆盖**(复盘发现 4):内存里用默认布局显示,但不允许回写原文件。
+enum LoadedLayout {
+    /// 可正常读写的布局(全新安装 / 稳定格式 / 历史格式迁移成功)。
+    Writable(Layout),
+    /// 磁盘文件 schema 版本高于宿主支持:内存用默认布局显示,**禁止保存**回该文件。
+    Unsupported { layout: Layout, note: String },
+}
+
+impl LoadedLayout {
+    fn layout(self) -> (Layout, Option<String>) {
+        match self {
+            Self::Writable(layout) => (layout, None),
+            Self::Unsupported { layout, note } => (layout, Some(note)),
+        }
     }
-    // 全新安装或以稳定 schema 直接 load。
-    if let Ok(text) = std::fs::read_to_string(path)
-        && let Ok(layout) = Layout::load(&text, catalog)
-    {
-        return Some(layout);
+}
+
+/// 读布局:
+/// 1. 稳定 schema 文件(带 `schema_version`)**直接**走 [`Layout::load`](盘点发现 5:不再送进历史迁移,
+///    以免宽度被重建为默认、`retained_unknown` 被清空);
+/// 2. 只有**真正历史格式**(无 `schema_version`)才走 `migrate_legacy_file`;
+/// 3. 迁移或稳定 load 撞到**更高 schema 版本** → [`LoadedLayout::Unsupported`](盘点发现 4:拒绝覆盖原文件);
+/// 4. 文件缺失/损坏 → 默认布局(可写)。
+fn load_layout(path: &std::path::Path, catalog: &PanelCatalog) -> LoadedLayout {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        // 文件不存在:全新安装,默认布局可写。
+        return LoadedLayout::Writable(default_layout_or_empty());
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        // 损坏文件:当作没有可用布局,给默认布局(可覆盖)。
+        return LoadedLayout::Writable(default_layout_or_empty());
+    };
+    if value.get("schema_version").is_some() {
+        // 稳定格式:直接 load(宽度钳制 + 未知摘取 + 版本闸门都在 `Layout::load` 里)。
+        return match Layout::load(&text, catalog) {
+            Ok(layout) => LoadedLayout::Writable(layout),
+            Err(bytehost_core::LayoutError::UnknownSchemaVersion { found, supported }) => {
+                LoadedLayout::Unsupported {
+                    layout: default_layout_or_empty(),
+                    note: format!(
+                        "布局 schema 版本 {found} 高于本宿主支持的 {supported},已用默认布局显示且**不覆盖原文件**"
+                    ),
+                }
+            }
+            Err(_) => LoadedLayout::Writable(default_layout_or_empty()),
+        };
     }
-    default_layout()
+    // 历史格式:经产品适配器迁移。
+    match migrate_legacy_file(path, &DiggerLayoutAdapter) {
+        Ok(Some(outcome)) => match reconcile_with_catalog(outcome.layout, catalog) {
+            Ok(layout) => LoadedLayout::Writable(layout),
+            Err(_) => LoadedLayout::Writable(default_layout_or_empty()),
+        },
+        Err(MigrateError::UnsupportedNewerVersion { found, supported }) => {
+            LoadedLayout::Unsupported {
+                layout: default_layout_or_empty(),
+                note: format!(
+                    "历史布局 schema 版本 {found} 高于本宿主支持的 {supported},已用默认布局显示且**不覆盖原文件**"
+                ),
+            }
+        }
+        // 无历史内容 / 非对象:默认布局(可写)。
+        Ok(None) | Err(MigrateError::NotAnObject) => {
+            LoadedLayout::Writable(default_layout_or_empty())
+        }
+    }
+}
+
+/// 默认布局;`Layout::from_default` 理论上不会失败,兜底给空布局。
+fn default_layout_or_empty() -> Layout {
+    default_layout().unwrap_or(Layout {
+        schema_version: bytehost_core::LAYOUT_SCHEMA_VERSION,
+        rails: Vec::new(),
+        retained_unknown: Vec::new(),
+    })
 }
 
 /// 默认布局:左栏放信息/应用两个面板,右栏空(空栏合法)。
@@ -195,11 +272,10 @@ pub fn default_window_size_for_boot() -> Size {
 
 impl Product<Msg> for ProductShell {
     fn update(&mut self, msg: HostMessage<Msg>) -> Task<Msg> {
-        if let HostMessage::Surface(event) = msg {
-            // 宿主事件交回默认处理(一期没有 Surface,仅保持接缝)。
-            return self.update_surface(event);
-        }
         let HostMessage::Product(m) = msg else {
+            // Surface 事件**不在这里**再分发给生命周期:那由外层入口 [`update_host`] 单次调用
+            // `route_lifecycle` 完成(复盘发现 6:在此调用会让 `route_lifecycle` → `update` 形成无限递归)。
+            // 这里只做本产品对宿主事件的处理(一期无 Surface,仅消费不重投)。
             return Task::none();
         };
         match m {
@@ -261,18 +337,32 @@ impl Product<Msg> for ProductShell {
             .into()
     }
 
-    fn on_activated(&mut self, _slot: bytehost_desktop::SurfaceSlot) {}
-    fn on_closed(&mut self, _slot: bytehost_desktop::SurfaceSlot) {}
+    fn on_activated(&mut self, slot: bytehost_desktop::SurfaceSlot) {
+        #[cfg(test)]
+        self.surface_callbacks.push(slot);
+        #[cfg(not(test))]
+        let _ = slot;
+    }
+
+    fn on_closed(&mut self, slot: bytehost_desktop::SurfaceSlot) {
+        #[cfg(test)]
+        self.surface_callbacks.push(slot);
+        #[cfg(not(test))]
+        let _ = slot;
+    }
+}
+
+/// 产品壳的**唯一**宿主入口:Surface 事件在这里**单次**经 `route_lifecycle` 分发到产品生命周期回调
+/// (复盘发现 6),产品消息则走 `Product::update`。`Product::update` 的 Surface 分支只消费、不再重投,
+/// 二者分工使路由不成环。
+pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg> {
+    match msg {
+        HostMessage::Surface(event) => route_lifecycle(shell, event),
+        HostMessage::Product(m) => Product::update(shell, HostMessage::Product(m)),
+    }
 }
 
 impl ProductShell {
-    fn update_surface(&mut self, event: SurfaceEvent) -> Task<Msg> {
-        // 应用子视图的宿主生命周期事件:交给产品生命周期回调;应用 Surface 的创建/销毁结果
-        // 已在 `apps` 组合根里处理(见 `apps::Message::SurfaceOpened`)。
-        let _ = route_lifecycle(self, event);
-        Task::none()
-    }
-
     fn info_view(&self) -> Element<'_, Msg> {
         use iced::Length;
         use iced::widget::{button, column, text};
@@ -338,6 +428,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytehost_desktop::SurfaceEvent;
 
     #[test]
     fn starts_without_project() {
@@ -376,5 +467,148 @@ mod tests {
         assert!(rails[1].is_empty());
         assert_eq!(adapter.map_token("digger.apps"), Some(apps_panel_id()));
         assert_eq!(adapter.map_token("not a valid id"), None);
+    }
+
+    fn test_catalog() -> PanelCatalog {
+        let mut catalog = PanelCatalog::new();
+        catalog
+            .register(PanelMeta {
+                id: info_panel_id(),
+                title: "Digger".into(),
+                surfaces: vec![],
+            })
+            .unwrap();
+        catalog
+            .register(PanelMeta {
+                id: apps_panel_id(),
+                title: "应用".into(),
+                surfaces: vec![],
+            })
+            .unwrap();
+        catalog
+    }
+
+    fn test_temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "digger-product-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 复盘发现 4:高版本布局加载失败后退出**不得覆盖**原文件。
+    #[test]
+    fn a_newer_schema_layout_is_never_overwritten() {
+        let dir = test_temp_dir("newer-schema");
+        let path = dir.join("layout.json");
+        let original = r#"{ "schema_version": 999, "rails": [] }"#;
+        std::fs::write(&path, original).unwrap();
+
+        let loaded = load_layout(&path, &test_catalog());
+        let (layout, blocked) = loaded.layout();
+        assert!(blocked.is_some(), "高版本应进入不可写状态:{blocked:?}");
+        // 内存显示默认布局(两个面板),但禁止保存。
+        assert_eq!(layout.visible_panel_count(), 2);
+        // 模拟退出:按 save_layout 的门禁,blocked 时不落盘。
+        if blocked.is_none() {
+            atomic_save_layout(&path, &layout).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "原高版本文件必须逐字节保持"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 复盘发现 5:稳定 schema 文件不走历史迁移,宽度与保留项原样往返。
+    #[test]
+    fn a_stable_layout_keeps_its_width_and_retained_items() {
+        let dir = test_temp_dir("stable-width");
+        let path = dir.join("layout.json");
+        let stable = serde_json::json!({
+            "schema_version": 1,
+            "rails": [
+                { "items": ["digger.info"], "width": 420.0 },
+                { "items": [], "width": 300.0 }
+            ],
+            "retained_unknown": ["digger.removed"]
+        });
+        std::fs::write(&path, stable.to_string()).unwrap();
+
+        let (layout, blocked) = load_layout(&path, &test_catalog()).layout();
+        assert!(blocked.is_none(), "稳定格式应可写:{blocked:?}");
+        assert_eq!(layout.rails[0].width, 420.0, "宽度不得被重建为默认");
+        assert_eq!(layout.rails[1].width, 300.0);
+        assert_eq!(
+            layout.retained_unknown,
+            vec![PanelId::new("digger.removed").unwrap()],
+            "保留项不得被清空"
+        );
+
+        // 直接走稳定 load 的往返:再存再读仍是 420 + 保留项。
+        atomic_save_layout(&path, &layout).unwrap();
+        let (again, blocked) = load_layout(&path, &test_catalog()).layout();
+        assert!(blocked.is_none());
+        assert_eq!(again.rails[0].width, 420.0);
+        assert_eq!(again.retained_unknown.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 复盘发现 6:真实 `ProductShell` 的 Surface 事件经 `update_host` 单次路由,不得无限递归。
+    /// `Created`/`Resumed` → 一次 `on_activated`;`Destroyed` → 一次 `on_closed`;`Hidden` → 无回调。
+    /// 修复前本用例会因 `route_lifecycle` → `update` → `route_lifecycle` 递归至栈溢出。
+    #[test]
+    fn surface_events_route_once_without_recursion() {
+        let slot = bytehost_desktop::SurfaceSlot(7);
+        let mut shell = ProductShell::new();
+
+        let _ = update_host(
+            &mut shell,
+            HostMessage::Surface(SurfaceEvent::Created { slot }),
+        );
+        assert_eq!(shell.surface_callbacks, vec![slot], "Created 触发一次激活");
+
+        shell.surface_callbacks.clear();
+        let _ = update_host(
+            &mut shell,
+            HostMessage::Surface(SurfaceEvent::Resumed { slot }),
+        );
+        assert_eq!(shell.surface_callbacks, vec![slot], "Resumed 触发一次激活");
+
+        shell.surface_callbacks.clear();
+        let _ = update_host(
+            &mut shell,
+            HostMessage::Surface(SurfaceEvent::Hidden { slot }),
+        );
+        assert!(
+            shell.surface_callbacks.is_empty(),
+            "Hidden 不触发生命周期回调"
+        );
+
+        shell.surface_callbacks.clear();
+        let _ = update_host(
+            &mut shell,
+            HostMessage::Surface(SurfaceEvent::Destroyed { slot }),
+        );
+        assert_eq!(
+            shell.surface_callbacks,
+            vec![slot],
+            "Destroyed 触发一次关闭"
+        );
+
+        // 直接投 Surface 给 `Product::update` 也不得递归(它只消费,不再重投)。
+        shell.surface_callbacks.clear();
+        let _ = Product::update(
+            &mut shell,
+            HostMessage::Surface(SurfaceEvent::Created { slot }),
+        );
+        assert!(
+            shell.surface_callbacks.is_empty(),
+            "Surface 只在 update_host 路由一次,Product::update 不再分发"
+        );
     }
 }
