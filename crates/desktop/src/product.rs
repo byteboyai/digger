@@ -267,7 +267,8 @@ impl Product<Msg> for ProductShell {
 
 impl ProductShell {
     fn update_surface(&mut self, event: SurfaceEvent) -> Task<Msg> {
-        // 一期没有 Surface 承载;保持接缝,避免死代码告警。
+        // 应用子视图的宿主生命周期事件:交给产品生命周期回调;应用 Surface 的创建/销毁结果
+        // 已在 `apps` 组合根里处理(见 `apps::Message::SurfaceOpened`)。
         let _ = route_lifecycle(self, event);
         Task::none()
     }

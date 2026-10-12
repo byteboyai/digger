@@ -20,6 +20,7 @@ mod approval;
 mod logs;
 mod management;
 mod runtime;
+mod surface;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,6 +29,7 @@ use std::sync::Mutex;
 use bytehost_apps::proto::{AppErrorKind, AppFailure};
 use bytehost_client::AppApiError;
 use bytehost_client::in_process::InProcess;
+use bytehost_core::LogicalRect;
 use bytehost_panel::install::{
     ActKind, Effect as InstallEffect, InstallFlowState, Message as InstallMessage,
 };
@@ -38,6 +40,7 @@ use digger_app_host::service::HostService;
 use digger_app_host::trust;
 
 use crate::paths;
+use surface::{AppSurfaces, SurfaceAction};
 
 /// 应用服务的启动状态:窗口先画出来,服务后台起。
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +64,8 @@ pub enum Message {
     Outcome(Arc<Outcome>),
     /// 原生"选目录/选压缩包"对话框返回;`None` = 用户取消。
     SourcePicked(Option<PathBuf>),
+    /// 应用 Surface 创建结果(`Ok` = 拿到原生句柄)。
+    SurfaceOpened(String, Result<(), String>),
 }
 
 /// 「应用」面板的组合根状态。
@@ -77,6 +82,8 @@ pub struct AppsState {
     generation: u64,
     /// `Opened` 是否已触发过(防止同帧多次触发)。
     opened: bool,
+    /// 每个应用的 launch URL → 内存 Surface 登记(Task 16);地址不落任何持久状态。
+    surfaces: AppSurfaces,
 }
 
 impl AppsState {
@@ -103,6 +110,7 @@ impl AppsState {
             panel: PanelInstanceId(1),
             generation: 0,
             opened: false,
+            surfaces: AppSurfaces::new(),
         }
     }
 
@@ -136,6 +144,12 @@ impl AppsState {
             Message::Install(m) => self.step(m),
             Message::Outcome(outcome) => self.deliver(outcome),
             Message::SourcePicked(path) => self.step(InstallMessage::SourcePicked(path)),
+            // 应用 Surface 的上行事件:创建结果/导航完成/IPC。三者都不改状态机。
+            // 创建失败记进控制器(持久状态,留给未来视口内联显示),不是一次性 Toast。
+            Message::SurfaceOpened(app, result) => {
+                self.surfaces.report_open_result(&app, result);
+                iced::Task::none()
+            }
         };
         // 日志查看器展开/收到新内容后:排一拍刷新,并把新内容钉到底(一次性,消费即复位)。
         iced::Task::batch([task, self.log_scroll_task(), self.log_tick_task()])
@@ -259,7 +273,27 @@ impl AppsState {
                     iced::Task::none()
                 }
             }
-            // 其余结果(取址/动作)由后续组接。
+            // launch URL 到手:地址是秘密,只进内存 Surface 登记,不落日志/状态。
+            // 尚无应用视口时先存为"待创建";有几何时由产品调 `open_pending` 创建(见 `surface` 模块)。
+            Outcome::LaunchUrl {
+                ticket,
+                app,
+                result,
+            } => {
+                if self.requests.accept(*ticket) {
+                    match result {
+                        // 地址到手只登记为"待创建":一期尚无应用视口几何,创建由产品在拿到视口时
+                        // 调 `surface_open_pending` 触发。地址不入日志、不入任何持久状态。
+                        Ok(url) => self.surfaces.set_pending_url(app.as_str(), url.clone()),
+                        // 取地址失败:不残留任何凭证。
+                        Err(_) => {
+                            let _ = self.surfaces.close(app.as_str());
+                        }
+                    }
+                }
+                iced::Task::none()
+            }
+            // 其余结果(动作)由后续组接。
             _ => iced::Task::none(),
         }
     }
@@ -385,6 +419,42 @@ impl AppsState {
         management::view(self)
     }
 
+    /// 应用 Surface 登记(只读):产品视口据此决定渲染哪些应用、显示哪些创建失败。
+    #[allow(dead_code)]
+    pub fn surfaces(&self) -> &AppSurfaces {
+        &self.surfaces
+    }
+
+    /// 应用停止/移除/切走:销毁其 Surface 并丢弃地址。返回产品要执行的窗口动作。
+    #[allow(dead_code)]
+    pub fn surface_close(&mut self, app: &str) -> Vec<SurfaceAction> {
+        self.surfaces.close(app)
+    }
+
+    /// 视口几何就绪/变化:把待创建地址转成真实创建动作(换地址会先销毁旧 Surface)。
+    #[allow(dead_code)]
+    pub fn surface_open_pending(&mut self, app: &str, rect: LogicalRect) -> Vec<SurfaceAction> {
+        self.surfaces.open_pending(app, rect)
+    }
+
+    /// 视口尺寸变化。
+    #[allow(dead_code)]
+    pub fn surface_resize(&mut self, app: &str, rect: LogicalRect) -> Vec<SurfaceAction> {
+        self.surfaces.resize(app, rect)
+    }
+
+    /// 退出/停服务/端口重置:撤掉**所有**应用 Surface,不保留任何地址。
+    #[allow(dead_code)]
+    pub fn surface_close_all(&mut self) -> Vec<SurfaceAction> {
+        self.surfaces.close_all()
+    }
+
+    /// 取走"地址到手、等待视口几何"的应用(产品在渲染视口时调用)。
+    #[allow(dead_code)]
+    pub fn take_pending_surfaces(&mut self) -> Vec<(String, String)> {
+        self.surfaces.take_pending()
+    }
+
     /// 面板查询接口(视图用)。
     pub(crate) fn flow(&self) -> &InstallFlowState {
         &self.flow
@@ -449,6 +519,52 @@ pub fn reply_stream(
 /// 日志滚动容器在 iced 里的稳定 id(每个应用的日志查看器一个)。
 pub(crate) fn log_scroll_id(app_id: &str) -> iced::widget::Id {
     iced::widget::Id::from(format!("digger.apps.logs.{app_id}"))
+}
+
+/// 把一个 [`SurfaceAction`] 翻成窗口线程的原生任务(经共享受限 builder)。
+///
+/// 这是 Digger 侧**唯一**碰 `bytehost_desktop::app_webview` 的地方:创建/销毁/改几何都在这里,
+/// 安全策略(下载/新窗口/devtools/nonce/origin)全在共享 builder 里,Digger 不复制。
+/// `Destroy`/`Resize` 在主线程同步执行;`Create` 走 `iced::window::run`。
+///
+/// 一期无应用视口(计划 Task 16 只做机制),`on_ipc`/`on_ready` 暂为 no-op;接入视口后改为经
+/// 一条 `UnboundedSender<Message>` 把上行事件投回窗口线程(与后台结果回流同型)。
+#[allow(dead_code)]
+pub fn surface_task(window: iced::window::Id, action: SurfaceAction) -> iced::Task<Message> {
+    match action {
+        SurfaceAction::Create {
+            app,
+            slot,
+            url,
+            rect,
+            ..
+        } => {
+            let spec = bytehost_desktop::AppSurfaceSpec {
+                slot,
+                url,
+                rect,
+                visible: true,
+            };
+            bytehost_desktop::build_app_child(
+                window,
+                spec,
+                |_slot, _ipc| {},
+                |_slot| {},
+                move |built| match built.result {
+                    Ok(()) => Message::SurfaceOpened(app.clone(), Ok(())),
+                    Err(e) => Message::SurfaceOpened(app.clone(), Err(e)),
+                },
+            )
+        }
+        SurfaceAction::Resize { slot, rect } => {
+            let _ = bytehost_desktop::set_app_bounds(slot, rect);
+            iced::Task::none()
+        }
+        SurfaceAction::Destroy { slot } => {
+            let _ = bytehost_desktop::destroy_app(slot);
+            iced::Task::none()
+        }
+    }
 }
 
 fn now_ms() -> u64 {

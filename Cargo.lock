@@ -377,6 +377,7 @@ name = "bytehost-desktop"
 version = "0.1.0"
 dependencies = [
  "bytehost-core",
+ "bytehost-webview",
  "iced",
  "serde_json",
  "tokio",
@@ -389,6 +390,15 @@ version = "0.1.0"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
+]
+
+[[package]]
+name = "bytehost-webview"
+version = "0.1.0"
+dependencies = [
+ "bytehost-apps",
+ "url",
+ "uuid",
 ]
 
 [[package]]

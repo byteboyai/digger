@@ -92,7 +92,8 @@ pub fn pinned(c: Class) -> Pinned {
         },
         Class::App => Pinned {
             devtools: false, // 无论 debug 还是 release(bytehost A4b1:wry 在 debug 构建默认开)
-            clipboard: true, // 由 manifest 授权决定;授权闸门未做,spike 先放行(见 ADR-011)
+            // 保守关闭:授权闸门未做,平台能力也未能可靠强制,不能默认放行(与共享 builder 对齐)。
+            clipboard: false,
             downloads_allowed: false,
             new_windows_allowed: false,
             custom_protocols: &[], // 应用 webview 不得拿到 Digger 的任何自定义协议
@@ -274,6 +275,7 @@ mod tests {
         let app = pinned(Class::App);
         assert!(!app.devtools, "devtools are never available to an app, in any build");
         assert!(!app.downloads_allowed && !app.new_windows_allowed && !app.autoplay);
+        assert!(!app.clipboard, "clipboard is conservatively off (no authorization gate, no strong enforcement)");
         assert!(app.custom_protocols.is_empty(), "an app webview never gets a Digger custom protocol");
         assert_eq!(app.navigation, Nav::OwnOriginOnly);
         assert_eq!(app.ipc, Ipc::NonceWhitelist);
@@ -327,5 +329,49 @@ mod tests {
             assert!(!nav_allowed(&p, Some(&o), url), "{url}");
         }
         assert!(!nav_allowed(&p, None, "http://notes.localhost:4321/"), "without an origin nothing is allowed");
+    }
+
+    /// Task 16 的硬要求:探针的结果必须与**真实** builder 同源,不能只测这里复制的一份配置。
+    /// 因此逐项比对 `Class::App` 的钉死决策与共享层 `bytehost_desktop::app_webview` 的实际写法。
+    ///
+    /// 这里直接读共享 builder 的源码文本(经路径依赖所在的仓库),断言它确实写下了 Spike 期望的每一项
+    /// 受限设置;任何一方漂移(改默认、换 API、漏一项)都会让本测试失败。
+    #[test]
+    fn spike_app_pins_match_the_shared_builder_verbatim() {
+        let shared = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../bytehost/crates/bytehost-desktop/src/app_webview.rs"
+        ));
+        // 只看生产代码,测试模块自身含这些字面量。
+        let prod = &shared[..shared.find("#[cfg(test)]").unwrap()];
+
+        let app = pinned(Class::App);
+        assert!(!app.devtools && !app.downloads_allowed && !app.new_windows_allowed);
+        assert!(!app.clipboard, "应用剪贴板:保守关闭,不虚报为已放行");
+        assert!(app.custom_protocols.is_empty());
+        assert_eq!(app.navigation, Nav::OwnOriginOnly);
+        assert_eq!(app.ipc, Ipc::NonceWhitelist);
+        assert!(app.per_app_data_store);
+
+        for required in [
+            ".with_download_started_handler(|_, _| false)", // 下载:显式拒绝(wry 默认放行)
+            ".with_devtools(false)",                        // 开发者工具:所有构建都关
+            ".with_clipboard(false)",                       // 剪贴板:保守关闭
+            ".with_new_window_req_handler(",                // window.open:拒绝
+            ".with_navigation_handler(",                    // 导航:仅本应用 origin
+            ".with_data_store_identifier(",                 // 每应用独立存储
+            ".with_initialization_script(app_init_script(", // nonce 注入
+            "AppIpc::parse(",                               // IPC 白名单 + nonce
+            "AppOrigin::from_url(",                         // fail-closed 的 origin 解析
+        ] {
+            assert!(
+                prod.contains(required),
+                "共享 builder 缺少 App 类别的受限设置:{required}"
+            );
+        }
+        assert!(
+            !prod.contains("with_custom_protocol"),
+            "应用 webview 不得注册任何自定义协议"
+        );
     }
 }
