@@ -803,6 +803,7 @@ dependencies = [
  "bytehost-apps",
  "bytehost-client",
  "bytehost-panel",
+ "libc",
  "serde",
  "serde_json",
  "tokio",

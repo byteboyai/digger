@@ -19,3 +19,5 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# tests/recovery.rs 造"进程组组长"的遗留进程(回收要求 getpgid(pid)==pid),用 setpgid。
+libc = "0.2"
