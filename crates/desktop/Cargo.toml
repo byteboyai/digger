@@ -1,0 +1,23 @@
+[package]
+name = "digger-desktop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Digger 桌面组合根:在共享 bytehost 宿主上启动 Digger 产品壳"
+publish = false
+
+[[bin]]
+name = "digger"
+path = "src/main.rs"
+
+[dependencies]
+bytehost-core.workspace = true
+bytehost-desktop.workspace = true
+byteui.workspace = true
+
+iced.workspace = true
+wry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+directories.workspace = true

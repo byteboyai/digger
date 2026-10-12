@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# spike/* 是一次性技术验证(ADR 验证项),各自带 [workspace]/[package] 且随时可删,
+# 不进正式 workspace 的锁文件。嵌套的 spike/parser-agreement/rust 同样排除。
+exclude = [
+    "spike/block-identity",
+    "spike/editor-host",
+    "spike/md-engine",
+    "spike/md-mirror",
+    "spike/parser-agreement",
+    "spike/text-merge",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+directories = "6"
+
+# 共享桌面宿主契约:窗口壳、面板、Surface、布局、焦点(bytehost-desktop)。
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+
+# 组件库(Dozer 与 Digger 共用);iced 版本必须与 byteui 一致,一起升。
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
+
+iced = { version = "0.14", default-features = false, features = ["tokio"] }
+wry = "0.55.1"

@@ -1,0 +1,12 @@
+# Rust
+/target
+**/*.rs.bk
+
+# 本地联调 patch(兄弟目录依赖,不提交)
+.cargo/config.toml
+
+# Digger 内部工作目录(.digger 是 authoritative state,默认忽略)
+.digger/
+
+# OS
+.DS_Store
