@@ -14,9 +14,10 @@ use bytehost_apps::plan::{Provenance, TrustLevel};
 use bytehost_apps::proto::{AppErrorKind, AppFailure};
 use bytehost_client::AppApiError;
 use bytehost_panel::install::{
-    Effect as InstallEffect, Flow, InstallFlowState, Message as InstallMessage, SourceChoice,
+    ActKind, Effect as InstallEffect, Flow, InstallFlowState, Message as InstallMessage,
+    SourceChoice,
 };
-use digger_app_host::effects::{Executor, Outcome, ReplySink};
+use digger_app_host::effects::{Executor, InstallDetail, Outcome, ReplySink};
 use digger_app_host::request::{PanelInstanceId, RequestTable, ScopeId};
 use digger_app_host::service::HostService;
 use digger_app_host::testing::{FakeHost, plan};
@@ -80,34 +81,32 @@ impl Rig {
                 let Outcome::Install {
                     ticket,
                     result,
-                    plan,
+                    detail,
                 } = outcome
                 else {
                     panic!("期望 Install,得到 {outcome:?}");
                 };
                 assert!(self.requests.accept(ticket), "计划结果带回信身份");
-                let msg = match (result, plan) {
-                    (Ok(()), Some(p)) => match trust::review(&p) {
+                let msg = match (result, detail) {
+                    (Ok(()), InstallDetail::Plan(p)) => match trust::review(&p) {
                         trust::Review::Allowed => InstallMessage::PlanLoaded(Ok(p)),
                         trust::Review::Rejected(reason) => {
                             InstallMessage::PlanLoaded(Err(rejected(reason)))
                         }
                     },
                     (Err(e), _) => InstallMessage::PlanLoaded(Err(e)),
-                    (Ok(()), None) => panic!("计划成功却没有计划正文"),
+                    (Ok(()), _) => panic!("计划成功却没有计划正文"),
                 };
                 let _ = self.state.update(msg, NOW);
             }
             InstallEffect::Probe => {
                 if self.exec.run_install(SCOPE, PANEL, 0, effect) {
                     let outcome = self.rt.block_on(self.rx.recv()).expect("探针结果");
-                    let Outcome::Install { ticket, result, .. } = outcome else {
-                        panic!("期望 Install,得到 {outcome:?}");
+                    let Outcome::Runtimes { ticket, result } = outcome else {
+                        panic!("期望 Runtimes,得到 {outcome:?}");
                     };
                     assert!(self.requests.accept(ticket));
-                    let _ = self
-                        .state
-                        .update(InstallMessage::ProbesLoaded(result.map(|()| vec![])), NOW);
+                    let _ = self.state.update(InstallMessage::ProbesLoaded(result), NOW);
                 }
             }
             InstallEffect::List => {
@@ -128,6 +127,97 @@ impl Rig {
                     };
                     assert!(self.requests.accept(ticket), "安装结果带回信身份");
                     let _ = self.state.update(InstallMessage::InstallDone(result), NOW);
+                }
+            }
+            // 运行时计划:成功进审批卡,失败流程内报错(与生产组合根的 `install_outcome` 一致)。
+            InstallEffect::RuntimePlan(_) => {
+                if self.exec.run_install(SCOPE, PANEL, 0, effect) {
+                    let outcome = self.rt.block_on(self.rx.recv()).expect("运行时计划结果");
+                    let Outcome::Install {
+                        ticket,
+                        result,
+                        detail,
+                    } = outcome
+                    else {
+                        panic!("期望 Install,得到 {outcome:?}");
+                    };
+                    assert!(self.requests.accept(ticket));
+                    let msg = match (result, detail) {
+                        (Ok(()), InstallDetail::RuntimePlan(p)) => {
+                            InstallMessage::RuntimePlanLoaded(Ok(p))
+                        }
+                        (Err(e), _) => InstallMessage::RuntimePlanLoaded(Err(e)),
+                        (Ok(()), _) => panic!("运行时计划成功却没有正文"),
+                    };
+                    let _ = self.state.update(msg, NOW);
+                }
+            }
+            // 运行时安装:结果回喂 `RuntimeInstallStarted`(成功/失败都由状态机转 Notice/失败卡)。
+            InstallEffect::InstallRuntime(_) => {
+                if self.exec.run_install(SCOPE, PANEL, 0, effect) {
+                    let outcome = self.rt.block_on(self.rx.recv()).expect("运行时安装结果");
+                    let Outcome::Install { ticket, result, .. } = outcome else {
+                        panic!("期望 Install,得到 {outcome:?}");
+                    };
+                    assert!(self.requests.accept(ticket));
+                    let _ = self
+                        .state
+                        .update(InstallMessage::RuntimeInstallStarted(result), NOW);
+                }
+            }
+            // 回滚 / 卸载运行时:把结果回喂对应完成消息。
+            InstallEffect::UninstallRuntime(runtime, version) => {
+                let effect = InstallEffect::UninstallRuntime(runtime, version);
+                if self.exec.run_install(SCOPE, PANEL, 0, effect) {
+                    let outcome = self.rt.block_on(self.rx.recv()).expect("卸载运行时结果");
+                    let Outcome::Install { ticket, result, .. } = outcome else {
+                        panic!("期望 Install,得到 {outcome:?}");
+                    };
+                    assert!(self.requests.accept(ticket));
+                    let _ = self
+                        .state
+                        .update(InstallMessage::RuntimeUninstallDone(result), NOW);
+                }
+            }
+            // 停止 / 回滚 / 卸载应用:回喂带目标 id 的 `ActionDone` / `RolledBack`。
+            InstallEffect::Stop(id) => {
+                let effect = InstallEffect::Stop(id.clone());
+                if self.exec.run_install(SCOPE, PANEL, 0, effect) {
+                    let outcome = self.rt.block_on(self.rx.recv()).expect("停止结果");
+                    let Outcome::Install { ticket, result, .. } = outcome else {
+                        panic!("期望 Install,得到 {outcome:?}");
+                    };
+                    assert!(self.requests.accept(ticket));
+                    let _ = self
+                        .state
+                        .update(InstallMessage::ActionDone(id, ActKind::Stop, result), NOW);
+                }
+            }
+            InstallEffect::Rollback(id) => {
+                let effect = InstallEffect::Rollback(id.clone());
+                if self.exec.run_install(SCOPE, PANEL, 0, effect) {
+                    let outcome = self.rt.block_on(self.rx.recv()).expect("回滚结果");
+                    let Outcome::Install { ticket, result, .. } = outcome else {
+                        panic!("期望 Install,得到 {outcome:?}");
+                    };
+                    assert!(self.requests.accept(ticket));
+                    let _ = self
+                        .state
+                        .update(InstallMessage::RolledBack(id, result), NOW);
+                }
+            }
+            InstallEffect::Uninstall(id, mode) => {
+                let effect = InstallEffect::Uninstall(id.clone(), mode);
+                if self.exec.run_install(SCOPE, PANEL, 0, effect) {
+                    let outcome = self.rt.block_on(self.rx.recv()).expect("卸载结果");
+                    let Outcome::Install { ticket, result, .. } = outcome else {
+                        panic!("期望 Install,得到 {outcome:?}");
+                    };
+                    assert!(self.requests.accept(ticket));
+                    let _ = self.state.update(
+                        InstallMessage::ActionDone(id, ActKind::Uninstall, result),
+                        NOW,
+                    );
                 }
             }
             // 其余(选对话框、通知、跨面板刷新、排期)由组合根处理,测试不驱动。
@@ -328,4 +418,151 @@ fn a_plan_request_failure_is_shown_in_the_flow() {
         Flow::Failed { message } => assert!(message.contains("清单不合法"), "{message}"),
         other => panic!("期望 Failed,得到 {other:?}"),
     }
+}
+
+// ---- Task 15:运行时、回滚、卸载 ----
+
+fn runtime_plan() -> bytehost_apps::proto::RuntimeInstallPlan {
+    bytehost_apps::proto::RuntimeInstallPlan {
+        runtime: bytehost_apps::proto::ManagedRuntime::Node,
+        versions: vec![("node".into(), "24.21.0".into())],
+        downloads: Vec::new(),
+        dest: "/tmp/rt".into(),
+        will_do: vec!["装 node".into()],
+    }
+}
+
+/// 运行时安装:点击 → 规划 → 审批卡 → 批准 → 安装完成,全链路经执行器与 fake 后端。
+#[test]
+fn a_runtime_install_flows_from_click_through_approval_to_done() {
+    let fake = FakeHost::new();
+    fake.on_runtime_plan(Ok(runtime_plan()));
+    fake.on_runtime_install(Ok(()));
+    let mut rig = Rig::new(fake);
+
+    // 点安装 → 发出 RuntimePlan effect(经执行器发请求,拿回计划进审批卡)。
+    rig.step(InstallMessage::RuntimeInstallClicked(
+        bytehost_apps::proto::ManagedRuntime::Node,
+    ));
+    match &rig.state.flow {
+        Flow::RuntimeReviewing { plan } => {
+            assert_eq!(plan.runtime, bytehost_apps::proto::ManagedRuntime::Node);
+        }
+        other => panic!("期望 RuntimeReviewing,得到 {other:?}"),
+    }
+
+    // 批准 → 发 InstallRuntime → fake 成功 → 收成 Idle。
+    rig.step(InstallMessage::RuntimeApproveClicked);
+    assert_eq!(rig.state.flow, Flow::Idle, "运行时安装成功后回到 Idle");
+}
+
+/// 运行时计划请求失败:不进审批卡,流程内失败(展示原因)。
+#[test]
+fn a_runtime_plan_failure_is_shown_in_the_flow() {
+    let fake = FakeHost::new();
+    fake.on_runtime_plan(Err(rejected("此平台不支持".into())));
+    let mut rig = Rig::new(fake);
+    rig.step(InstallMessage::RuntimeInstallClicked(
+        bytehost_apps::proto::ManagedRuntime::Python,
+    ));
+    match &rig.state.flow {
+        Flow::Failed { message } => assert!(message.contains("此平台不支持"), "{message}"),
+        other => panic!("期望 Failed,得到 {other:?}"),
+    }
+}
+
+/// 卸载运行时:点击 → 二次确认 → 确认,发出卸载 effect 并回 Idle。
+#[test]
+fn uninstalling_a_runtime_requires_confirmation() {
+    let fake = FakeHost::new();
+    fake.on_runtime_uninstall(Ok(()));
+    let mut rig = Rig::new(fake);
+
+    rig.send(InstallMessage::RuntimeUninstallClicked(
+        bytehost_apps::proto::ManagedRuntime::Node,
+        "24.21.0".into(),
+    ));
+    match &rig.state.flow {
+        Flow::ConfirmRuntimeUninstall { runtime, version } => {
+            assert_eq!(*runtime, bytehost_apps::proto::ManagedRuntime::Node);
+            assert_eq!(version, "24.21.0");
+        }
+        other => panic!("期望 ConfirmRuntimeUninstall,得到 {other:?}"),
+    }
+
+    rig.step(InstallMessage::RuntimeUninstallConfirmed);
+    assert_eq!(rig.state.flow, Flow::Idle, "卸载完成后回到 Idle");
+}
+
+/// 回滚:点击 → 二次确认 → 确认,发出回滚 effect 并回 Idle(成功后列表刷新)。
+#[test]
+fn rolling_back_an_app_requires_confirmation() {
+    use bytehost_apps::id::Version;
+    use bytehost_apps::state::{DesiredState, ObservedState};
+
+    let fake = FakeHost::new();
+    let id = bytehost_apps::id::AppId::new("notes").unwrap();
+    let mut row = digger_app_host::testing::summary("notes", ObservedState::Running, (1, 1, 0));
+    row.previous_version = Some(Version::new(1, 0, 0));
+    row.desired = DesiredState::Running;
+    fake.on_rollback(&id, Ok(()));
+    let mut rig = Rig::new(fake);
+
+    // 先加载列表,状态机才知道"上一版"是谁(否则回滚按钮无目标)。
+    rig.step(InstallMessage::ListLoaded(Ok(vec![row])));
+
+    rig.send(InstallMessage::RollbackClicked("notes".into()));
+    match &rig.state.flow {
+        Flow::ConfirmRollback { id, .. } => assert_eq!(id, "notes"),
+        other => panic!("期望 ConfirmRollback,得到 {other:?}"),
+    }
+
+    rig.step(InstallMessage::RollbackConfirmed("notes".into()));
+    assert_eq!(rig.state.flow, Flow::Idle, "回滚完成后回到 Idle");
+}
+
+/// 卸载应用:确认后发 `Uninstall`,成功后 `ActionDone` 收尾并刷新列表。
+#[test]
+fn uninstalling_an_app_goes_through_confirmation_and_reports_done() {
+    let fake = FakeHost::new();
+    fake.on_uninstall(Ok(()));
+    let mut rig = Rig::new(fake);
+
+    rig.send(InstallMessage::UninstallClicked("notes".into()));
+    match &rig.state.flow {
+        Flow::ConfirmUninstall { id, .. } => assert_eq!(id, "notes"),
+        other => panic!("期望 ConfirmUninstall,得到 {other:?}"),
+    }
+
+    let effects = rig.state.update(
+        InstallMessage::UninstallConfirmed(bytehost_apps::registry::UninstallMode::Program),
+        NOW,
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, InstallEffect::Uninstall(_, _))),
+        "确认卸载应发出 Uninstall effect:{effects:?}"
+    );
+    rig.dispatch(InstallEffect::Uninstall(
+        "notes".into(),
+        bytehost_apps::registry::UninstallMode::Program,
+    ));
+    assert_eq!(rig.state.flow, Flow::Idle);
+}
+
+/// 停止应用:发出停止 effect 并带 `ActKind::Stop` 收尾。
+#[test]
+fn stopping_an_app_reports_action_done() {
+    let fake = FakeHost::new();
+    let id = bytehost_apps::id::AppId::new("notes").unwrap();
+    fake.on_stop(&id, Ok(()));
+    let mut rig = Rig::new(fake);
+
+    rig.step(InstallMessage::StopClicked("notes".into()));
+    assert_eq!(
+        rig.state.is_acting("notes"),
+        None,
+        "停止完成后不再有在途动作"
+    );
 }

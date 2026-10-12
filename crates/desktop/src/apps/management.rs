@@ -13,9 +13,9 @@ use byteui::theme::{color, font};
 
 use iced::widget::text::IntoFragment;
 use iced::widget::{button, column, container, row, scrollable, text};
-use iced::{Alignment, Element, Length};
+use iced::{Element, Length};
 
-use super::{AppsState, Message, Startup};
+use super::{AppsState, Message, Startup, actions, runtime};
 use crate::apps::approval::review_view;
 
 fn action_button<'a>(
@@ -64,6 +64,9 @@ pub fn view(state: &AppsState) -> Element<'_, Message> {
     // 2) 已安装列表(空列表单独一句)。
     body = body.push(installed_section(state));
 
+    // 2b) 运行时(探测/安装/卸载)。
+    body = body.push(runtime::runtime_section(state));
+
     // 3) 安装流程(空闲时是来源选择表单;有流程时是当前步骤)。
     body = body.push(heading("安装"));
     body = body.push(flow_view(state));
@@ -94,25 +97,11 @@ fn installed_section(state: &AppsState) -> Element<'_, Message> {
         }
         Load::Loaded(apps) => {
             for app in apps {
-                col = col.push(
-                    row![
-                        text(app.name.as_str())
-                            .size(font::body())
-                            .color(color::current().cream),
-                        dim(format!("版本 {} · {}", app.version, id_line(app))),
-                    ]
-                    .spacing(10)
-                    .align_y(Alignment::Center),
-                );
+                col = col.push(actions::app_row(state, app));
             }
         }
     }
     col.into()
-}
-
-/// 一行的稳定 id(Digger 的应用不绑定当前 Project,只显示稳定 id)。
-fn id_line(app: &bytehost_apps::proto::AppSummary) -> String {
-    app.id.as_str().to_owned()
 }
 
 /// 来源单选行:三颗互斥按钮;当前选中那颗用金色。
@@ -224,18 +213,21 @@ fn flow_view(state: &AppsState) -> Element<'_, Message> {
             let running = false;
             review_view(plan, running)
         }
-        // 运行时就绪审批与卸载/回滚确认在 Task 15 接;这里给一句中性占位。
+        // 运行时流程与卸载/回滚确认在各自区块呈现(运行时在 `runtime_section`;
+        // 卸载/回滚确认在已装列表行的 `actions::row_actions`),这里只留一句指向性说明。
         other => dim(flow_placeholder(other).to_string()).into(),
     }
 }
 
-/// Task 14 未接的流程分支(运行时装/卸、回滚确认)给出的中性说明。
+/// 由其他区块承载的流程分支在「安装」区块给出的指向性说明。
 fn flow_placeholder(flow: &Flow) -> &'static str {
     match flow {
         Flow::RuntimePlanning { .. }
         | Flow::RuntimeReviewing { .. }
-        | Flow::ConfirmRuntimeUninstall { .. } => "运行时管理尚未接通(Task 15)。",
-        Flow::ConfirmUninstall { .. } | Flow::ConfirmRollback { .. } => "此操作尚未接通(Task 15)。",
+        | Flow::ConfirmRuntimeUninstall { .. } => "运行时操作在上方「运行时」区块进行。",
+        Flow::ConfirmUninstall { .. } | Flow::ConfirmRollback { .. } => {
+            "请在已安装列表的应用行上确认该操作。"
+        }
         _ => "",
     }
 }

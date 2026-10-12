@@ -15,8 +15,11 @@
 //! 后台结果经 [`ReplySink`] 投到一条 `tokio::sync::mpsc::UnboundedSender`,再由 [`subscription`]
 //! 把接收端接成 iced 订阅流回到窗口线程——与 `bytehost-desktop::dispatch` 的口径一致。
 
+mod actions;
 mod approval;
+mod logs;
 mod management;
+mod runtime;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,10 +29,10 @@ use bytehost_apps::proto::{AppErrorKind, AppFailure};
 use bytehost_client::AppApiError;
 use bytehost_client::in_process::InProcess;
 use bytehost_panel::install::{
-    Effect as InstallEffect, InstallFlowState, Message as InstallMessage,
+    ActKind, Effect as InstallEffect, InstallFlowState, Message as InstallMessage,
 };
 
-use digger_app_host::effects::{Executor, InstallAction, Outcome, ReplySink};
+use digger_app_host::effects::{Executor, InstallAction, InstallDetail, Outcome, ReplySink};
 use digger_app_host::request::{PanelInstanceId, RequestKey, RequestTable, ScopeId};
 use digger_app_host::service::HostService;
 use digger_app_host::trust;
@@ -118,7 +121,7 @@ impl AppsState {
 
     /// 处理一条产品消息;返回要 spawned 的 iced `Task`。
     pub fn update(&mut self, msg: Message) -> iced::Task<Message> {
-        match msg {
+        let task = match msg {
             Message::Opened => {
                 if self.opened {
                     iced::Task::none()
@@ -133,24 +136,30 @@ impl AppsState {
             Message::Install(m) => self.step(m),
             Message::Outcome(outcome) => self.deliver(outcome),
             Message::SourcePicked(path) => self.step(InstallMessage::SourcePicked(path)),
-        }
+        };
+        // 日志查看器展开/收到新内容后:排一拍刷新,并把新内容钉到底(一次性,消费即复位)。
+        iced::Task::batch([task, self.log_scroll_task(), self.log_tick_task()])
     }
 
     /// 喂一条消息给状态机,并把吐出的 effect 逐条派发。
     ///
-    /// 若状态机进入 `Flow::Picking`(需要原生对话框),返回对应的 pick `Task`;其余情况返回 `none`。
+    /// 各 effect 产生的 iced `Task`(原生对话框 / 延后轮询)会**合并**成一条返回;没有则 `none`。
     fn step(&mut self, msg: InstallMessage) -> iced::Task<Message> {
         let effects = self.flow.update(msg, now_ms());
-        let mut pick = iced::Task::none();
+        let mut tasks = Vec::new();
         for effect in effects {
             if let Some(task) = self.dispatch(effect) {
-                pick = task;
+                tasks.push(task);
             }
         }
-        pick
+        if tasks.is_empty() {
+            iced::Task::none()
+        } else {
+            iced::Task::batch(tasks)
+        }
     }
 
-    /// 派发一条安装流 effect。返回 `Some(task)` = 需要弹原生对话框。
+    /// 派发一条安装流 effect。返回 `Some(task)` = 需要 iced 任务(原生对话框 / 延后轮询)。
     fn dispatch(&mut self, effect: InstallEffect) -> Option<iced::Task<Message>> {
         match effect {
             // 原生对话框:目录 / 压缩包。
@@ -168,7 +177,14 @@ impl AppsState {
                 );
                 None
             }
-            // 其余可派发的 effect 走执行器;执行器认不了的一律忽略(超出 Task 14 范围)。
+            // 运行时安装进行中的进度轮询:延后一拍再探一次(不阻塞窗口线程)。
+            InstallEffect::ProbeAfter(after) => Some(iced::Task::perform(
+                async move {
+                    tokio::time::sleep(after).await;
+                },
+                |()| Message::Install(InstallMessage::PollProbes),
+            )),
+            // 其余可派发的 effect 走执行器;执行器认不了的一律忽略(通知/跨面板刷新由组合根后续接)。
             other => {
                 let _ = self
                     .exec
@@ -207,19 +223,72 @@ impl AppsState {
                     iced::Task::none()
                 }
             }
-            Outcome::Install {
-                ticket,
-                result,
-                plan,
-            } => {
+            Outcome::Runtimes { ticket, result } => {
                 if self.requests.accept(*ticket) {
-                    self.install_outcome(ticket.key, result.clone(), plan.clone())
+                    self.step(InstallMessage::ProbesLoaded(
+                        result.clone().map_err(|e| failure(&e)),
+                    ))
                 } else {
                     iced::Task::none()
                 }
             }
-            // 其余结果(取址/日志/动作)超出 Task 14 范围。
+            Outcome::Install {
+                ticket,
+                result,
+                detail,
+            } => {
+                if self.requests.accept(*ticket) {
+                    self.install_outcome(ticket.key, result.clone(), detail.clone())
+                } else {
+                    iced::Task::none()
+                }
+            }
+            Outcome::Logs {
+                ticket,
+                app,
+                result,
+            } => {
+                if self.requests.accept(*ticket) {
+                    let id = app.as_str().to_owned();
+                    let task = self.step(InstallMessage::LogsLoaded(
+                        id.clone(),
+                        result.clone().map_err(|e| failure(&e)),
+                    ));
+                    iced::Task::batch([task, self.log_scroll_task()])
+                } else {
+                    iced::Task::none()
+                }
+            }
+            // 其余结果(取址/动作)由后续组接。
             _ => iced::Task::none(),
+        }
+    }
+
+    /// 取走"把日志钉到底部"的一次性请求,生成一条滚动任务(没有则 `none`)。
+    fn log_scroll_task(&mut self) -> iced::Task<Message> {
+        match self.flow.take_log_scroll() {
+            Some(id) => iced::widget::operation::scroll_to(
+                crate::apps::log_scroll_id(&id),
+                iced::widget::operation::AbsoluteOffset {
+                    x: 0.0,
+                    y: f32::MAX,
+                },
+            ),
+            None => iced::Task::none(),
+        }
+    }
+
+    /// 若函数已排一拍日志刷新 `Tick`(有展开的查看器且尚无定时器),返回对应的延时任务。
+    fn log_tick_task(&mut self) -> iced::Task<Message> {
+        if self.flow.arm_tick() {
+            iced::Task::perform(
+                async {
+                    tokio::time::sleep(bytehost_panel::logs::REFRESH_INTERVAL).await;
+                },
+                |()| Message::Install(InstallMessage::Tick),
+            )
+        } else {
+            iced::Task::none()
         }
     }
 
@@ -238,20 +307,32 @@ impl AppsState {
         &mut self,
         key: RequestKey,
         result: Result<(), AppApiError>,
-        plan: Option<Box<bytehost_apps::plan::InstallPlan>>,
+        detail: InstallDetail,
     ) -> iced::Task<Message> {
         match InstallAction::from_key(key) {
             Some(InstallAction::Plan) => {
-                let msg = match (result, plan) {
-                    (Ok(()), Some(p)) => match trust::review(&p) {
+                let msg = match (result, detail) {
+                    (Ok(()), InstallDetail::Plan(p)) => match trust::review(&p) {
                         trust::Review::Allowed => InstallMessage::PlanLoaded(Ok(p)),
                         trust::Review::Rejected(reason) => {
                             InstallMessage::PlanLoaded(Err(failure(&rejected(reason))))
                         }
                     },
                     (Err(e), _) => InstallMessage::PlanLoaded(Err(failure(&e))),
-                    (Ok(()), None) => InstallMessage::PlanLoaded(Err(failure(&internal(
+                    (Ok(()), _) => InstallMessage::PlanLoaded(Err(failure(&internal(
                         "计划请求成功却没有计划正文",
+                    )))),
+                };
+                self.step(msg)
+            }
+            Some(InstallAction::RuntimePlan) => {
+                let msg = match (result, detail) {
+                    (Ok(()), InstallDetail::RuntimePlan(p)) => {
+                        InstallMessage::RuntimePlanLoaded(Ok(p))
+                    }
+                    (Err(e), _) => InstallMessage::RuntimePlanLoaded(Err(failure(&e))),
+                    (Ok(()), _) => InstallMessage::RuntimePlanLoaded(Err(failure(&internal(
+                        "运行时计划请求成功却没有计划正文",
                     )))),
                 };
                 self.step(msg)
@@ -259,11 +340,43 @@ impl AppsState {
             Some(InstallAction::Install) => {
                 self.step(InstallMessage::InstallDone(result.map_err(|e| failure(&e))))
             }
-            // Task 14 只接了出计划与安装;探针/停止/回滚/卸载在 Task 15。
-            Some(InstallAction::Probe) => self.step(InstallMessage::ProbesLoaded(
-                result.map(|()| Vec::new()).map_err(|e| failure(&e)),
-            )),
-            _ => iced::Task::none(),
+            Some(InstallAction::RuntimeInstall) => self.step(
+                InstallMessage::RuntimeInstallStarted(result.map_err(|e| failure(&e))),
+            ),
+            Some(InstallAction::RuntimeUninstall) => self.step(
+                InstallMessage::RuntimeUninstallDone(result.map_err(|e| failure(&e))),
+            ),
+            Some(InstallAction::Rollback) => {
+                let InstallDetail::App(id) = detail else {
+                    return iced::Task::none();
+                };
+                self.step(InstallMessage::RolledBack(
+                    id,
+                    result.map_err(|e| failure(&e)),
+                ))
+            }
+            Some(InstallAction::Stop) => {
+                let InstallDetail::App(id) = detail else {
+                    return iced::Task::none();
+                };
+                self.step(InstallMessage::ActionDone(
+                    id,
+                    ActKind::Stop,
+                    result.map_err(|e| failure(&e)),
+                ))
+            }
+            Some(InstallAction::Uninstall) => {
+                let InstallDetail::App(id) = detail else {
+                    return iced::Task::none();
+                };
+                self.step(InstallMessage::ActionDone(
+                    id,
+                    ActKind::Uninstall,
+                    result.map_err(|e| failure(&e)),
+                ))
+            }
+            // 探针走 `Outcome::Runtimes`;genesis 由 `deliver` 处理。
+            Some(InstallAction::Probe) | Some(InstallAction::Genesis) | None => iced::Task::none(),
         }
     }
 
@@ -331,6 +444,11 @@ pub fn reply_stream(
         let next = rx.recv().await?;
         Some((Message::Outcome(Arc::new(next)), Some(rx)))
     })
+}
+
+/// 日志滚动容器在 iced 里的稳定 id(每个应用的日志查看器一个)。
+pub(crate) fn log_scroll_id(app_id: &str) -> iced::widget::Id {
+    iced::widget::Id::from(format!("digger.apps.logs.{app_id}"))
 }
 
 fn now_ms() -> u64 {
