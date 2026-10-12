@@ -821,15 +821,32 @@ dependencies = [
  "bytehost-webview",
  "byteui",
  "digger-app-host",
+ "digger-store",
  "directories",
+ "dozer-model",
+ "dozer-panel-usage",
+ "dozer-services",
  "iced",
  "iced_core",
+ "iced_renderer",
+ "iced_widget",
  "objc2-foundation 0.3.2",
  "rfd",
  "serde",
  "serde_json",
  "tokio",
  "wry",
+]
+
+[[package]]
+name = "digger-store"
+version = "0.1.0"
+dependencies = [
+ "dozer-model",
+ "dozer-services",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -929,6 +946,36 @@ name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
+
+[[package]]
+name = "dozer-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "dozer-panel-usage"
+version = "0.1.0"
+dependencies = [
+ "bytehost-core",
+ "bytehost-desktop",
+ "byteui",
+ "dozer-model",
+ "dozer-services",
+ "iced_renderer",
+ "iced_widget",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "dozer-services"
+version = "0.1.0"
+dependencies = [
+ "dozer-model",
+]
 
 [[package]]
 name = "dpi"
