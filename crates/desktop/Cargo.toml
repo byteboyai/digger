@@ -21,11 +21,21 @@ bytehost-client = { workspace = true, features = ["in-process"] }
 bytehost-panel.workspace = true
 # Digger 的宿主适配层:执行器 / 请求身份 / 服务生命周期 / 产品信任策略。
 digger-app-host = { path = "../app-host" }
+# Digger 领域持久化:任务完成用量账本 + `UsageService` 实现(Task 20)。
+digger-store = { path = "../store" }
+
+# 同源 Usage 面板库与领域类型/服务接缝(Dozer/Digger 共用,Task 19/20)。
+dozer-model.workspace = true
+dozer-services.workspace = true
+dozer-panel-usage.workspace = true
 
 byteui.workspace = true
 
 iced.workspace = true
 iced_core.workspace = true
+# 共享面板库的 `PanelDisplay` 接缝用 iced 的 widget/renderer 具名类型;与 iced 同版本。
+iced_widget = { version = "0.14", default-features = false }
+iced_renderer = { version = "0.14", default-features = false }
 wry.workspace = true
 objc2-foundation.workspace = true
 serde.workspace = true

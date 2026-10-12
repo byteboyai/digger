@@ -38,6 +38,11 @@ pub fn bytehost_root() -> PathBuf {
     config_dir().join("bytehost")
 }
 
+/// 任务完成用量账本文件(Task 20):`<config>/digger/usage_ledger.json`。
+pub fn usage_ledger_path() -> PathBuf {
+    config_dir().join("usage_ledger.json")
+}
+
 /// 日志目录。
 pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")

@@ -47,6 +47,32 @@ use digger_app_host::trust;
 use crate::paths;
 use surface::{AppSurfaces, SurfaceAction};
 
+/// 任务完成用量的**生产者运行时**(Task 20):把真实的应用操作(安装/启动/停止/卸载…)
+/// 包成一次任务运行,结束时结算进落盘账本,供共享 Usage 面板查询。
+///
+/// - `runner` 持有账本(与面板的 `LedgerUsageService` 共享同一 `Arc<Mutex<UsageLedger>>`)。
+/// - `running` 是在途运行的登记簿,键是**派发请求的 ticket sequence**(同一动作的并发实例
+///   各自唯一,不撞车)。
+/// - `scope_path` 是这些记录归属的作用域(Digger 一期用产品数据根,与面板查询路径对齐)。
+pub struct UsageRuntime {
+    runner: digger_store::TaskRunner,
+    running: digger_store::RunningTasks,
+    scope_path: String,
+}
+
+impl UsageRuntime {
+    pub fn new(
+        ledger: std::sync::Arc<std::sync::Mutex<digger_store::UsageLedger>>,
+        scope_path: String,
+    ) -> Self {
+        Self {
+            runner: digger_store::TaskRunner::new(ledger),
+            running: digger_store::RunningTasks::new(),
+            scope_path,
+        }
+    }
+}
+
 /// 应用服务的启动状态:窗口先画出来,服务后台起。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Startup {
@@ -97,6 +123,8 @@ pub struct AppsState {
     store: StoreCleanup,
     /// 在途卸载的应用 → 卸载模式,用于决定是否要在卸载成功后清浏览器数据。
     pending_uninstall: std::collections::HashMap<String, UninstallMode>,
+    /// 任务完成用量生产者(Task 20);`None` = 未接(测试/未接线时不产生用量记录)。
+    usage: Option<UsageRuntime>,
 }
 
 impl AppsState {
@@ -131,7 +159,60 @@ impl AppsState {
             surfaces: AppSurfaces::new(),
             store: StoreCleanup::load(ledger),
             pending_uninstall: std::collections::HashMap::new(),
+            usage: None,
         }
+    }
+
+    /// 接入任务用量生产者(Task 20):组合根传入与面板共享的账本 + 作用域路径。
+    pub fn attach_usage(
+        &mut self,
+        ledger: std::sync::Arc<std::sync::Mutex<digger_store::UsageLedger>>,
+        scope_path: String,
+    ) {
+        self.usage = Some(UsageRuntime::new(ledger, scope_path));
+    }
+
+    /// 在派发一条**用户发起**的真实操作时登记一次任务运行(以请求 ticket sequence 为键)。
+    /// 只对会产生真实副作用、且用户可感知的动作计数(见 [`is_user_invoked_action`])。
+    fn begin_usage_for(&mut self, action: InstallAction, key: u64, title: String) {
+        let Some(usage) = self.usage.as_mut() else {
+            return;
+        };
+        if !is_user_invoked_action(action) {
+            return;
+        }
+        let run_id = format!("digger:{}:{}", action_run_label(action), key);
+        let run = usage.runner.begin(
+            run_id,
+            1,
+            usage.scope_path.clone(),
+            dozer_model::AgentKind::Unknown,
+            title,
+        );
+        usage.running.insert(key, run);
+    }
+
+    /// 一次真实操作完成:结算成用量记录(写账本)。无登记的键(非用户动作/未接线)则不动。
+    fn settle_usage_for(&mut self, key: u64) {
+        let Some(usage) = self.usage.as_mut() else {
+            return;
+        };
+        let Some(run) = usage.running.take(key) else {
+            return;
+        };
+        // 诚实原则:Digger 当前无 agent 运行时,真实操作不产生 token / 回合,如实记 0;
+        // `files_touched` 一期无从得知(操作由 app-host 执行,不回传文件清单),留空不伪造。
+        let outcome = digger_store::TaskOutcome::default();
+        if let Err(e) = usage.runner.finish(run, outcome) {
+            // 写账本失败(损坏/IO):不 panic,后进入面板时会以 Unavailable 呈现。
+            eprintln!("digger: 用量账本写入失败: {e}"); // cli-output
+        }
+    }
+
+    /// 供测试/诊断:当前在途的运行数(不接线时恒 0)。
+    #[allow(dead_code)]
+    pub fn usage_in_flight(&self) -> usize {
+        self.usage.as_ref().map(|u| u.running.len()).unwrap_or(0)
     }
 
     /// 后台异步起一个进程内应用服务(不阻塞窗口)。
@@ -139,7 +220,6 @@ impl AppsState {
         self.exec
             .start_service(self.scope, self.panel, paths::bytehost_root());
     }
-
     /// 订阅流的接收端句柄(交给 [`take_reply_receiver`] / boot 建立 iced 流)。
     pub fn reply_receiver(
         &self,
@@ -230,19 +310,37 @@ impl AppsState {
             // 卸载成功后清浏览器数据存储(Task 17)。随后照常交给执行器。
             InstallEffect::Uninstall(id, mode) => {
                 self.pending_uninstall.insert(id.clone(), mode);
-                let _ = self.exec.run_install(
+                let effect = InstallEffect::Uninstall(id.clone(), mode);
+                let ticket = self.exec.run_install_traced(
                     self.scope,
                     self.panel,
                     self.generation,
-                    InstallEffect::Uninstall(id, mode),
+                    effect,
+                    None,
                 );
+                if let Some(ticket) = ticket {
+                    self.begin_usage_for(
+                        InstallAction::Uninstall,
+                        ticket.sequence,
+                        format!("卸载应用 {id}"),
+                    );
+                }
                 None
             }
             // 其余可派发的 effect 走执行器;执行器认不了的一律忽略(通知/跨面板刷新由组合根后续接)。
             other => {
-                let _ = self
-                    .exec
-                    .run_install(self.scope, self.panel, self.generation, other);
+                let action = dispatched_action(&other);
+                let title = dispatched_title(&other);
+                let ticket = self.exec.run_install_traced(
+                    self.scope,
+                    self.panel,
+                    self.generation,
+                    other,
+                    None,
+                );
+                if let (Some(action), Some(ticket)) = (action, ticket) {
+                    self.begin_usage_for(action, ticket.sequence, title);
+                }
                 None
             }
         }
@@ -292,6 +390,8 @@ impl AppsState {
                 detail,
             } => {
                 if self.requests.accept(*ticket) {
+                    // 一次真实操作完成:结算它登记的任务运行(写用量账本),再翻成状态机消息。
+                    self.settle_usage_for(ticket.sequence);
                     self.install_outcome(ticket.key, result.clone(), detail.clone())
                 } else {
                     iced::Task::none()
@@ -704,6 +804,85 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// 该动作是否算一次**用户发起的真实任务运行**(计入用量)。
+///
+/// 只算会产生真实副作用、用户可感知的写操作:安装/启动(安装后启动)/停止/卸载/回滚,
+/// 以及运行时安装/卸载。**出计划/探针/genesis 不算**——它们是只读规划/服务启动,
+/// 不对应用产生改动,也不是用户"跑的一次任务"。
+fn is_user_invoked_action(action: InstallAction) -> bool {
+    matches!(
+        action,
+        InstallAction::Install
+            | InstallAction::Stop
+            | InstallAction::Uninstall
+            | InstallAction::Rollback
+            | InstallAction::RuntimeInstall
+            | InstallAction::RuntimeUninstall
+    )
+}
+
+/// 动作 → `run_id` 里的稳定标签(仅用于构造幂等键,不含用户数据)。
+fn action_run_label(action: InstallAction) -> &'static str {
+    match action {
+        InstallAction::Install => "install",
+        InstallAction::Stop => "stop",
+        InstallAction::Uninstall => "uninstall",
+        InstallAction::Rollback => "rollback",
+        InstallAction::RuntimeInstall => "runtime-install",
+        InstallAction::RuntimeUninstall => "runtime-uninstall",
+        InstallAction::Plan => "plan",
+        InstallAction::Probe => "probe",
+        InstallAction::RuntimePlan => "runtime-plan",
+        InstallAction::Genesis => "genesis",
+    }
+}
+
+/// 由一条 effect 判断它会成为哪种完成型动作(用于登记任务运行)。
+/// `None` = 不由执行器发请求(原生对话框/排期/刷新)。
+fn dispatched_action(effect: &InstallEffect) -> Option<InstallAction> {
+    match effect {
+        InstallEffect::Install { .. } => Some(InstallAction::Install),
+        InstallEffect::Stop(_) => Some(InstallAction::Stop),
+        InstallEffect::Rollback(_) => Some(InstallAction::Rollback),
+        InstallEffect::Uninstall(_, _) => Some(InstallAction::Uninstall),
+        InstallEffect::InstallRuntime(_) => Some(InstallAction::RuntimeInstall),
+        InstallEffect::UninstallRuntime(_, _) => Some(InstallAction::RuntimeUninstall),
+        // 计划/探针/genesis 是只读规划或服务启动,不计入用量。
+        InstallEffect::Plan(_)
+        | InstallEffect::Probe
+        | InstallEffect::RuntimePlan(_)
+        | InstallEffect::List => None,
+        _ => None,
+    }
+}
+
+/// 动作的展示标题(用量面板副行)。不含用户数据之外的秘密。
+fn dispatched_title(effect: &InstallEffect) -> String {
+    match effect {
+        InstallEffect::Install { source, .. } => {
+            format!("安装应用({})", source_label(source))
+        }
+        InstallEffect::Stop(id) => format!("启动/停止应用 {id}"),
+        InstallEffect::Rollback(id) => format!("回滚应用 {id}"),
+        InstallEffect::Uninstall(id, _) => format!("卸载应用 {id}"),
+        InstallEffect::InstallRuntime(_) => "安装运行时".to_string(),
+        InstallEffect::UninstallRuntime(runtime, version) => {
+            format!("卸载运行时 {runtime:?} {version}")
+        }
+        _ => "应用操作".to_string(),
+    }
+}
+
+/// 安装来源的极简标签(只有种类,不带路径/URL——URL 可能含查询串等敏感内容)。
+fn source_label(source: &bytehost_apps::proto::AppSource) -> &'static str {
+    use bytehost_apps::proto::AppSource;
+    match source {
+        AppSource::LocalDir { .. } => "本机目录",
+        AppSource::Archive { .. } => "本机压缩包",
+        AppSource::Url { .. } => "远程 URL",
+    }
+}
+
 /// 统一失败文本(面板状态机接收 `AppApiError` 别名 `Failure`)。
 fn failure(err: &AppApiError) -> AppApiError {
     AppApiError::Host(AppFailure::new(
@@ -734,6 +913,7 @@ impl ReplySink for ChannelSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dozer_services::UsageService as _;
 
     fn temp_ledger(name: &str) -> PathBuf {
         let dir =
@@ -791,5 +971,131 @@ mod tests {
         );
         assert!(!s.store_is_pending("notes"));
         assert!(s.pending_uninstall.is_empty(), "失败后不残留模式");
+    }
+
+    // ---- Task 20:应用操作 → 用量账本 → 共享 UsageService 的端到端接线 ----
+
+    fn usage_ledger_path(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("digger-usage-link-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("usage_ledger.json")
+    }
+
+    fn shared_ledger(path: &std::path::Path) -> Arc<std::sync::Mutex<digger_store::UsageLedger>> {
+        Arc::new(std::sync::Mutex::new(
+            digger_store::UsageLedger::load(path).unwrap(),
+        ))
+    }
+
+    /// 一次用户发起的真实操作(begin→settle)在账本里落一条记录,经**真实**
+    /// `LedgerUsageService` 在相同作用域下可查到(与面板查询同型)。
+    #[tokio::test]
+    async fn a_completed_app_op_becomes_a_queryable_usage_record() {
+        let path = usage_ledger_path("op");
+        let scope = "/digger/scope".to_string();
+        let ledger = shared_ledger(&path);
+        let mut s = AppsState::with_ledger_path(temp_ledger("op"));
+        s.attach_usage(ledger.clone(), scope.clone());
+
+        s.begin_usage_for(InstallAction::Install, 7, "安装应用(本机目录)".into());
+        assert_eq!(s.usage_in_flight(), 1, "用户动作登记为在途");
+        s.settle_usage_for(7);
+        assert_eq!(s.usage_in_flight(), 0, "结算后不在途");
+
+        let service = digger_store::LedgerUsageService::new(ledger);
+        let rows = service.usage_summary(scope.clone(), None).await.unwrap();
+        assert_eq!(rows.len(), 1, "面板查得到这条记录");
+        assert_eq!(rows[0].1.tokens_in, 0, "无 agent 运行时,如实为 0");
+        assert_eq!(rows[0].0.title, "安装应用(本机目录)");
+    }
+
+    /// 记录写盘后重启(重载账本)仍在——真实落盘,不是内存态。
+    #[tokio::test]
+    async fn a_completed_app_op_survives_a_restart() {
+        let path = usage_ledger_path("restart");
+        let scope = "/digger/scope".to_string();
+        {
+            let ledger = shared_ledger(&path);
+            let mut s = AppsState::with_ledger_path(temp_ledger("restart"));
+            s.attach_usage(ledger, scope.clone());
+            s.begin_usage_for(InstallAction::Uninstall, 11, "卸载应用 notes".into());
+            s.settle_usage_for(11);
+        }
+        // 模拟重启:从磁盘重新载入账本再查。
+        let service = digger_store::LedgerUsageService::load(&path).unwrap();
+        let rows = service.usage_summary(scope, None).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.conversation_id, "digger:uninstall:11");
+    }
+
+    /// 未登记的动作键 settle 是 no-op(非用户动作不产生记录);重复 settle 不重复记。
+    #[tokio::test]
+    async fn non_user_actions_do_not_record_and_settle_is_idempotent() {
+        let path = usage_ledger_path("idem");
+        let scope = "/digger/scope".to_string();
+        let ledger = shared_ledger(&path);
+        let mut s = AppsState::with_ledger_path(temp_ledger("idem"));
+        s.attach_usage(ledger.clone(), scope.clone());
+
+        // 只读的「出计划」不该登记在途。
+        s.begin_usage_for(InstallAction::Plan, 1, "计划".into());
+        assert_eq!(s.usage_in_flight(), 0, "只读动作不计入用量");
+        s.settle_usage_for(1);
+        assert_eq!(ledger.lock().unwrap().len(), 0);
+
+        // 用户动作:重复 settle 第二次无登记可结算,不新增第二条。
+        s.begin_usage_for(InstallAction::Stop, 2, "启动/停止应用 notes".into());
+        s.settle_usage_for(2);
+        s.settle_usage_for(2);
+        assert_eq!(ledger.lock().unwrap().len(), 1);
+    }
+
+    /// 两个作用域的记录互不相串(scope 隔离)。
+    #[tokio::test]
+    async fn two_scopes_do_not_cross() {
+        let path = usage_ledger_path("scopes");
+        let ledger = shared_ledger(&path);
+        let mut a = AppsState::with_ledger_path(temp_ledger("scope-a"));
+        a.attach_usage(ledger.clone(), "/scope/a".into());
+        a.begin_usage_for(InstallAction::Install, 1, "a".into());
+        a.settle_usage_for(1);
+        let mut b = AppsState::with_ledger_path(temp_ledger("scope-b"));
+        b.attach_usage(ledger.clone(), "/scope/b".into());
+        b.begin_usage_for(InstallAction::Install, 2, "b".into());
+        b.settle_usage_for(2);
+
+        let service = digger_store::LedgerUsageService::new(ledger);
+        let ra = service
+            .usage_summary("/scope/a".into(), None)
+            .await
+            .unwrap();
+        let rb = service
+            .usage_summary("/scope/b".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(ra.len(), 1);
+        assert_eq!(rb.len(), 1);
+        assert_eq!(ra[0].0.title, "a");
+        assert_eq!(rb[0].0.title, "b");
+    }
+
+    /// 读失败(损坏账本)与"确实为空"必须能区分:前者 `Unavailable`,后者 `Ok(空)`。
+    #[tokio::test]
+    async fn read_failure_is_distinct_from_empty() {
+        let path = usage_ledger_path("corrupt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ not json").unwrap();
+        // 损坏:载入即失败(不伪装成空账本)。
+        assert!(digger_store::LedgerUsageService::load(&path).is_err());
+
+        // 空:全新路径给 Ok(空)。
+        let empty = usage_ledger_path("empty");
+        let service = digger_store::LedgerUsageService::load(&empty).unwrap();
+        let rows = service
+            .usage_summary("/scope/x".into(), None)
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
     }
 }

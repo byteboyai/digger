@@ -33,6 +33,11 @@ fn apps_panel_id() -> PanelId {
     PanelId::new("digger.apps").expect("合法 panel id")
 }
 
+/// Usage 面板的稳定 id(Task 20:接入共享 `dozer-panel-usage` 库)。
+fn usage_panel_id() -> PanelId {
+    PanelId::new("digger.usage").expect("合法 panel id")
+}
+
 /// 产品消息。**不进入**宿主 enum(宿主只认 `HostMessage<M>`)。
 #[derive(Debug, Clone)]
 pub enum Msg {
@@ -40,16 +45,19 @@ pub enum Msg {
     SelectPanel(ActivePanel),
     /// 「应用」面板的消息(Task 14)。
     Apps(crate::apps::Message),
+    /// 「用量」面板的库消息(Task 20)。
+    Usage(dozer_panel_usage::Message),
     CloseRequested,
     Exit,
 }
 
-/// 左栏当前显示的产品面板(一期只有两个占位面板,不接业务)。
+/// 左栏当前显示的产品面板(一期只有产品信息/应用/用量三个面板)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActivePanel {
     #[default]
     Info,
     Apps,
+    Usage,
 }
 
 /// Digger 产品壳状态。刻意保持最小:不持有任何 Domain/持久化状态,
@@ -65,6 +73,8 @@ pub struct ProductShell {
     active: ActivePanel,
     /// 「应用」面板的组合根(状态机 + 执行器 + 内嵌应用服务)。
     apps: crate::apps::AppsState,
+    /// 「用量」面板适配(共享 `dozer-panel-usage` 库 + 注入的真实用量服务)。
+    usage: crate::adapters::usage::UsagePanel,
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
@@ -90,9 +100,52 @@ impl ProductShell {
                 surfaces: vec![],
             })
             .expect("首次注册 digger.apps");
+        catalog
+            .register(PanelMeta {
+                id: usage_panel_id(),
+                title: "用量".into(),
+                surfaces: vec![],
+            })
+            .expect("首次注册 digger.usage");
 
         let layout_path = paths::layout_path();
         let (layout, layout_save_blocked) = load_layout(&layout_path, &catalog).layout();
+
+        // 任务完成用量账本(Task 20):生产者(应用操作)写、用量面板读,同一实例。
+        // 载入失败(损坏)不 panic:退回一个空账本并提示,不静默把损坏当"没有记录"。
+        let (ledger, ledger_note) = match digger_store::UsageLedger::load(paths::usage_ledger_path())
+        {
+            Ok(ledger) => (ledger, None),
+            Err(e) => {
+                // 用一个新的临时空账本兜底(路径不存在 → `load` 给空账本);提示已记入 boot_note。
+                let fallback = std::env::temp_dir()
+                    .join(format!("digger-usage-fallback-{}.json", std::process::id()));
+                let _ = std::fs::remove_file(&fallback);
+                let empty =
+                    digger_store::UsageLedger::load(&fallback).expect("不存在的路径必给空账本");
+                (
+                    empty,
+                    Some(format!("用量账本载入失败(已按空账本继续): {e}")),
+                )
+            }
+        };
+        let usage_ledger = std::sync::Arc::new(std::sync::Mutex::new(ledger));
+        let usage_service: std::sync::Arc<dyn dozer_services::UsageService> =
+            std::sync::Arc::new(digger_store::LedgerUsageService::new(usage_ledger.clone()));
+        // 作用域路径:应用操作完成事件与面板查询必须用同一路径——都取产品数据根。
+        let scope_path = paths::config_dir();
+
+        let mut apps = crate::apps::AppsState::new();
+        apps.attach_usage(
+            usage_ledger.clone(),
+            scope_path.to_string_lossy().to_string(),
+        );
+        let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
+
+        let boot_note = match ledger_note {
+            Some(note) => note,
+            None => "尚未打开 Project;业务服务未接通(应用服务在 Task 12/13 接入)。".into(),
+        };
 
         Self {
             window: None,
@@ -102,8 +155,9 @@ impl ProductShell {
             layout_save_blocked,
             layout_path,
             active: ActivePanel::Info,
-            apps: crate::apps::AppsState::new(),
-            boot_note: "尚未打开 Project;业务服务未接通(应用服务在 Task 12/13 接入)。".into(),
+            apps,
+            usage,
+            boot_note,
             #[cfg(test)]
             surface_callbacks: Vec::new(),
         }
@@ -293,9 +347,21 @@ impl Product<Msg> for ProductShell {
                         .update(crate::apps::Message::Opened)
                         .map(Msg::Apps);
                 }
+                // 进入「用量」面板:触发一次取数(库的 on_activate,Task 20)。
+                if panel == ActivePanel::Usage {
+                    self.usage.activate();
+                }
                 Task::none()
             }
             Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
+            Msg::Usage(m) => {
+                self.usage.update(m);
+                // Digger 一期无 Toast:把库的 outbox 提示落地到 stderr,不静默吞掉。
+                for (level, text) in self.usage.take_notices() {
+                    eprintln!("digger: usage 面板/{level}: {text}"); // cli-output
+                }
+                Task::none()
+            }
             Msg::CloseRequested | Msg::Exit => {
                 self.save_layout();
                 iced::exit()
@@ -313,11 +379,13 @@ impl Product<Msg> for ProductShell {
         let body = match self.active {
             ActivePanel::Info => self.info_view(),
             ActivePanel::Apps => self.apps_view(),
+            ActivePanel::Usage => self.usage_view(),
         };
 
         let tabs = row![
             button("信息").on_press(Msg::SelectPanel(ActivePanel::Info)),
             button("应用").on_press(Msg::SelectPanel(ActivePanel::Apps)),
+            button("用量").on_press(Msg::SelectPanel(ActivePanel::Usage)),
         ]
         .spacing(12);
 
@@ -389,6 +457,10 @@ impl ProductShell {
     fn apps_view(&self) -> Element<'_, Msg> {
         self.apps.view().map(Msg::Apps)
     }
+
+    fn usage_view(&self) -> Element<'_, Msg> {
+        self.usage.view()
+    }
 }
 
 /// 订阅:窗口关闭请求。
@@ -409,12 +481,19 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     color::set_theme(color::ColorTokens::byteboy2077());
     font::set_theme(font::FontTokens::byteboy2077());
 
-    let shell = ProductShell::new();
+    let mut shell = ProductShell::new();
     let size = shell.size;
+    // 用量面板要 iced 运行时句柄在后台取数:`boot` 在 iced 运行时内执行,这里补挂。
+    shell.usage.attach_handle(tokio::runtime::Handle::current());
     // 应用面板后台结果回流:一次性流出接收端,持续到进程结束(与窗口尺寸任务并行)。
     use iced::futures::StreamExt;
     let reply_task = match crate::apps::take_reply_receiver(&shell.apps.reply_receiver()) {
         Some(rx) => iced::Task::stream(crate::apps::reply_stream(rx).map(Msg::Apps)),
+        None => Task::none(),
+    };
+    // 用量面板后台取数结果回流:同型,接成 iced 流回投 `Msg::Usage`。
+    let usage_task = match shell.usage.take_receiver() {
+        Some(rx) => iced::Task::stream(crate::adapters::usage::receiver_stream(rx).map(Msg::Usage)),
         None => Task::none(),
     };
     let size_task = bytehost_desktop::panel::oldest_window().then(move |id| match id {
@@ -422,7 +501,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             .map(move |s| Msg::WindowReady(id, s.unwrap_or(size))),
         None => Task::none(),
     });
-    (shell, Task::batch([size_task, reply_task]))
+    (shell, Task::batch([size_task, reply_task, usage_task]))
 }
 
 #[cfg(test)]
@@ -441,7 +520,8 @@ mod tests {
         let shell = ProductShell::new();
         assert!(shell.catalog.contains(&info_panel_id()));
         assert!(shell.catalog.contains(&apps_panel_id()));
-        assert_eq!(shell.catalog.len(), 2);
+        assert!(shell.catalog.contains(&usage_panel_id()));
+        assert_eq!(shell.catalog.len(), 3);
     }
 
     #[test]
