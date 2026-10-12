@@ -634,6 +634,25 @@ impl InstallAction {
             _ => return None,
         })
     }
+
+    /// 逆向映射:完成型动作种类对应的请求键(与 [`from_key`](Self::from_key) 互逆)。
+    ///
+    /// 供组合根/测试在"没有原始 `Effect`、只知道动作种类"时构造身份(如把一条完成结果喂回状态机)。
+    pub fn key(self) -> crate::request::RequestKey {
+        use crate::request::RequestKey;
+        RequestKey::Action(match self {
+            Self::Plan => PLAN_ACTION,
+            Self::Install => INSTALL_ACTION,
+            Self::Stop => STOP_ACTION,
+            Self::Rollback => ROLLBACK_ACTION,
+            Self::Uninstall => UNINSTALL_ACTION,
+            Self::Probe => PROBE_ACTION,
+            Self::RuntimePlan => RUNTIME_PLAN_ACTION,
+            Self::RuntimeInstall => RUNTIME_INSTALL_ACTION,
+            Self::RuntimeUninstall => RUNTIME_UNINSTALL_ACTION,
+            Self::Genesis => GENESIS_ACTION,
+        })
+    }
 }
 
 #[cfg(test)]

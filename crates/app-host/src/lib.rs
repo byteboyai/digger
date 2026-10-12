@@ -19,7 +19,9 @@
 //! 业务层(domain/store/runtime)不得依赖本 crate,也不得直接依赖 `bytehost-*`(见
 //! `scripts/check-host-deps.sh`)。
 
+pub mod cleanups;
 pub mod effects;
+pub mod port;
 pub mod request;
 pub mod service;
 pub mod subscription;

@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 bytehost-core.workspace = true
 bytehost-desktop.workspace = true
+# 应用 webview 的纯安全策略:存储标识与数据存储清除排队(StoreRemovals)。
+bytehost-webview.workspace = true
 # 应用服务类型 + 进程内嵌入后端(desktop 是宿主适配层白名单,可直接依赖 bytehost-*)。
 bytehost-apps = { workspace = true, features = ["server"] }
 bytehost-client = { workspace = true, features = ["in-process"] }
@@ -25,6 +27,7 @@ byteui.workspace = true
 iced.workspace = true
 iced_core.workspace = true
 wry.workspace = true
+objc2-foundation.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

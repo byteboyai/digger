@@ -25,6 +25,8 @@ directories = "6"
 # 共享桌面宿主契约:窗口壳、面板、Surface、布局、焦点(bytehost-desktop)。
 bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+# 应用 webview 的纯安全策略(origin/nonce/存储标识/数据存储清除排队);桌面宿主唯一真相。
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 
 # 应用宿主平台:注册表/生命周期、与传输无关的客户端 API、与界面框架无关的面板状态机。
 bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
@@ -38,3 +40,5 @@ iced = { version = "0.14", default-features = false, features = ["tokio"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。
 iced_core = { version = "0.14", default-features = false }
 wry = "0.55.1"
+# 取 macOS 主版本号判数据存储清除是否受支持(纯策略 crate 不碰 objc2,宿主层来问)。
+objc2-foundation = "0.3"
