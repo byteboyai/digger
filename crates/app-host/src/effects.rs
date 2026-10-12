@@ -320,7 +320,8 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
         generation: u64,
         effect: InstallEffect,
     ) -> bool {
-        self.run_install_with_policy(scope, panel, generation, effect, None)
+        self.run_install_traced(scope, panel, generation, effect, None)
+            .is_some()
     }
 
     /// 同 [`Executor::run_install`],但可带出计划请求的产品策略(见上)。
@@ -332,6 +333,23 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
         effect: InstallEffect,
         plan_policy: Option<crate::trust::SourcePolicy>,
     ) -> bool {
+        self.run_install_traced(scope, panel, generation, effect, plan_policy)
+            .is_some()
+    }
+
+    /// 同 [`Executor::run_install_with_policy`],但把这次派发的**请求身份**一并返回。
+    ///
+    /// 组合根据此把"真实操作开始"与随后回来的 `Outcome` 对上(如把一次应用操作包成一次
+    /// 任务运行,结束时结算用量——见 Digger Task 20)。返回 `None` = 该 effect 不由执行器
+    /// 处理(原生对话框/排期/跨面板刷新),没有请求身份可言。
+    pub fn run_install_traced(
+        &self,
+        scope: ScopeId,
+        panel: PanelInstanceId,
+        generation: u64,
+        effect: InstallEffect,
+        plan_policy: Option<crate::trust::SourcePolicy>,
+    ) -> Option<crate::request::RequestTicket> {
         match effect {
             InstallEffect::Plan(source) => {
                 let policy = plan_policy.unwrap_or(crate::trust::SourcePolicy::LOCAL_TRUSTED);
@@ -360,7 +378,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         },
                     }
                 });
-                true
+                Some(ticket)
             }
             InstallEffect::Probe => {
                 let ticket = self.requests.dispatch(
@@ -373,7 +391,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     let result = api.read().await.app_probe_runtimes().await;
                     Outcome::Runtimes { ticket, result }
                 });
-                true
+                Some(ticket)
             }
             InstallEffect::List => {
                 let ticket = self
@@ -383,7 +401,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     let result = api.read().await.app_list().await;
                     Outcome::List { ticket, result }
                 });
-                true
+                Some(ticket)
             }
             InstallEffect::Install { approved, source } => {
                 let ticket = self.requests.dispatch(
@@ -400,7 +418,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         detail: InstallDetail::None,
                     }
                 });
-                true
+                Some(ticket)
             }
             InstallEffect::Stop(id) => match AppId::new(id.clone()) {
                 Ok(app) => {
@@ -418,9 +436,9 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                             detail: InstallDetail::App(id),
                         }
                     });
-                    true
+                    Some(ticket)
                 }
-                Err(_) => true,
+                Err(_) => None,
             },
             InstallEffect::Rollback(id) => match AppId::new(id.clone()) {
                 Ok(app) => {
@@ -438,9 +456,9 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                             detail: InstallDetail::App(id),
                         }
                     });
-                    true
+                    Some(ticket)
                 }
-                Err(_) => true,
+                Err(_) => None,
             },
             InstallEffect::Uninstall(id, mode) => match AppId::new(id.clone()) {
                 Ok(app) => {
@@ -458,9 +476,9 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                             detail: InstallDetail::App(id),
                         }
                     });
-                    true
+                    Some(ticket)
                 }
-                Err(_) => true,
+                Err(_) => None,
             },
             InstallEffect::RuntimePlan(runtime) => {
                 let ticket = self.requests.dispatch(
@@ -484,7 +502,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         },
                     }
                 });
-                true
+                Some(ticket)
             }
             InstallEffect::InstallRuntime(plan) => {
                 let ticket = self.requests.dispatch(
@@ -501,7 +519,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         detail: InstallDetail::None,
                     }
                 });
-                true
+                Some(ticket)
             }
             InstallEffect::UninstallRuntime(runtime, version) => {
                 let ticket = self.requests.dispatch(
@@ -522,7 +540,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         detail: InstallDetail::None,
                     }
                 });
-                true
+                Some(ticket)
             }
             InstallEffect::FetchLogs(id, max_lines) => match AppId::new(id) {
                 Ok(app) => {
@@ -538,11 +556,11 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                             result,
                         }
                     });
-                    true
+                    Some(ticket)
                 }
-                Err(_) => true,
+                Err(_) => None,
             },
-            _ => false,
+            _ => None,
         }
     }
 }
