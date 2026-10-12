@@ -158,6 +158,56 @@ impl FakeHost {
         );
     }
 
+    /// 预设"探测运行时"返回宿主失败(带类别)。
+    pub fn on_probe_host_fail(&self, kind: AppErrorKind, message: impl Into<String>) {
+        self.canned
+            .lock()
+            .unwrap()
+            .insert("probe".into(), Canned::HostFail(kind, message.into()));
+    }
+
+    /// 预设某应用的回滚结果。
+    pub fn on_rollback(&self, id: &AppId, result: Result<(), AppApiError>) {
+        self.canned.lock().unwrap().insert(
+            format!("rollback:{}", id.as_str()),
+            canned_from_result(result, AppReply::Done),
+        );
+    }
+
+    /// 预设"出运行时安装计划"的结果。
+    pub fn on_runtime_plan(
+        &self,
+        result: Result<bytehost_apps::proto::RuntimeInstallPlan, AppApiError>,
+    ) {
+        let canned = match result {
+            Ok(plan) => Canned::Reply(AppReply::RuntimePlan {
+                plan: Box::new(plan),
+            }),
+            Err(AppApiError::Host(f)) => Canned::HostFail(f.kind, f.message),
+            Err(AppApiError::Transport(t)) => Canned::TransportFail(t),
+        };
+        self.canned
+            .lock()
+            .unwrap()
+            .insert("runtime_plan".into(), canned);
+    }
+
+    /// 预设"安装已批准运行时计划"的结果。
+    pub fn on_runtime_install(&self, result: Result<(), AppApiError>) {
+        self.canned.lock().unwrap().insert(
+            "runtime_install".into(),
+            canned_from_result(result, AppReply::Done),
+        );
+    }
+
+    /// 预设"卸载运行时"的结果。
+    pub fn on_runtime_uninstall(&self, result: Result<(), AppApiError>) {
+        self.canned.lock().unwrap().insert(
+            "runtime_uninstall".into(),
+            canned_from_result(result, AppReply::Done),
+        );
+    }
+
     /// 让订阅一建立就断开(模拟服务消失)。
     pub fn subscribe_disconnects(&self) {
         *self.subscribe_mode.lock().unwrap() = SubscribeMode::Disconnected;
@@ -200,7 +250,11 @@ impl FakeHost {
             AppRequest::Plan { .. } => "plan".to_string(),
             AppRequest::Install { .. } => "install".to_string(),
             AppRequest::Uninstall { .. } => "uninstall".to_string(),
+            AppRequest::Rollback { id } => format!("rollback:{}", id.as_str()),
             AppRequest::ProbeRuntimes => "probe".to_string(),
+            AppRequest::RuntimePlan { .. } => "runtime_plan".to_string(),
+            AppRequest::InstallRuntime { .. } => "runtime_install".to_string(),
+            AppRequest::UninstallRuntime { .. } => "runtime_uninstall".to_string(),
             _ => return None,
         };
         self.canned.lock().unwrap().get(&key).cloned()

@@ -51,11 +51,20 @@ pub enum Outcome {
     },
     /// 安装 / 卸载 / 回滚 / 探针等"完成型"结果。
     ///
-    /// `plan` 只在 `Effect::Plan` 时带出(出计划本身要返回计划正文);其余完成型操作为 `None`。
+    /// `detail` 只在需要正文或区分的动作上带出(出计划返回计划正文;探针返回运行时列表;
+    /// 停止/回滚/卸载带上目标应用 id 以便翻回正确的状态机消息);其余为 [`InstallDetail::None`]。
     Install {
         ticket: RequestTicket,
         result: Result<(), AppApiError>,
-        plan: Option<Box<bytehost_apps::plan::InstallPlan>>,
+        detail: InstallDetail,
+    },
+    /// 运行时探针(`Effect::Probe`)的结果:探测列表成功时不带 `Install`。
+    ///
+    /// 探针是唯一"成功要带回正文、失败也要区分"的运行时动作;单列一个变体,避免把
+    /// `Vec<RuntimeProbe>` 塞进只表达 `Result<(), AppApiError>` 的 `Install`。
+    Runtimes {
+        ticket: RequestTicket,
+        result: Result<Vec<bytehost_apps::proto::RuntimeProbe>, AppApiError>,
     },
     /// 应用服务就绪(异步启动完成):组合根据此把服务装进 `HostService`。
     ServiceReady(RequestTicket, Arc<InProcess>),
@@ -66,6 +75,24 @@ pub enum Outcome {
 /// 后台任务回信的统一出口(通常是 `proxy.send(...)`)。
 pub trait ReplySink: Send + Sync + 'static {
     fn send(&self, outcome: Outcome);
+}
+
+/// `Outcome::Install` 的正文/区分:出计划带回计划,停止/回滚/卸载带回目标应用 id 与动作种类,
+/// 其余完成型动作为 [`InstallDetail::None`]。
+///
+/// 状态机把"安装/停止/回滚/卸载"都表现为一次 `Result<(), Failure>`,但翻回消息所需的上下文不同
+/// (停止/卸载要 `ActionDone(id, kind, ..)`、回滚要 `RolledBack(id, ..)`、安装要 `InstallDone`);
+/// 这些上下文在这里**只编码一次**,组合根不再各自复刻。
+#[derive(Debug, Clone)]
+pub enum InstallDetail {
+    /// 无正文,动作种类由 [`InstallAction::from_key`] 决定。
+    None,
+    /// 出计划:`Effect::Plan` 返回的计划正文。
+    Plan(Box<bytehost_apps::plan::InstallPlan>),
+    /// 出运行时计划:`Effect::RuntimePlan` 返回的计划正文。
+    RuntimePlan(Box<bytehost_apps::proto::RuntimeInstallPlan>),
+    /// 停止/回滚/卸载:目标应用的稳定 id(翻回 `ActionDone`/`RolledBack` 用)。
+    App(String),
 }
 
 // `AppHostApi` 的实现(如 `InProcess`)未必 `Debug`;手写 `Debug` 不打印句柄本身。
@@ -111,6 +138,11 @@ impl std::fmt::Debug for Outcome {
                 .finish(),
             Outcome::Install { ticket, result, .. } => f
                 .debug_struct("Install")
+                .field("ticket", ticket)
+                .field("result", result)
+                .finish(),
+            Outcome::Runtimes { ticket, result } => f
+                .debug_struct("Runtimes")
                 .field("ticket", ticket)
                 .field("result", result)
                 .finish(),
@@ -319,12 +351,12 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         Ok(plan) => Outcome::Install {
                             ticket,
                             result: Ok(()),
-                            plan: Some(Box::new(plan)),
+                            detail: InstallDetail::Plan(Box::new(plan)),
                         },
                         Err(err) => Outcome::Install {
                             ticket,
                             result: Err(err),
-                            plan: None,
+                            detail: InstallDetail::None,
                         },
                     }
                 });
@@ -338,14 +370,8 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     RequestKey::Action(PROBE_ACTION),
                 );
                 self.spawn(move |api| async move {
-                    // 探针结果的形状(运行时列表)由 Task 14 的安装流状态机消费;这里只保证
-                    // 请求发出并保留身份——组合根拿到 `Install` 成功后再去取结果。
-                    let _ = api.read().await.app_probe_runtimes().await;
-                    Outcome::Install {
-                        ticket,
-                        result: Ok(()),
-                        plan: None,
-                    }
+                    let result = api.read().await.app_probe_runtimes().await;
+                    Outcome::Runtimes { ticket, result }
                 });
                 true
             }
@@ -371,12 +397,12 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     Outcome::Install {
                         ticket,
                         result,
-                        plan: None,
+                        detail: InstallDetail::None,
                     }
                 });
                 true
             }
-            InstallEffect::Stop(id) => match AppId::new(id) {
+            InstallEffect::Stop(id) => match AppId::new(id.clone()) {
                 Ok(app) => {
                     let ticket = self.requests.dispatch(
                         scope,
@@ -389,14 +415,14 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         Outcome::Install {
                             ticket,
                             result,
-                            plan: None,
+                            detail: InstallDetail::App(id),
                         }
                     });
                     true
                 }
                 Err(_) => true,
             },
-            InstallEffect::Rollback(id) => match AppId::new(id) {
+            InstallEffect::Rollback(id) => match AppId::new(id.clone()) {
                 Ok(app) => {
                     let ticket = self.requests.dispatch(
                         scope,
@@ -409,14 +435,14 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         Outcome::Install {
                             ticket,
                             result,
-                            plan: None,
+                            detail: InstallDetail::App(id),
                         }
                     });
                     true
                 }
                 Err(_) => true,
             },
-            InstallEffect::Uninstall(id, mode) => match AppId::new(id) {
+            InstallEffect::Uninstall(id, mode) => match AppId::new(id.clone()) {
                 Ok(app) => {
                     let ticket = self.requests.dispatch(
                         scope,
@@ -429,13 +455,75 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                         Outcome::Install {
                             ticket,
                             result,
-                            plan: None,
+                            detail: InstallDetail::App(id),
                         }
                     });
                     true
                 }
                 Err(_) => true,
             },
+            InstallEffect::RuntimePlan(runtime) => {
+                let ticket = self.requests.dispatch(
+                    scope,
+                    panel,
+                    generation,
+                    RequestKey::Action(RUNTIME_PLAN_ACTION),
+                );
+                self.spawn(move |api| async move {
+                    let plan = api.read().await.app_runtime_plan(runtime).await;
+                    match plan {
+                        Ok(plan) => Outcome::Install {
+                            ticket,
+                            result: Ok(()),
+                            detail: InstallDetail::RuntimePlan(Box::new(plan)),
+                        },
+                        Err(err) => Outcome::Install {
+                            ticket,
+                            result: Err(err),
+                            detail: InstallDetail::None,
+                        },
+                    }
+                });
+                true
+            }
+            InstallEffect::InstallRuntime(plan) => {
+                let ticket = self.requests.dispatch(
+                    scope,
+                    panel,
+                    generation,
+                    RequestKey::Action(RUNTIME_INSTALL_ACTION),
+                );
+                self.spawn(move |api| async move {
+                    let result = api.read().await.app_install_runtime(*plan).await;
+                    Outcome::Install {
+                        ticket,
+                        result,
+                        detail: InstallDetail::None,
+                    }
+                });
+                true
+            }
+            InstallEffect::UninstallRuntime(runtime, version) => {
+                let ticket = self.requests.dispatch(
+                    scope,
+                    panel,
+                    generation,
+                    RequestKey::Action(RUNTIME_UNINSTALL_ACTION),
+                );
+                self.spawn(move |api| async move {
+                    let result = api
+                        .read()
+                        .await
+                        .app_uninstall_runtime(runtime, &version)
+                        .await;
+                    Outcome::Install {
+                        ticket,
+                        result,
+                        detail: InstallDetail::None,
+                    }
+                });
+                true
+            }
             InstallEffect::FetchLogs(id, max_lines) => match AppId::new(id) {
                 Ok(app) => {
                     let slot = AppKeyId::from_app_id(&app).expect("valid id interns");
@@ -493,12 +581,15 @@ const STOP_ACTION: u64 = u64::MAX - 3;
 const ROLLBACK_ACTION: u64 = u64::MAX - 4;
 const PROBE_ACTION: u64 = u64::MAX - 5;
 const PLAN_ACTION: u64 = u64::MAX - 6;
+const RUNTIME_PLAN_ACTION: u64 = u64::MAX - 7;
+const RUNTIME_INSTALL_ACTION: u64 = u64::MAX - 8;
+const RUNTIME_UNINSTALL_ACTION: u64 = u64::MAX - 9;
 
 /// 一次"完成型" `Outcome::Install` 对应的安装流请求种类。
 ///
-/// `Outcome::Install` 不带请求种类标签(安装/停止/回滚/卸载/探针/出计划共用它),组合根要把它翻回
-/// 正确的状态机消息就得知道是哪种;种类编码在 [`RequestTicket::key`](crate::request::RequestKey) 的
-/// action id 里。这个分类就是那条映射,**只有一份**,组合根不再各自复刻 action id 常量。
+/// `Outcome::Install` 不带请求种类标签(安装/停止/回滚/卸载/出计划/运行时动作共用它),组合根要把它
+/// 翻回正确的状态机消息就得知道是哪种;种类编码在 [`RequestTicket::key`](crate::request::RequestKey)
+/// 的 action id 里。这个分类就是那条映射,**只有一份**,组合根不再各自复刻 action id 常量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallAction {
     /// 出安装计划(`Effect::Plan`)。
@@ -511,8 +602,14 @@ pub enum InstallAction {
     Rollback,
     /// 卸载(`Effect::Uninstall`)。
     Uninstall,
-    /// 运行时探针(`Effect::Probe`)。
+    /// 运行时探针(`Effect::Probe`;结果走 `Outcome::Runtimes`)。
     Probe,
+    /// 出运行时安装计划(`Effect::RuntimePlan`)。
+    RuntimePlan,
+    /// 安装运行时(`Effect::InstallRuntime`)。
+    RuntimeInstall,
+    /// 卸载运行时(`Effect::UninstallRuntime`)。
+    RuntimeUninstall,
     /// 应用服务启动(`Executor::start_service`)。
     Genesis,
 }
@@ -530,6 +627,9 @@ impl InstallAction {
             ROLLBACK_ACTION => Self::Rollback,
             UNINSTALL_ACTION => Self::Uninstall,
             PROBE_ACTION => Self::Probe,
+            RUNTIME_PLAN_ACTION => Self::RuntimePlan,
+            RUNTIME_INSTALL_ACTION => Self::RuntimeInstall,
+            RUNTIME_UNINSTALL_ACTION => Self::RuntimeUninstall,
             GENESIS_ACTION => Self::Genesis,
             _ => return None,
         })
@@ -550,6 +650,9 @@ mod action_tests {
             (ROLLBACK_ACTION, InstallAction::Rollback),
             (UNINSTALL_ACTION, InstallAction::Uninstall),
             (PROBE_ACTION, InstallAction::Probe),
+            (RUNTIME_PLAN_ACTION, InstallAction::RuntimePlan),
+            (RUNTIME_INSTALL_ACTION, InstallAction::RuntimeInstall),
+            (RUNTIME_UNINSTALL_ACTION, InstallAction::RuntimeUninstall),
             (GENESIS_ACTION, InstallAction::Genesis),
         ] {
             assert_eq!(

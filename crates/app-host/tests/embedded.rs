@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytehost_apps::id::AppId;
+use bytehost_apps::registry::UninstallMode;
 use bytehost_apps::state::ObservedState;
 use bytehost_client::AppChange;
 use bytehost_client::AppHostApi;
@@ -21,7 +22,7 @@ use bytehost_client::in_process::InProcess;
 use bytehost_panel::host::{PanelEffect, PanelMessage, PanelState};
 use bytehost_panel::install::Effect as InstallEffect;
 use digger_app_host::AppKeyId;
-use digger_app_host::effects::{Executor, Outcome, ReplySink};
+use digger_app_host::effects::{Executor, InstallDetail, Outcome, ReplySink};
 use digger_app_host::request::{PanelInstanceId, RequestKey, RequestTable, ScopeId};
 use digger_app_host::service::{HostService, ShutdownOutcome};
 use digger_app_host::subscription::change_to_message;
@@ -381,10 +382,11 @@ fn an_install_effect_is_dispatched_and_routed_back_with_identity() {
 
     assert!(exec.run_install(SCOPE, PANEL, 0, InstallEffect::Probe));
     let outcome = rt.block_on(rx.recv()).expect("探针结果");
-    let Outcome::Install { ticket, result, .. } = outcome else {
-        panic!("期望 Install,得到 {outcome:?}");
+    let Outcome::Runtimes { ticket, result } = outcome else {
+        panic!("期望 Runtimes,得到 {outcome:?}");
     };
-    assert!(result.is_ok());
+    // fake 未预设探测 → 宿主/传输失败也带身份回喂(不是静默成功)。
+    assert!(result.is_err());
     assert!(requests.accept(ticket), "探针结果带回信身份");
 }
 
@@ -429,4 +431,117 @@ fn a_pushed_change_reaches_the_state_machine_as_a_refresh() {
         vec![PanelEffect::FetchList],
         "推送的变更转成消息后触发一次刷新"
     );
+}
+
+/// 运行时的三条完成型 effect 各带回信身份与对应的 [`InstallAction`];探针带回探测列表。
+/// 一份最小的运行时安装计划(fake 用)。
+fn runtime_plan() -> bytehost_apps::proto::RuntimeInstallPlan {
+    bytehost_apps::proto::RuntimeInstallPlan {
+        runtime: bytehost_apps::proto::ManagedRuntime::Python,
+        versions: vec![("uv".into(), "0.4.0".into())],
+        downloads: Vec::new(),
+        dest: "/tmp/rt".into(),
+        will_do: vec!["装 uv".into()],
+    }
+}
+
+#[test]
+fn runtime_effects_carry_their_action_identity_and_payload() {
+    use digger_app_host::effects::InstallAction;
+    use digger_app_host::request::RequestKey;
+
+    let rt = rt();
+    let _g = rt.enter();
+    let fake = FakeHost::new();
+    fake.on_probe(vec![]);
+    fake.on_runtime_plan(Ok(runtime_plan()));
+    let requests = Arc::new(RequestTable::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink: Arc<dyn ReplySink> = Arc::new(ChannelSink(tx));
+    let host = HostService::with_api(fake, None);
+    let exec = Executor::new(host.api(), requests.clone(), sink, host.cancel_token());
+
+    // 探针:成功带回 `Runtimes`,身份落 `Action(PROBE_ACTION)`。
+    assert!(exec.run_install(SCOPE, PANEL, 0, InstallEffect::Probe));
+    let outcome = rt.block_on(rx.recv()).expect("探针结果");
+    let Outcome::Runtimes { ticket, result } = outcome else {
+        panic!("期望 Runtimes,得到 {outcome:?}");
+    };
+    assert_eq!(result.unwrap(), Vec::new());
+    assert!(matches!(ticket.key, RequestKey::Action(_)));
+    assert_eq!(
+        InstallAction::from_key(ticket.key),
+        Some(InstallAction::Probe)
+    );
+    assert!(requests.accept(ticket));
+
+    // 运行时计划:成功带回 `RuntimePlan` 正文,身份落 RuntimePlan。
+    assert!(exec.run_install(
+        SCOPE,
+        PANEL,
+        0,
+        InstallEffect::RuntimePlan(bytehost_apps::proto::ManagedRuntime::Python)
+    ));
+    let outcome = rt.block_on(rx.recv()).expect("运行时计划结果");
+    let Outcome::Install {
+        ticket,
+        result,
+        detail,
+    } = outcome
+    else {
+        panic!("期望 Install,得到 {outcome:?}");
+    };
+    assert!(result.is_ok());
+    assert!(matches!(detail, InstallDetail::RuntimePlan(_)));
+    assert_eq!(
+        InstallAction::from_key(ticket.key),
+        Some(InstallAction::RuntimePlan)
+    );
+    assert!(requests.accept(ticket));
+}
+
+/// 停止/回滚/卸载各自是独立的动作种类,并把目标应用 id 带回(`InstallDetail::App`)。
+#[test]
+fn per_app_actions_carry_their_kind_and_target_id() {
+    use digger_app_host::effects::InstallAction;
+
+    let rt = rt();
+    let _g = rt.enter();
+    let fake = FakeHost::new();
+    let id = AppId::new("notes").unwrap();
+    fake.on_stop(&id, Ok(()));
+    fake.on_rollback(&id, Ok(()));
+    fake.on_uninstall(Ok(()));
+    let requests = Arc::new(RequestTable::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink: Arc<dyn ReplySink> = Arc::new(ChannelSink(tx));
+    let host = HostService::with_api(fake, None);
+    let exec = Executor::new(host.api(), requests.clone(), sink, host.cancel_token());
+
+    for (effect, expected) in [
+        (InstallEffect::Stop("notes".into()), InstallAction::Stop),
+        (
+            InstallEffect::Rollback("notes".into()),
+            InstallAction::Rollback,
+        ),
+        (
+            InstallEffect::Uninstall("notes".into(), UninstallMode::Program),
+            InstallAction::Uninstall,
+        ),
+    ] {
+        assert!(exec.run_install(SCOPE, PANEL, 0, effect));
+        let outcome = rt.block_on(rx.recv()).expect("动作结果");
+        let Outcome::Install {
+            ticket,
+            result,
+            detail,
+        } = outcome
+        else {
+            panic!("期望 Install,得到 {outcome:?}");
+        };
+        assert!(result.is_ok());
+        assert!(matches!(detail, InstallDetail::App(ref s) if s == "notes"));
+        assert_eq!(InstallAction::from_key(ticket.key), Some(expected));
+        assert!(requests.accept(ticket));
+    }
 }

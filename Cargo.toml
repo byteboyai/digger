@@ -35,4 +35,6 @@ bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1"
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
 
 iced = { version = "0.14", default-features = false, features = ["tokio"] }
+# iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。
+iced_core = { version = "0.14", default-features = false }
 wry = "0.55.1"
