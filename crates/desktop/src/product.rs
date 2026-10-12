@@ -643,10 +643,12 @@ mod tests {
         assert!(text.contains("schema_version"), "迁移落盘须为稳定 schema");
         let (again, blocked) = load_layout(&path, &test_catalog()).layout();
         assert!(blocked.is_none());
-        assert!(again
-            .retained_unknown
-            .iter()
-            .any(|p| p.as_str() == "digger.removed_panel"));
+        assert!(
+            again
+                .retained_unknown
+                .iter()
+                .any(|p| p.as_str() == "digger.removed_panel")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
