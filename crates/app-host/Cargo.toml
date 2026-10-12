@@ -1,0 +1,19 @@
+[package]
+name = "digger-app-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Digger 应用宿主适配层:独占进程内 AppService/InProcess,把 bytehost-panel 的状态机接上真实的异步执行器、订阅与生命周期。属于宿主适配层(白名单),可以依赖 bytehost-*。"
+
+[dependencies]
+# server:AppService 与 shutdown_reporting;in-process:进程内 AppHostApi 实现。
+bytehost-apps = { workspace = true, features = ["server"] }
+bytehost-client = { workspace = true, features = ["in-process"] }
+bytehost-panel.workspace = true
+
+tokio = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

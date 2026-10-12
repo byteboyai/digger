@@ -26,6 +26,11 @@ directories = "6"
 bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
 
+# 应用宿主平台:注册表/生命周期、与传输无关的客户端 API、与界面框架无关的面板状态机。
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+
 # 组件库(Dozer 与 Digger 共用);iced 版本必须与 byteui 一致,一起升。
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
 
