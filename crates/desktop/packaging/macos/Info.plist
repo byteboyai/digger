@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Digger</string>
+  <key>CFBundleDisplayName</key>
+  <string>Digger</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.byteboy.digger</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleExecutable</key>
+  <string>digger</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <!-- Digger 与 Dozer 同栈:内嵌 wry/WKWebView 子视图(编辑器 host、应用区)。
+       本地 web 资源经 app 自定义协议加载;放开 ATS 以便开发期 http 资源。
+       非 App Store 分发,无上架合规约束。 -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+  </dict>
+  <!-- 图标:本期无 Digger 品牌资源,暂不设 CFBundleIconFile,
+       系统用默认图标。品牌图标就绪后补 AppIcon.icns 并在此声明。 -->
+</dict>
+</plist>

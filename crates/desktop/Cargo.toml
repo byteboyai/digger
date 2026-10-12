@@ -35,6 +35,8 @@ iced.workspace = true
 iced_core.workspace = true
 # 共享面板库的 `PanelDisplay` 接缝用 iced 的 widget/renderer 具名类型;与 iced 同版本。
 iced_widget = { version = "0.14", default-features = false }
+# 渲染后端:iced_renderer 在 release 下必须启用 wgpu/tiny-skia 之一,否则 `compile_error!`。
+# 经 `iced` facade 的 `wgpu` feature 启用(与 Dozer 同栈,见 workspace 依赖)。
 iced_renderer = { version = "0.14", default-features = false }
 wry.workspace = true
 objc2-foundation.workspace = true

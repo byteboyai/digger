@@ -604,6 +604,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Task 22 升级演练:无 `schema_version` 的历史布局经产品适配器迁移为可写布局,
+    /// 未注册的 id 进 `retained_unknown`(不丢、不阻塞开窗)。
+    #[test]
+    fn a_legacy_layout_migrates_to_writable_and_retains_unknown_ids() {
+        let dir = test_temp_dir("legacy-migrate");
+        let path = dir.join("layout.json");
+        std::fs::write(
+            &path,
+            r#"{ "rails": [
+                { "items": ["digger.info", "digger.usage", "digger.removed_panel"] },
+                { "items": ["digger.apps"] }
+            ] }"#,
+        )
+        .unwrap();
+
+        let (layout, blocked) = load_layout(&path, &test_catalog()).layout();
+        assert!(blocked.is_none(), "历史格式迁移后应可写:{blocked:?}");
+        // 两个已注册面板(`digger.info`)落在布局里;未知 id 不静默丢弃。
+        assert!(layout.visible_panel_count() >= 2, "已注册面板应保留");
+        let ids: Vec<String> = layout
+            .rails
+            .iter()
+            .flat_map(|r| r.items.iter().map(|p| p.as_str().to_owned()))
+            .collect();
+        assert!(ids.iter().any(|id| id == "digger.info"));
+        assert!(
+            layout
+                .retained_unknown
+                .iter()
+                .any(|p| p.as_str() == "digger.removed_panel"),
+            "未注册 id 必须进 retained_unknown:{:?}",
+            layout.retained_unknown
+        );
+        // 退出落盘:写出稳定 schema,再次读取仍可写且保留项仍在。
+        atomic_save_layout(&path, &layout).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("schema_version"), "迁移落盘须为稳定 schema");
+        let (again, blocked) = load_layout(&path, &test_catalog()).layout();
+        assert!(blocked.is_none());
+        assert!(again
+            .retained_unknown
+            .iter()
+            .any(|p| p.as_str() == "digger.removed_panel"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 复盘发现 5:稳定 schema 文件不走历史迁移,宽度与保留项原样往返。
     #[test]
     fn a_stable_layout_keeps_its_width_and_retained_items() {

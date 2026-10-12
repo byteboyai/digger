@@ -47,7 +47,7 @@ dozer-model = { git = "https://github.com/byteboyai/dozer" }
 dozer-services = { git = "https://github.com/byteboyai/dozer" }
 dozer-panel-usage = { git = "https://github.com/byteboyai/dozer" }
 
-iced = { version = "0.14", default-features = false, features = ["tokio"] }
+iced = { version = "0.14", default-features = false, features = ["tokio", "wgpu"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。
 iced_core = { version = "0.14", default-features = false }
 wry = "0.55.1"
