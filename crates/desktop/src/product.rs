@@ -35,6 +35,8 @@ fn apps_panel_id() -> PanelId {
 pub enum Msg {
     WindowReady(window::Id, Size),
     SelectPanel(ActivePanel),
+    /// 「应用」面板的消息(Task 14)。
+    Apps(crate::apps::Message),
     CloseRequested,
     Exit,
 }
@@ -56,6 +58,8 @@ pub struct ProductShell {
     layout: Option<Layout>,
     layout_path: PathBuf,
     active: ActivePanel,
+    /// 「应用」面板的组合根(状态机 + 执行器 + 内嵌应用服务)。
+    apps: crate::apps::AppsState,
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
 }
@@ -89,6 +93,7 @@ impl ProductShell {
             layout,
             layout_path,
             active: ActivePanel::Info,
+            apps: crate::apps::AppsState::new(),
             boot_note: "尚未打开 Project;业务服务未接通(应用服务在 Task 12/13 接入)。".into(),
         }
     }
@@ -205,8 +210,16 @@ impl Product<Msg> for ProductShell {
             }
             Msg::SelectPanel(panel) => {
                 self.active = panel;
+                // 首次进入「应用」面板:触发一次探测 + 拉列表(Task 14)。
+                if panel == ActivePanel::Apps {
+                    return self
+                        .apps
+                        .update(crate::apps::Message::Opened)
+                        .map(Msg::Apps);
+                }
                 Task::none()
             }
+            Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
             Msg::CloseRequested | Msg::Exit => {
                 self.save_layout();
                 iced::exit()
@@ -283,21 +296,7 @@ impl ProductShell {
     }
 
     fn apps_view(&self) -> Element<'_, Msg> {
-        use iced::widget::{column, text};
-        use iced::{Alignment, Length};
-
-        let tokens = color::current();
-        column![
-            text("应用区占位")
-                .size(font::subtitle())
-                .color(tokens.cream),
-            text("应用安装 / 运行 / 管理服务尚未接通(Task 12/13)。").color(tokens.gold),
-            text("此处不会伪造任何安装或运行能力。").color(tokens.dim),
-        ]
-        .spacing(8)
-        .align_x(Alignment::Start)
-        .width(Length::Fill)
-        .into()
+        self.apps.view().map(Msg::Apps)
     }
 }
 
@@ -321,12 +320,18 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 
     let shell = ProductShell::new();
     let size = shell.size;
-    let t = bytehost_desktop::panel::oldest_window().then(move |id| match id {
+    // 应用面板后台结果回流:一次性流出接收端,持续到进程结束(与窗口尺寸任务并行)。
+    use iced::futures::StreamExt;
+    let reply_task = match crate::apps::take_reply_receiver(&shell.apps.reply_receiver()) {
+        Some(rx) => iced::Task::stream(crate::apps::reply_stream(rx).map(Msg::Apps)),
+        None => Task::none(),
+    };
+    let size_task = bytehost_desktop::panel::oldest_window().then(move |id| match id {
         Some(id) => bytehost_desktop::panel::window_size(id)
             .map(move |s| Msg::WindowReady(id, s.unwrap_or(size))),
         None => Task::none(),
     });
-    (shell, t)
+    (shell, Task::batch([size_task, reply_task]))
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@
 //! 组合根委托:`product::boot` 建产品壳并设主题,`Product::update`/`view`
 //! 经宿主泛型包装驱动(`HostMessage<M>` 证明产品消息不进入宿主 enum)。
 
+mod apps;
 mod paths;
 mod product;
 

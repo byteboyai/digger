@@ -14,6 +14,8 @@ bytehost-panel.workspace = true
 
 tokio = { workspace = true }
 serde = { workspace = true }
+# testing.rs 的 plan() 便捷构造用(该模块是库的一部分,供集成测试复用)。
+serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

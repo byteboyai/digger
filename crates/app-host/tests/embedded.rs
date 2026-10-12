@@ -252,6 +252,112 @@ fn a_real_in_process_service_is_reachable_through_the_generic_host() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn the_start_service_task_installs_the_backend_before_announcing_ready() {
+    let rt = rt();
+    let _g = rt.enter();
+    let root = temp_root();
+
+    let requests = Arc::new(RequestTable::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink: Arc<dyn ReplySink> = Arc::new(ChannelSink(tx));
+    let mut host = HostService::starting();
+    let api = host.api();
+    let exec = Executor::new(api.clone(), requests, sink, host.cancel_token());
+
+    exec.start_service(SCOPE, PANEL, root.clone());
+
+    // 等回信:它到达时,共享后端必须已是真服务(而不是"启动中"占位)。
+    let outcome = rt.block_on(rx.recv()).expect("应收到 ServiceReady");
+    match &outcome {
+        Outcome::ServiceReady(_, in_process) => host.install_service(in_process.clone()),
+        other => panic!("期望 ServiceReady,得到 {other:?}"),
+    }
+    let apps = rt
+        .block_on(async { api.read().await.app_list().await })
+        .expect("真服务可用:全新数据根返回空列表");
+    assert!(apps.is_empty(), "全新数据根没有已安装应用");
+
+    rt.block_on(host.await_shutdown());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_real_static_app_installs_from_a_local_source_and_shows_in_the_list() {
+    use bytehost_apps::plan::{Approval, Provenance, TrustLevel};
+    use bytehost_apps::proto::AppSource;
+
+    let rt = rt();
+    let _g = rt.enter();
+    let root = temp_root();
+    // 造一个真实的本机静态应用:manifest.toml + 入口页。
+    let src = temp_root();
+    std::fs::write(
+        src.join("manifest.toml"),
+        r#"schema_version = 1
+min_host_version = "0.1.0"
+id = "notes"
+name = "Notes"
+version = "0.1.0"
+
+[presentation]
+entrypoint = "main"
+
+[entrypoints.main]
+type = "web"
+path = "/"
+
+[runtime]
+kind = "static_web"
+source = "web/"
+
+[permissions]
+clipboard = "none"
+downloads = "deny"
+popups = "deny"
+
+[permissions.network]
+outbound = "none"
+
+[permissions.filesystem]
+data = "none"
+"#,
+    )
+    .expect("写清单");
+    std::fs::create_dir_all(src.join("web")).unwrap();
+    std::fs::write(
+        src.join("web/index.html"),
+        "<!doctype html><title>Notes</title>",
+    )
+    .unwrap();
+
+    let api = Arc::new(rt.block_on(InProcess::start(&root)));
+    let source = AppSource::LocalDir { path: src.clone() };
+
+    // 组合根按 Local 来源策略出计划。
+    let plan = rt
+        .block_on(api.app_plan(source.clone(), Provenance::Local, TrustLevel::Trusted))
+        .expect("出计划");
+    assert_eq!(plan.app_id.as_str(), "notes");
+    assert!(matches!(plan.provenance, Provenance::Local));
+
+    // 人明确批准后安装。
+    let approved = plan.approve(Approval {
+        approver: "dozer-gui".into(),
+        approved_ms: 1_000,
+    });
+    rt.block_on(api.app_install(approved, source))
+        .expect("安装");
+
+    // 安装后列表能看到它(稳定 id)。
+    let apps = rt.block_on(api.app_list()).expect("列表");
+    assert_eq!(apps.len(), 1, "装好一个:{apps:?}");
+    assert_eq!(apps[0].id.as_str(), "notes");
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(src);
+}
+
 fn temp_root() -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -275,7 +381,7 @@ fn an_install_effect_is_dispatched_and_routed_back_with_identity() {
 
     assert!(exec.run_install(SCOPE, PANEL, 0, InstallEffect::Probe));
     let outcome = rt.block_on(rx.recv()).expect("探针结果");
-    let Outcome::Install { ticket, result } = outcome else {
+    let Outcome::Install { ticket, result, .. } = outcome else {
         panic!("期望 Install,得到 {outcome:?}");
     };
     assert!(result.is_ok());

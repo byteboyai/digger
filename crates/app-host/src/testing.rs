@@ -122,6 +122,42 @@ impl FakeHost {
         );
     }
 
+    /// 预设"出安装计划"的结果。
+    pub fn on_plan(&self, result: Result<bytehost_apps::plan::InstallPlan, AppApiError>) {
+        let canned = match result {
+            Ok(plan) => Canned::Reply(AppReply::Plan {
+                plan: Box::new(plan),
+            }),
+            Err(AppApiError::Host(f)) => Canned::HostFail(f.kind, f.message),
+            Err(AppApiError::Transport(t)) => Canned::TransportFail(t),
+        };
+        self.canned.lock().unwrap().insert("plan".into(), canned);
+    }
+
+    /// 预设"安装已批准计划"的结果。
+    pub fn on_install(&self, result: Result<(), AppApiError>) {
+        self.canned
+            .lock()
+            .unwrap()
+            .insert("install".into(), canned_from_result(result, AppReply::Done));
+    }
+
+    /// 预设"卸载"的结果。
+    pub fn on_uninstall(&self, result: Result<(), AppApiError>) {
+        self.canned.lock().unwrap().insert(
+            "uninstall".into(),
+            canned_from_result(result, AppReply::Done),
+        );
+    }
+
+    /// 预设"探测运行时"的结果。
+    pub fn on_probe(&self, runtimes: Vec<bytehost_apps::proto::RuntimeProbe>) {
+        self.canned.lock().unwrap().insert(
+            "probe".into(),
+            Canned::Reply(AppReply::Runtimes { runtimes }),
+        );
+    }
+
     /// 让订阅一建立就断开(模拟服务消失)。
     pub fn subscribe_disconnects(&self) {
         *self.subscribe_mode.lock().unwrap() = SubscribeMode::Disconnected;
@@ -161,6 +197,10 @@ impl FakeHost {
             AppRequest::Start { id } => format!("start:{}", id.as_str()),
             AppRequest::Stop { id } => format!("stop:{}", id.as_str()),
             AppRequest::Logs { id, .. } => format!("logs:{}", id.as_str()),
+            AppRequest::Plan { .. } => "plan".to_string(),
+            AppRequest::Install { .. } => "install".to_string(),
+            AppRequest::Uninstall { .. } => "uninstall".to_string(),
+            AppRequest::ProbeRuntimes => "probe".to_string(),
             _ => return None,
         };
         self.canned.lock().unwrap().get(&key).cloned()
@@ -218,6 +258,37 @@ impl AppHostApi for FakeHost {
             }
         }
     }
+}
+
+/// 便捷:造一份 [`InstallPlan`](测试用;不经过服务端重新核对,仅用于驱动 UI 状态机)。
+///
+/// `kind` 是运行方式(`static_web`/`node`/`python`);`trust`/`provenance` 决定产品策略门的结果。
+pub fn plan(
+    id: &str,
+    version: (u32, u32, u32),
+    kind: &str,
+    trust: bytehost_apps::plan::TrustLevel,
+    provenance: bytehost_apps::plan::Provenance,
+) -> bytehost_apps::plan::InstallPlan {
+    use bytehost_apps::id::Version;
+    let version = Version::new(version.0, version.1, version.2);
+    serde_json::from_value(serde_json::json!({
+        "app_id": id,
+        "name": format!("name-{id}"),
+        "version": version.to_string(),
+        "upgrading_from": null,
+        "provenance": provenance,
+        "trust": trust,
+        "runtime_kind": kind,
+        "manifest_digest": "manifest-digest",
+        "source_digest": "source-digest",
+        "requested": {},
+        "enforcement": [],
+        "permission_diff": [],
+        "will_run": ["nothing"],
+        "source_info": { "kind": "local_dir", "display": format!("/tmp/{id}") }
+    }))
+    .expect("valid InstallPlan json")
 }
 
 /// 便捷:造一份最小的 [`AppSummary`](测试用)。

@@ -50,9 +50,12 @@ pub enum Outcome {
         result: Result<(String, bool), AppApiError>,
     },
     /// 安装 / 卸载 / 回滚 / 探针等"完成型"结果。
+    ///
+    /// `plan` 只在 `Effect::Plan` 时带出(出计划本身要返回计划正文);其余完成型操作为 `None`。
     Install {
         ticket: RequestTicket,
         result: Result<(), AppApiError>,
+        plan: Option<Box<bytehost_apps::plan::InstallPlan>>,
     },
     /// 应用服务就绪(异步启动完成):组合根据此把服务装进 `HostService`。
     ServiceReady(RequestTicket, Arc<InProcess>),
@@ -106,7 +109,7 @@ impl std::fmt::Debug for Outcome {
                 .field("app", app)
                 .field("result", result)
                 .finish(),
-            Outcome::Install { ticket, result } => f
+            Outcome::Install { ticket, result, .. } => f
                 .debug_struct("Install")
                 .field("ticket", ticket)
                 .field("result", result)
@@ -275,6 +278,9 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
     ///
     /// 只覆盖安装流里"要发请求"的那部分;**审批门(`install.rs` 的状态机)仍由组合根把守**——
     /// 执行器只负责把**已批准**的请求发出去并带回信身份。
+    ///
+    /// `plan_policy` 只在 `Effect::Plan` 时需要:状态机的 `Effect::Plan(AppSource)` 不带产品信任级别,
+    /// 组合根按用户选中的来源算出 [`SourcePolicy`](crate::trust::SourcePolicy) 传进来;其余 effect 忽略它。
     pub fn run_install(
         &self,
         scope: ScopeId,
@@ -282,7 +288,48 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
         generation: u64,
         effect: InstallEffect,
     ) -> bool {
+        self.run_install_with_policy(scope, panel, generation, effect, None)
+    }
+
+    /// 同 [`Executor::run_install`],但可带出计划请求的产品策略(见上)。
+    pub fn run_install_with_policy(
+        &self,
+        scope: ScopeId,
+        panel: PanelInstanceId,
+        generation: u64,
+        effect: InstallEffect,
+        plan_policy: Option<crate::trust::SourcePolicy>,
+    ) -> bool {
         match effect {
+            InstallEffect::Plan(source) => {
+                let policy = plan_policy.unwrap_or(crate::trust::SourcePolicy::LOCAL_TRUSTED);
+                let ticket = self.requests.dispatch(
+                    scope,
+                    panel,
+                    generation,
+                    RequestKey::Action(PLAN_ACTION),
+                );
+                self.spawn(move |api| async move {
+                    let plan = api
+                        .read()
+                        .await
+                        .app_plan(source, policy.provenance, policy.trust)
+                        .await;
+                    match plan {
+                        Ok(plan) => Outcome::Install {
+                            ticket,
+                            result: Ok(()),
+                            plan: Some(Box::new(plan)),
+                        },
+                        Err(err) => Outcome::Install {
+                            ticket,
+                            result: Err(err),
+                            plan: None,
+                        },
+                    }
+                });
+                true
+            }
             InstallEffect::Probe => {
                 let ticket = self.requests.dispatch(
                     scope,
@@ -297,6 +344,7 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     Outcome::Install {
                         ticket,
                         result: Ok(()),
+                        plan: None,
                     }
                 });
                 true
@@ -320,7 +368,11 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                 );
                 self.spawn(move |api| async move {
                     let result = api.read().await.app_install(*approved, source).await;
-                    Outcome::Install { ticket, result }
+                    Outcome::Install {
+                        ticket,
+                        result,
+                        plan: None,
+                    }
                 });
                 true
             }
@@ -334,7 +386,11 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     );
                     self.spawn(move |api| async move {
                         let result = api.read().await.app_stop(app).await;
-                        Outcome::Install { ticket, result }
+                        Outcome::Install {
+                            ticket,
+                            result,
+                            plan: None,
+                        }
                     });
                     true
                 }
@@ -350,7 +406,11 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     );
                     self.spawn(move |api| async move {
                         let result = api.read().await.app_rollback(app).await;
-                        Outcome::Install { ticket, result }
+                        Outcome::Install {
+                            ticket,
+                            result,
+                            plan: None,
+                        }
                     });
                     true
                 }
@@ -366,7 +426,11 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                     );
                     self.spawn(move |api| async move {
                         let result = api.read().await.app_uninstall(app, mode).await;
-                        Outcome::Install { ticket, result }
+                        Outcome::Install {
+                            ticket,
+                            result,
+                            plan: None,
+                        }
                     });
                     true
                 }
@@ -410,9 +474,14 @@ impl Executor<InProcess> {
             .requests
             .dispatch(scope, panel, 0, RequestKey::Action(GENESIS_ACTION));
         let sink = self.sink.clone();
+        let api = self.api.clone();
         tokio::spawn(async move {
-            let in_process = InProcess::start(&root).await;
-            sink.send(Outcome::ServiceReady(ticket, Arc::new(in_process)));
+            let in_process = Arc::new(InProcess::start(&root).await);
+            // 在 tokio 工作线程里换后端:窗口线程不能阻塞等锁。`InProcess` 不可 Clone,拿内部
+            // 的 `Arc<AppService>` 重建等价实例后写入共享锁;此后所有请求走真服务。
+            let rebuilt = InProcess::new(in_process.service().clone());
+            *api.write().await = rebuilt;
+            sink.send(Outcome::ServiceReady(ticket, in_process));
         });
     }
 }
@@ -423,3 +492,76 @@ const UNINSTALL_ACTION: u64 = u64::MAX - 2;
 const STOP_ACTION: u64 = u64::MAX - 3;
 const ROLLBACK_ACTION: u64 = u64::MAX - 4;
 const PROBE_ACTION: u64 = u64::MAX - 5;
+const PLAN_ACTION: u64 = u64::MAX - 6;
+
+/// 一次"完成型" `Outcome::Install` 对应的安装流请求种类。
+///
+/// `Outcome::Install` 不带请求种类标签(安装/停止/回滚/卸载/探针/出计划共用它),组合根要把它翻回
+/// 正确的状态机消息就得知道是哪种;种类编码在 [`RequestTicket::key`](crate::request::RequestKey) 的
+/// action id 里。这个分类就是那条映射,**只有一份**,组合根不再各自复刻 action id 常量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallAction {
+    /// 出安装计划(`Effect::Plan`)。
+    Plan,
+    /// 安装 / 升级(`Effect::Install`)。
+    Install,
+    /// 停止(`Effect::Stop`)。
+    Stop,
+    /// 回滚(`Effect::Rollback`)。
+    Rollback,
+    /// 卸载(`Effect::Uninstall`)。
+    Uninstall,
+    /// 运行时探针(`Effect::Probe`)。
+    Probe,
+    /// 应用服务启动(`Executor::start_service`)。
+    Genesis,
+}
+
+impl InstallAction {
+    /// 由请求键解出完成型动作种类;`List`/`LaunchUrl`/`Logs` 不属于这类,返回 `None`。
+    pub fn from_key(key: crate::request::RequestKey) -> Option<Self> {
+        let crate::request::RequestKey::Action(id) = key else {
+            return None;
+        };
+        Some(match id {
+            PLAN_ACTION => Self::Plan,
+            INSTALL_ACTION => Self::Install,
+            STOP_ACTION => Self::Stop,
+            ROLLBACK_ACTION => Self::Rollback,
+            UNINSTALL_ACTION => Self::Uninstall,
+            PROBE_ACTION => Self::Probe,
+            GENESIS_ACTION => Self::Genesis,
+            _ => return None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+    use crate::request::RequestKey;
+
+    #[test]
+    fn every_completion_action_round_trips_through_its_key() {
+        for (id, expected) in [
+            (PLAN_ACTION, InstallAction::Plan),
+            (INSTALL_ACTION, InstallAction::Install),
+            (STOP_ACTION, InstallAction::Stop),
+            (ROLLBACK_ACTION, InstallAction::Rollback),
+            (UNINSTALL_ACTION, InstallAction::Uninstall),
+            (PROBE_ACTION, InstallAction::Probe),
+            (GENESIS_ACTION, InstallAction::Genesis),
+        ] {
+            assert_eq!(
+                InstallAction::from_key(RequestKey::Action(id)),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn list_and_per_app_keys_are_not_completion_actions() {
+        assert_eq!(InstallAction::from_key(RequestKey::List), None);
+        assert_eq!(InstallAction::from_key(RequestKey::Action(7)), None);
+    }
+}

@@ -57,16 +57,16 @@ impl HostService<InProcess> {
         Self::with_api(InProcess::unavailable(reason), None)
     }
 
-    /// 启动完成:装入真正的 `InProcess`(此后请求一律走它)。
+    /// 启动完成:记录底层服务句柄(供 shutdown 用),并在锁空闲时就地把后端换成真服务。
+    ///
+    /// 生产路径里 genesis 任务已在 tokio 工作线程用 `write().await` 换过后端(窗口线程不能阻塞
+    /// 等锁),这里的写入是等价的后备;若此刻恰有并发读(把锁占住),跳过即可——后端已是真服务。
+    /// **绝不用 `try_write().expect`**:有并发读时那会 panic。
     pub fn install_service(&mut self, in_process: Arc<InProcess>) {
         self.service = Some(in_process.service().clone());
-        // `InProcess` 不可 Clone:拿它内部的 `Arc<AppService>` 重建一个等价的。
-        let service = in_process.service().clone();
-        let replaced = InProcess::new(service);
-        *self
-            .api
-            .try_write()
-            .expect("no concurrent readers at install") = replaced;
+        if let Ok(mut guard) = self.api.try_write() {
+            *guard = InProcess::new(in_process.service().clone());
+        }
     }
 }
 

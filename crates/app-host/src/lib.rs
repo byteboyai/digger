@@ -24,6 +24,7 @@ pub mod request;
 pub mod service;
 pub mod subscription;
 pub mod testing;
+pub mod trust;
 
 use bytehost_apps::id::AppId;
 use bytehost_panel::key::AppKey;
