@@ -23,15 +23,15 @@ tokio = { version = "1", features = ["full"] }
 directories = "6"
 
 # 共享桌面宿主契约:窗口壳、面板、Surface、布局、焦点(bytehost-desktop)。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 # 应用 webview 的纯安全策略(origin/nonce/存储标识/数据存储清除排队);桌面宿主唯一真相。
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 
 # 应用宿主平台:注册表/生命周期、与传输无关的客户端 API、与界面框架无关的面板状态机。
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.1.1" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 
 # 组件库(Dozer 与 Digger 共用);iced 版本必须与 byteui 一致,一起升。
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
@@ -39,13 +39,11 @@ byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
 # Dozer 与 Digger 共用的 Usage 面板库 + 领域类型/服务接缝(Task 19/20)。
 # 领域 `dozer-model`(纯 serde)与 `dozer-services`(trait 接缝)供业务层 `digger-store`
 # 实现 `UsageService`;`dozer-panel-usage` 含公共 UI 与 bytehost Surface,只许宿主适配层
-# (`digger-desktop`)依赖。正式固定 revision 在 Task 22(Task 19 待办第 6 条);当前 dozer
-# 远端尚无含 `dozer-panel-usage` 的 revision,故本地经不提交的 `.cargo/config.toml`
-# patch 指向 `../dozer/crates/*` 联调(与 bytehost/byteui 早期同款)。此处 git 源仅为
-# 声明来源,实际解析由 patch 覆盖。
-dozer-model = { git = "https://github.com/byteboyai/dozer" }
-dozer-services = { git = "https://github.com/byteboyai/dozer" }
-dozer-panel-usage = { git = "https://github.com/byteboyai/dozer" }
+# (`digger-desktop`)依赖。Task 22:dozer main 已推远端(含 `dozer-panel-usage`),
+# 固定到该 revision(dozer 无对应发布 tag,用 rev 钉死)。
+dozer-model = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
+dozer-services = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
+dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
 
 iced = { version = "0.14", default-features = false, features = ["tokio", "wgpu"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。

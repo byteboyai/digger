@@ -396,6 +396,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytes",
  "flate2",
@@ -417,6 +418,7 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-apps",
  "tokio",
@@ -426,6 +428,7 @@ dependencies = [
 [[package]]
 name = "bytehost-core"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "serde",
  "serde_json",
@@ -434,6 +437,7 @@ dependencies = [
 [[package]]
 name = "bytehost-desktop"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-core",
  "bytehost-webview",
@@ -451,6 +455,7 @@ dependencies = [
 [[package]]
 name = "bytehost-panel"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -459,6 +464,7 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-apps",
  "url",
@@ -1048,6 +1054,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dozer-model"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?rev=67ab0e657d75135b882ace2f3aa7a56617776c60#67ab0e657d75135b882ace2f3aa7a56617776c60"
 dependencies = [
  "serde",
 ]
@@ -1055,6 +1062,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-usage"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?rev=67ab0e657d75135b882ace2f3aa7a56617776c60#67ab0e657d75135b882ace2f3aa7a56617776c60"
 dependencies = [
  "bytehost-core",
  "bytehost-desktop",
@@ -1071,6 +1079,7 @@ dependencies = [
 [[package]]
 name = "dozer-services"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?rev=67ab0e657d75135b882ace2f3aa7a56617776c60#67ab0e657d75135b882ace2f3aa7a56617776c60"
 dependencies = [
  "dozer-model",
 ]
