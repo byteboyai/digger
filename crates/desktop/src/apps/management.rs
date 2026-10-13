@@ -52,7 +52,12 @@ pub fn view(state: &AppsState) -> Element<'_, Message> {
                 .size(font::body())
                 .color(color::current().red),
         );
-        body = body.push(dim("修复后重开此面板会再试。"));
+        body = body.push(action_button(
+            "重试",
+            Message::RetryService,
+            color::current().gold,
+        ));
+        body = body.push(dim("修复端口占用/同根锁冲突后点「重试」,或重开此面板。"));
         body = body.push(installed_section(state));
         return scroll_view(body);
     }

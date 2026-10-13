@@ -120,6 +120,10 @@ pub enum Message {
     StoreRemovalResult(String, StoreRemovalOutcome),
     /// 一次清除请求已提交到窗口线程(真实结果随后经 [`Message::StoreRemovalResult`] 回);无需处理。
     StoreRemovalSubmitted,
+    /// 用户点「重试」:应用服务此前启动失败(`Startup::Unavailable`),重新起一次。
+    /// 修复端口占用/同根锁冲突后,不必退出进程即可恢复(此前只能重开面板,且因
+    /// `opened` 未复位而实际无效——复审 #7)。
+    RetryService,
 }
 
 /// 「应用」面板的组合根状态。
@@ -280,6 +284,18 @@ impl AppsState {
                 self.store.settle(&app, outcome, std::time::Instant::now());
                 iced::Task::none()
             }
+            // 用户显式重试:仅在启动失败(`Unavailable`)时有效。复位 `opened` 并重新
+            // 起服务 + 触发探测,等价于「回到全新首次打开」的路径。
+            Message::RetryService => {
+                if matches!(self.startup, Startup::Unavailable(_)) {
+                    self.opened = false;
+                    self.startup = Startup::Starting;
+                    self.start_service();
+                    self.step(InstallMessage::Opened)
+                } else {
+                    iced::Task::none()
+                }
+            }
             // 清除请求已提交(真实结果异步回);无操作。
             Message::StoreRemovalSubmitted => iced::Task::none(),
         };
@@ -387,7 +403,10 @@ impl AppsState {
                 }
             }
             Outcome::ServiceFailed(_ticket, err) => {
+                // 启动失败:复位 `opened`,否则重开面板会被 `opened` 挡住、永不重试
+                // (复审 #7)。失败原因保留在 `startup` 里供界面显示。
                 self.startup = Startup::Unavailable(err.text().to_owned());
+                self.opened = false;
                 iced::Task::none()
             }
             Outcome::List { ticket, result } => {
@@ -1140,6 +1159,48 @@ mod tests {
         assert_eq!(rb.len(), 1);
         assert_eq!(ra[0].0.title, "a");
         assert_eq!(rb[0].0.title, "b");
+    }
+
+    /// 复审 #7 回归:服务启动失败后必须能重试。
+    ///
+    /// 修复前 `Opened` 在启动前就把 `opened` 置 true 且 `ServiceFailed` 不复位,故
+    /// 重开面板会被 `opened` 挡住、永不重启。修复后:`ServiceFailed` 复位 `opened`,
+    /// 且 `Message::RetryService` 可在 Unavailable 下重新起服务。
+    #[tokio::test]
+    async fn a_failed_service_start_can_retry() {
+        use digger_app_host::effects::Outcome;
+        use digger_app_host::request::{PanelInstanceId, RequestKey, RequestTicket, ScopeId};
+
+        let path = usage_ledger_path("retry");
+        let ledger = shared_ledger(&path);
+        let mut s = AppsState::with_ledger_path(temp_ledger("retry"));
+        s.attach_usage(ledger, "/digger/scope".into());
+
+        // 首次打开:发起启动。
+        let _ = s.update(Message::Opened);
+        assert!(matches!(s.startup(), Startup::Starting));
+
+        // 启动失败:进入 Unavailable,且 `opened` 被复位(否则重开面板无效)。
+        let ticket = RequestTicket {
+            scope: ScopeId(1),
+            panel: PanelInstanceId(1),
+            generation: 0,
+            key: RequestKey::List,
+            sequence: 0,
+        };
+        let err = AppApiError::Host(AppFailure::new(AppErrorKind::Internal, "端口被占用"));
+        let _ = s.update(Message::Outcome(Arc::new(Outcome::ServiceFailed(
+            ticket, err,
+        ))));
+        assert!(matches!(s.startup(), Startup::Unavailable(_)));
+        assert!(!s.opened, "失败后必须复位 opened,重开面板才可能重试");
+
+        // 显式「重试」:回到 Starting 并重新起服务。
+        let _ = s.update(Message::RetryService);
+        assert!(
+            matches!(s.startup(), Startup::Starting),
+            "重试应重新进入启动流程,而不是停在 Unavailable"
+        );
     }
 
     /// 读失败(损坏账本)与"确实为空"必须能区分:前者 `Unavailable`,后者 `Ok(空)`。
