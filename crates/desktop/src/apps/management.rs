@@ -9,6 +9,7 @@
 //! - **计划生成失败**:状态机进入 `Flow::Failed`,显示原因与「知道了」。
 
 use bytehost_panel::install::{Flow, Load, Message as InstallMessage, PickTarget, SourceChoice};
+use bytehost_panel::notice::NoticeLevel;
 use byteui::theme::{color, font};
 
 use iced::widget::text::IntoFragment;
@@ -44,6 +45,24 @@ fn heading<'a>(label: &'static str) -> Element<'a, Message> {
 
 pub fn view(state: &AppsState) -> Element<'_, Message> {
     let mut body = column![heading("应用")].spacing(12).width(Length::Fill);
+
+    // 0) 状态机瞬时消息(复审 #8):回滚失败、运行时卸载失败等此前被静默丢弃,这里顶部可见、可关闭。
+    if let Some(notice) = state.notice() {
+        let tint = match notice.level {
+            NoticeLevel::Error => color::current().red,
+            NoticeLevel::Warning => color::current().gold,
+            NoticeLevel::Success => color::current().green,
+            NoticeLevel::Info => color::current().cream,
+        };
+        body = body.push(
+            row![
+                text(notice.text.clone()).size(font::body()).color(tint),
+                action_button("关闭", Message::DismissNotice, color::current().dim),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        );
+    }
 
     // 1) 服务不可用:置顶显示、可操作;不显示安装表单(伪造能力)。
     if let Startup::Unavailable(reason) = state.startup() {

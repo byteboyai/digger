@@ -124,6 +124,8 @@ pub enum Message {
     /// 修复端口占用/同根锁冲突后,不必退出进程即可恢复(此前只能重开面板,且因
     /// `opened` 未复位而实际无效——复审 #7)。
     RetryService,
+    /// 用户关闭顶部提示条(复审 #8)。
+    DismissNotice,
 }
 
 /// 「应用」面板的组合根状态。
@@ -148,6 +150,19 @@ pub struct AppsState {
     pending_uninstall: std::collections::HashMap<String, UninstallMode>,
     /// 任务完成用量生产者(Task 20);`None` = 未接(测试/未接线时不产生用量记录)。
     usage: Option<UsageRuntime>,
+    /// 最近一条要展示给用户的一次性消息(复审 #8)。状态机产生的 `Effect::Notice`
+    /// 此前落进执行器兜底分支被静默丢弃(回滚失败/运行时卸载失败主要靠它暴露),
+    /// 现在由组合根接住并渲染为面板顶部可关闭的提示条。
+    notice: Option<Notice>,
+}
+
+/// 面板顶部展示的一条状态机瞬时消息(复审 #8)。`key` 是状态机给的稳定标识,
+/// 用于去重(同一事件重复投递时只保留一条)。
+#[derive(Debug, Clone)]
+pub struct Notice {
+    pub level: bytehost_panel::notice::NoticeLevel,
+    pub text: String,
+    pub key: String,
 }
 
 impl AppsState {
@@ -183,6 +198,7 @@ impl AppsState {
             store: StoreCleanup::load(ledger),
             pending_uninstall: std::collections::HashMap::new(),
             usage: None,
+            notice: None,
         }
     }
 
@@ -243,6 +259,28 @@ impl AppsState {
         self.usage.as_ref().map(|u| u.running.len()).unwrap_or(0)
     }
 
+    /// 接住状态机的一条瞬时消息(复审 #8):同一 `key` 覆盖为最新,避免重复。
+    /// 同时落一行 stderr(digger 一期无 Toast),但**不**把它当唯一出口。
+    fn push_notice(
+        &mut self,
+        level: bytehost_panel::notice::NoticeLevel,
+        text: String,
+        key: String,
+    ) {
+        eprintln!("digger: 应用面板/{level:?}: {text}"); // cli-output
+        self.notice = Some(Notice { level, text, key });
+    }
+
+    /// 当前要展示的瞬时消息(视图读取);`None` = 无。
+    pub(crate) fn notice(&self) -> Option<&Notice> {
+        self.notice.as_ref()
+    }
+
+    /// 用户关闭提示条。
+    pub(crate) fn dismiss_notice(&mut self) {
+        self.notice = None;
+    }
+
     /// 后台异步起一个进程内应用服务(不阻塞窗口)。
     fn start_service(&mut self) {
         self.exec
@@ -296,6 +334,11 @@ impl AppsState {
                     iced::Task::none()
                 }
             }
+            // 用户关闭顶部提示条(复审 #8)。
+            Message::DismissNotice => {
+                self.dismiss_notice();
+                iced::Task::none()
+            }
             // 清除请求已提交(真实结果异步回);无操作。
             Message::StoreRemovalSubmitted => iced::Task::none(),
         };
@@ -327,6 +370,12 @@ impl AppsState {
             // 原生对话框:目录 / 压缩包。
             InstallEffect::PickSource => Some(Self::pick_task(true)),
             InstallEffect::PickArchive => Some(Self::pick_task(false)),
+            // 状态机要展示的一次性消息(复审 #8):此前落进执行器兜底分支被静默丢弃——
+            // 回滚失败、运行时卸载失败等主要靠它暴露,用户因此拿不到失败原因。接住并渲染。
+            InstallEffect::Notice { level, text, key } => {
+                self.push_notice(level, text, key);
+                None
+            }
             // `Effect::Plan` 需要产品策略:按用户当前选择的来源注入来源/信任级别。
             InstallEffect::Plan(_) => {
                 let policy = trust::policy_for(self.flow.source_choice);
@@ -1201,6 +1250,33 @@ mod tests {
             matches!(s.startup(), Startup::Starting),
             "重试应重新进入启动流程,而不是停在 Unavailable"
         );
+    }
+
+    /// 复审 #8 回归:状态机产出的 `Effect::Notice` 必须被组合根接住并可见,而不是
+    /// 落进执行器兜底分支被静默丢弃(回滚/运行时卸载失败主要靠它暴露)。
+    #[tokio::test]
+    async fn a_notice_effect_becomes_a_visible_notice() {
+        use bytehost_panel::notice::NoticeLevel;
+
+        let ledger = shared_ledger(&usage_ledger_path("notice"));
+        let mut s = AppsState::with_ledger_path(temp_ledger("notice"));
+        s.attach_usage(ledger, "/digger/scope".into());
+        assert!(s.notice().is_none());
+
+        // 直接派发一条 Notice effect(模拟状态机吐出的失败提示)。
+        let task = s.dispatch(InstallEffect::Notice {
+            level: NoticeLevel::Error,
+            text: "回滚失败:磁盘已满".into(),
+            key: "rollback-failed".into(),
+        });
+        assert!(task.is_none(), "Notice 不需要 iced 任务");
+        let n = s.notice().expect("Notice 必须被接住,不能丢弃");
+        assert_eq!(n.text, "回滚失败:磁盘已满");
+        assert_eq!(n.level, NoticeLevel::Error);
+
+        // 用户关闭。
+        let _ = s.update(Message::DismissNotice);
+        assert!(s.notice().is_none());
     }
 
     /// 读失败(损坏账本)与"确实为空"必须能区分:前者 `Unavailable`,后者 `Ok(空)`。
