@@ -58,6 +58,11 @@ pub struct UsageRuntime {
     runner: digger_store::TaskRunner,
     running: digger_store::RunningTasks,
     scope_path: String,
+    /// 本次进程启动的**运行命名空间**:账本按 `run_id` 幂等 upsert,而 `ticket.sequence`
+    /// 每次启动从 0 重新计数。若 `run_id` 只由「动作标签 + sequence」拼成,重启后按相同顺序
+    /// 做同类操作就会算出与上次相同的 id,第二次真实操作会**覆盖**第一次的历史记录(而非新增)。
+    /// 故拼入一个进程内唯一、跨重启不同的前缀;同一次运行的内部重试仍复用同一 id。
+    boot_id: String,
 }
 
 impl UsageRuntime {
@@ -69,8 +74,22 @@ impl UsageRuntime {
             runner: digger_store::TaskRunner::new(ledger),
             running: digger_store::RunningTasks::new(),
             scope_path,
+            boot_id: new_boot_id(),
         }
     }
+}
+
+/// 生成一个跨进程重启唯一、但**不泄漏用户数据**的运行命名空间前缀。
+///
+/// 无需引入 `uuid` 依赖:纳秒级启动时刻 + 进程 id 的组合已足以区分重启前后两次会话
+/// (即使 PID 被复用,纳秒时刻也几乎不可能撞上)。仅用于账本 id 的消歧,不进日志、不作安全用途。
+fn new_boot_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}-{:x}", nanos, std::process::id())
 }
 
 /// 应用服务的启动状态:窗口先画出来,服务后台起。
@@ -181,7 +200,12 @@ impl AppsState {
         if !is_user_invoked_action(action) {
             return;
         }
-        let run_id = format!("digger:{}:{}", action_run_label(action), key);
+        let run_id = format!(
+            "digger:{}:{}:{}",
+            usage.boot_id,
+            action_run_label(action),
+            key
+        );
         let run = usage.runner.begin(
             run_id,
             1,
@@ -1026,7 +1050,45 @@ mod tests {
         let service = digger_store::LedgerUsageService::load(&path).unwrap();
         let rows = service.usage_summary(scope, None).await.unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].0.conversation_id, "digger:uninstall:11");
+        assert!(
+            rows[0].0.conversation_id.starts_with("digger:")
+                && rows[0].0.conversation_id.ends_with(":uninstall:11"),
+            "run_id 仍含动作标签 + 键: {}",
+            rows[0].0.conversation_id
+        );
+    }
+
+    /// 复审 #1 回归:跨重启的**不同**操作(相同动作、相同 sequence,因 RequestTable 每次启动
+    /// 从 0 计数)必须各留一条,而不是因 run_id 相同被覆盖。修复前账本按 run_id upsert,
+    /// 第二次会盖掉第一次 → 只 1 条;修复后应 2 条。
+    #[tokio::test]
+    async fn distinct_ops_across_restarts_do_not_overwrite_each_other() {
+        let path = usage_ledger_path("cross-restart");
+        let scope = "/digger/scope".to_string();
+
+        // 第一次「会话」:sequence 1。
+        {
+            let ledger = shared_ledger(&path);
+            let mut s = AppsState::with_ledger_path(temp_ledger("cr-a"));
+            s.attach_usage(ledger, scope.clone());
+            s.begin_usage_for(InstallAction::Install, 1, "第一次安装".into());
+            s.settle_usage_for(1);
+        }
+        // 重启:新进程(新的 boot_id),sequence 仍从 1 开始。
+        {
+            let ledger = shared_ledger(&path);
+            let mut s = AppsState::with_ledger_path(temp_ledger("cr-b"));
+            s.attach_usage(ledger, scope.clone());
+            s.begin_usage_for(InstallAction::Install, 1, "第二次安装".into());
+            s.settle_usage_for(1);
+        }
+
+        let service = digger_store::LedgerUsageService::load(&path).unwrap();
+        let rows = service.usage_summary(scope, None).await.unwrap();
+        assert_eq!(rows.len(), 2, "跨重启的不同操作各留一条,不被覆盖");
+        let titles: Vec<_> = rows.iter().map(|r| r.0.title.clone()).collect();
+        assert!(titles.contains(&"第一次安装".to_string()));
+        assert!(titles.contains(&"第二次安装".to_string()));
     }
 
     /// 未登记的动作键 settle 是 no-op(非用户动作不产生记录);重复 settle 不重复记。
