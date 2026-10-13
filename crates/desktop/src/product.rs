@@ -112,40 +112,19 @@ impl ProductShell {
         let (layout, layout_save_blocked) = load_layout(&layout_path, &catalog).layout();
 
         // 任务完成用量账本(Task 20):生产者(应用操作)写、用量面板读,同一实例。
-        // 载入失败(损坏)不 panic:退回一个空账本并提示,不静默把损坏当"没有记录"。
-        let (ledger, ledger_note) = match digger_store::UsageLedger::load(paths::usage_ledger_path())
-        {
-            Ok(ledger) => (ledger, None),
-            Err(e) => {
-                // 用一个新的临时空账本兜底(路径不存在 → `load` 给空账本);提示已记入 boot_note。
-                let fallback = std::env::temp_dir()
-                    .join(format!("digger-usage-fallback-{}.json", std::process::id()));
-                let _ = std::fs::remove_file(&fallback);
-                let empty =
-                    digger_store::UsageLedger::load(&fallback).expect("不存在的路径必给空账本");
-                (
-                    empty,
-                    Some(format!("用量账本载入失败(已按空账本继续): {e}")),
-                )
-            }
-        };
-        let usage_ledger = std::sync::Arc::new(std::sync::Mutex::new(ledger));
-        let usage_service: std::sync::Arc<dyn dozer_services::UsageService> =
-            std::sync::Arc::new(digger_store::LedgerUsageService::new(usage_ledger.clone()));
-        // 作用域路径:应用操作完成事件与面板查询必须用同一路径——都取产品数据根。
+        // 载入失败(损坏)不 panic,也**不**退回一次性临时空账本(复审 #9)——后者会把
+        // "读不出来"伪装成 "Ok(空)",且新记录写进下次启动就不再引用的临时文件,等于静默丢。
+        // 改为:查询恒返回 Unavailable、**不接线**用量生产者(没有记录悄悄写走),原损坏文件保持原样。
         let scope_path = paths::config_dir();
+        let (usage_service, usage_ledger, boot_note) =
+            load_usage_ledger(paths::usage_ledger_path());
 
         let mut apps = crate::apps::AppsState::new();
-        apps.attach_usage(
-            usage_ledger.clone(),
-            scope_path.to_string_lossy().to_string(),
-        );
+        // 只有账本可用时才接用量生产者;损坏时**不接**,避免记录写进无引用的临时文件。
+        if let Some(ledger) = &usage_ledger {
+            apps.attach_usage(ledger.clone(), scope_path.to_string_lossy().to_string());
+        }
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
-
-        let boot_note = match ledger_note {
-            Some(note) => note,
-            None => "尚未打开 Project;业务服务未接通(应用服务在 Task 12/13 接入)。".into(),
-        };
 
         Self {
             window: None,
@@ -178,6 +157,36 @@ impl ProductShell {
         let layout = self.current_layout().clone();
         if let Err(e) = atomic_save_layout(&self.layout_path, &layout) {
             self.boot_note = format!("布局保存失败:{e}");
+        }
+    }
+}
+
+/// 载入用量账本并决定产品侧接线(复审 #9)。
+///
+/// 返回 `(用量服务, 可选共享账本, boot 提示)`:
+/// - 成功 → 真账本 + [`LedgerUsageService`](digger_store::LedgerUsageService);
+/// - 损坏/读失败 → **不退回临时空账本**,日志查询恒 `Unavailable`,账本为 `None`(调用方据此
+///   不接线用量生产者——没有记录会悄悄写进一个下次启动就不再引用的文件)。原文件保持原样。
+fn load_usage_ledger(
+    path: std::path::PathBuf,
+) -> (
+    std::sync::Arc<dyn dozer_services::UsageService>,
+    Option<std::sync::Arc<std::sync::Mutex<digger_store::UsageLedger>>>,
+    String,
+) {
+    match digger_store::UsageLedger::load(path) {
+        Ok(ledger) => {
+            let ledger = std::sync::Arc::new(std::sync::Mutex::new(ledger));
+            let svc: std::sync::Arc<dyn dozer_services::UsageService> =
+                std::sync::Arc::new(digger_store::LedgerUsageService::new(ledger.clone()));
+            let note = "尚未打开 Project;业务服务未接通(应用服务在 Task 12/13 接入)。".to_string();
+            (svc, Some(ledger), note)
+        }
+        Err(e) => {
+            let note = format!("用量账本载入失败,用量查询暂不可用(不会丢数据:原文件未改动): {e}");
+            let svc: std::sync::Arc<dyn dozer_services::UsageService> =
+                std::sync::Arc::new(digger_store::UnavailableUsageService::new(note.clone()));
+            (svc, None, note)
         }
     }
 }
@@ -577,6 +586,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// 复审 #9:损坏账本必须显式 `Unavailable` + **不接线**生产者,而不是退回临时空账本。
+    #[tokio::test]
+    async fn a_corrupt_usage_ledger_is_unavailable_and_left_untouched() {
+        use dozer_services::ServiceErrorKind;
+
+        let dir = test_temp_dir("usage-corrupt");
+        let path = dir.join("usage_ledger.json");
+        let original = b"{ this is not json";
+        std::fs::write(&path, original).unwrap();
+
+        let (service, ledger, note) = load_usage_ledger(path.clone());
+        assert!(ledger.is_none(), "损坏时不得接线任何账本(含临时空账本)");
+        assert!(note.contains("暂不可用"), "boot 提示应说明不可用:{note}");
+        let err = service
+            .usage_summary("/p/a".into(), None)
+            .await
+            .expect_err("损坏账本查询必须 Unavailable,而不是 Ok(空)");
+        assert_eq!(err.kind, ServiceErrorKind::Unavailable);
+
+        // 原文件保持原样(未被覆盖/未被悄悄迁移)。
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 复盘发现 4:高版本布局加载失败后退出**不得覆盖**原文件。

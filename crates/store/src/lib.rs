@@ -19,4 +19,4 @@ mod service;
 
 pub use ledger::{CompletionEvent, TaskUsageRecord, UsageLedger, UsageLedgerError};
 pub use runner::{Clock, RunningTask, RunningTasks, SystemClock, TaskOutcome, TaskRunner};
-pub use service::LedgerUsageService;
+pub use service::{LedgerUsageService, UnavailableUsageService};

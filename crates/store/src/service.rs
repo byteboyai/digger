@@ -54,6 +54,36 @@ impl UsageService for LedgerUsageService {
     }
 }
 
+/// 账本损坏时的占位用量服务(复审 #9):查询恒返回 [`ServiceErrorKind::Unavailable`],
+/// **不**退回一次性临时空账本。
+///
+/// 与"确实没有记录"(`LedgerUsageService` 读空文件 → `Ok(空)`)区分:后者是合法空态,
+/// 前者是"读不出来"。这样产品层既不会把损坏伪装成空表,也不会让新记录悄悄写进一个下次
+/// 启动就不再引用的临时文件——损坏的原文件保持原样,留待用户/后续修复。
+#[derive(Debug)]
+pub struct UnavailableUsageService {
+    reason: String,
+}
+
+impl UnavailableUsageService {
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
+impl UsageService for UnavailableUsageService {
+    fn usage_summary(
+        &self,
+        _cwd: String,
+        _since_ts: Option<u64>,
+    ) -> BoxFuture<'_, Result<UsageRows, ServiceError>> {
+        let reason = self.reason.clone();
+        Box::pin(async move { Err(ServiceError::new(ServiceErrorKind::Unavailable, reason)) })
+    }
+}
+
 /// 单条落盘记录 → 面板 DTO。`first_ts`/`last_ts` 取运行起止(ms),`turn_count` 取回合数。
 fn to_row(r: &TaskUsageRecord) -> (ConversationSummary, UsagePayload) {
     let summary = ConversationSummary {
@@ -181,5 +211,16 @@ mod tests {
         let service = LedgerUsageService::load(&path).unwrap();
         let rows = service.usage_summary("/p/a".into(), None).await.unwrap();
         assert!(rows.is_empty(), "确实为空是 Ok(空),与读失败区分");
+    }
+
+    #[tokio::test]
+    async fn unavailable_service_reports_unavailable_not_empty() {
+        // 复审 #9:损坏账本要用占位服务返回 Unavailable,而不是伪装成 Ok(空)。
+        let service = UnavailableUsageService::new("账本损坏");
+        let err = service
+            .usage_summary("/p/a".into(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, ServiceErrorKind::Unavailable);
     }
 }
