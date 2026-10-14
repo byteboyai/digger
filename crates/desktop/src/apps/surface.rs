@@ -175,6 +175,7 @@ impl AppSurfaces {
 
     /// 关闭全部(退出/停服务/端口重置时):撤掉所有应用 Surface,不保留任何地址。
     pub fn close_all(&mut self) -> Vec<SurfaceAction> {
+        self.pending.clear();
         let apps: Vec<String> = self.open.keys().cloned().collect();
         let mut actions = Vec::new();
         for app in apps {
@@ -359,6 +360,14 @@ mod tests {
         assert_eq!(actions, vec![SurfaceAction::Destroy { slot }]);
         assert!(!s.is_open("a"), "登记已丢弃(地址不再留存)");
         assert!(s.close("a").is_empty(), "重复关闭幂等");
+    }
+
+    #[test]
+    fn close_all_also_discards_not_yet_created_urls() {
+        let mut s = AppSurfaces::new();
+        s.set_pending_url("a", "secret".into());
+        s.close_all();
+        assert!(s.take_pending().is_empty());
     }
 
     #[test]

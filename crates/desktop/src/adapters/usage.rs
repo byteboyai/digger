@@ -30,6 +30,7 @@ use crate::product::Msg;
 pub struct UsagePanel {
     /// 库的数据/视图状态。
     state: WorkspaceState,
+    pub native: super::usage_native::Native,
     /// 注入的用量服务(真实实现:`LedgerUsageService`)。
     service: Arc<dyn UsageService>,
     /// 本面板查询的**作用域路径**。Digger 一期无 Project,用产品数据根当唯一
@@ -53,6 +54,7 @@ impl UsagePanel {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             state: WorkspaceState::default(),
+            native: super::usage_native::Native::new(),
             service,
             scope_path,
             handle: None,
@@ -112,10 +114,20 @@ impl UsagePanel {
             .collect()
     }
 
-    /// 视图入口:原生内容(面板头 + 加载态)。四态图表内容在 `dozer://usage-content`
-    /// webview 中,一期 Digger 尚未接 webview Surface,这里只渲染原生壳
-    /// (与库 `content_pane` 在无 webview 时的表现一致)。
+    pub fn sync_native(
+        &mut self,
+        window: iced::window::Id,
+        visible: bool,
+        rect: bytehost_core::LogicalRect,
+    ) -> iced::Task<super::usage_native::Event> {
+        self.native.sync(window, visible, rect, &self.state)
+    }
+
+    /// 原生标题与加载态；图表由同源 UsageSurface 和嵌入资源驱动。
     pub fn view(&self) -> Element<'_, Msg> {
+        if let Some(error) = &self.native.error {
+            return iced::widget::text(format!("用量视图创建失败：{error}；切换页签可重试")).into();
+        }
         dozer_panel_usage::view::content_pane(
             self,
             false,

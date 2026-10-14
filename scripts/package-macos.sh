@@ -3,10 +3,8 @@
 # using crates/desktop/packaging/macos/Info.plist.
 #
 # Digger is a single-binary app (unlike Dozer, which also ships dozerd /
-# dozer-hook / dozer-mcp siblings); no extra executables or web asset trees are
-# bundled yet. The usage panel's `dozer://usage-content` host wiring is not
-# connected in Digger at this stage, so no `usage-content` tree is copied
-# either — add it here when that host is wired.
+# dozer-hook / dozer-mcp siblings). Shared Usage assets are embedded at compile
+# time from the pinned dozer-panel-usage crate; runtime needs no source checkout.
 #
 # This produces an UNSIGNED, ad-hoc-signed candidate bundle. Signing /
 # notarization need a real Developer ID identity and credentials; without them the

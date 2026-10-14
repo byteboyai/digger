@@ -47,6 +47,11 @@ pub enum Msg {
     Apps(crate::apps::Message),
     /// 「用量」面板的库消息(Task 20)。
     Usage(dozer_panel_usage::Message),
+    NativeUsage(crate::adapters::usage_native::Event),
+    Resized(Size),
+    Tick,
+    ShutdownFinished(Result<(), String>),
+    ForceExit,
     CloseRequested,
     Exit,
 }
@@ -77,6 +82,9 @@ pub struct ProductShell {
     usage: crate::adapters::usage::UsagePanel,
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
+    closing: bool,
+    shutdown_started: bool,
+    shutdown_error: Option<String>,
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
     #[cfg(test)]
     surface_callbacks: Vec<bytehost_desktop::SurfaceSlot>,
@@ -137,6 +145,9 @@ impl ProductShell {
             apps,
             usage,
             boot_note,
+            closing: false,
+            shutdown_started: false,
+            shutdown_error: None,
             #[cfg(test)]
             surface_callbacks: Vec::new(),
         }
@@ -179,7 +190,7 @@ fn load_usage_ledger(
             let ledger = std::sync::Arc::new(std::sync::Mutex::new(ledger));
             let svc: std::sync::Arc<dyn dozer_services::UsageService> =
                 std::sync::Arc::new(digger_store::LedgerUsageService::new(ledger.clone()));
-            let note = "尚未打开 Project;业务服务未接通(应用服务在 Task 12/13 接入)。".to_string();
+            let note = "尚未打开 Project。可在「应用」页管理并运行应用。".to_string();
             (svc, Some(ledger), note)
         }
         Err(e) => {
@@ -348,6 +359,12 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::SelectPanel(panel) => {
+                if self.closing {
+                    return Task::none();
+                }
+                if panel != ActivePanel::Apps {
+                    self.apps.close_selected();
+                }
                 self.active = panel;
                 // 首次进入「应用」面板:触发一次探测 + 拉列表(Task 14)。
                 if panel == ActivePanel::Apps {
@@ -371,9 +388,31 @@ impl Product<Msg> for ProductShell {
                 }
                 Task::none()
             }
+            Msg::Resized(size) => {
+                self.size = size;
+                Task::none()
+            }
+            Msg::Tick => self.apps.update(crate::apps::Message::Tick).map(Msg::Apps),
+            Msg::NativeUsage(event) => {
+                self.usage.native.update(event);
+                Task::none()
+            }
+            Msg::ShutdownFinished(result) => match result {
+                Ok(()) => iced::exit(),
+                Err(error) => {
+                    self.shutdown_error = Some(error);
+                    Task::none()
+                }
+            },
+            Msg::ForceExit => iced::exit(),
             Msg::CloseRequested | Msg::Exit => {
+                if self.closing {
+                    return Task::none();
+                }
+                self.closing = true;
                 self.save_layout();
-                iced::exit()
+                self.apps.prepare_shutdown();
+                Task::none()
             }
         }
     }
@@ -383,6 +422,15 @@ impl Product<Msg> for ProductShell {
         use iced::widget::{button, column, container, row, text};
 
         let tokens = color::current();
+        if self.closing {
+            let mut body = column![text("正在关闭 Digger…")].spacing(16).padding(20);
+            if let Some(error) = &self.shutdown_error {
+                body = body
+                    .push(text(error))
+                    .push(button("强制退出").on_press(Msg::ForceExit));
+            }
+            return body.into();
+        }
         let header = text("Digger").size(font::title()).color(tokens.cream);
 
         let body = match self.active {
@@ -433,13 +481,45 @@ impl Product<Msg> for ProductShell {
 /// (复盘发现 6),产品消息则走 `Product::update`。`Product::update` 的 Surface 分支只消费、不再重投,
 /// 二者分工使路由不成环。
 pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg> {
-    match msg {
+    let task = match msg {
         HostMessage::Surface(event) => route_lifecycle(shell, event),
         HostMessage::Product(m) => Product::update(shell, HostMessage::Product(m)),
+    };
+    // 退出分支自己将销毁与 shutdown 串行；其他更新后同步内容与几何。
+    let native = shell.sync_native();
+    if shell.closing && !shell.shutdown_started && shell.apps.native_idle() {
+        shell.shutdown_started = true;
+        Task::batch([task, native])
+            .chain(Task::perform(shell.apps.shutdown(), Msg::ShutdownFinished))
+    } else {
+        Task::batch([task, native])
     }
 }
 
 impl ProductShell {
+    fn sync_native(&mut self) -> Task<Msg> {
+        let Some(window) = self.window else {
+            return Task::none();
+        };
+        // 页签、面板标题与返回按钮留在原生顶栏；内容视口独占下方矩形。
+        let rect = bytehost_core::LogicalRect {
+            x: 20.0,
+            y: 180.0,
+            width: (self.size.width as f64 - 40.0).max(1.0),
+            height: (self.size.height as f64 - 200.0).max(1.0),
+        };
+        Task::batch([
+            self.apps.sync_native(window, rect).map(Msg::Apps),
+            self.usage
+                .sync_native(
+                    window,
+                    self.active == ActivePanel::Usage && !self.closing,
+                    rect,
+                )
+                .map(Msg::NativeUsage),
+        ])
+    }
+
     fn info_view(&self) -> Element<'_, Msg> {
         use iced::Length;
         use iced::widget::{button, column, text};
@@ -473,11 +553,20 @@ impl ProductShell {
 }
 
 /// 订阅:窗口关闭请求。
-pub fn subscription(_shell: &ProductShell) -> Subscription<Msg> {
-    iced::event::listen_with(|evt, _status, _id| match evt {
+pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
+    let events = iced::event::listen_with(|evt, _status, _id| match evt {
         iced::Event::Window(window::Event::CloseRequested) => Some(Msg::CloseRequested),
+        iced::Event::Window(window::Event::Resized(size)) => Some(Msg::Resized(size)),
         _ => None,
-    })
+    });
+    if shell.closing {
+        events
+    } else {
+        Subscription::batch([
+            events,
+            iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
+        ])
+    }
 }
 
 /// 应用初始化:确保产品数据根、设置 ByteBoy2077 主题,异步取窗口尺寸。
@@ -510,7 +599,16 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             .map(move |s| Msg::WindowReady(id, s.unwrap_or(size))),
         None => Task::none(),
     });
-    (shell, Task::batch([size_task, reply_task, usage_task]))
+    let native_usage = match shell.usage.native.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::NativeUsage(event), rx))
+        })),
+        None => Task::none(),
+    };
+    (
+        shell,
+        Task::batch([size_task, reply_task, usage_task, native_usage]),
+    )
 }
 
 #[cfg(test)]

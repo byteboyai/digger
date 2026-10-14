@@ -4,3 +4,5 @@
 //! 只定义窄接缝,产品侧提供实现。这里目前只有 Usage 面板适配。
 
 pub mod usage;
+
+pub mod usage_native;

@@ -29,6 +29,11 @@ fn view(shell: &ProductShell) -> Element<'_, Msg> {
 fn main() -> iced::Result {
     iced::application(boot, update, view)
         .title("Digger")
+        .window(iced::window::Settings {
+            exit_on_close_request: false,
+            min_size: Some(iced::Size::new(640.0, 480.0)),
+            ..Default::default()
+        })
         .subscription(product::subscription)
         .window_size(product::default_window_size_for_boot())
         .run()

@@ -17,11 +17,20 @@ fn dirs() -> ProjectDirs {
 
 /// 产品配置目录(macOS: `~/Library/Application Support/ai.byteboy.digger` 由 directories 决定)。
 pub fn config_dir() -> PathBuf {
+    if let Some(root) = std::env::var_os("DIGGER_DATA_DIR") {
+        return PathBuf::from(root);
+    }
+    #[cfg(test)]
+    return std::env::temp_dir().join(format!("digger-tests-{}", std::process::id()));
+    #[cfg(not(test))]
     dirs().config_dir().to_path_buf()
 }
 
 /// 产品运行态目录(PID/锁/缓存)。
 pub fn state_dir() -> PathBuf {
+    if std::env::var_os("DIGGER_DATA_DIR").is_some() || cfg!(test) {
+        return config_dir().join("state");
+    }
     dirs()
         .state_dir()
         .map(|p| p.to_path_buf())

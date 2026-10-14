@@ -64,6 +64,22 @@ pub fn view(state: &AppsState) -> Element<'_, Message> {
         );
     }
 
+    if state.store.pending_count() > 0 {
+        body = body.push(dim(format!(
+            "浏览器数据清理中：{} 项",
+            state.store.pending_count()
+        )));
+    }
+    for (id, reason) in state.store.failures() {
+        body = body.push(
+            row![
+                text(format!("{id} 浏览器数据未删除：{reason}")),
+                button("重试清理").on_press(Message::RetryCleanup(id.to_owned()))
+            ]
+            .spacing(8),
+        );
+    }
+
     // 1) 服务不可用:置顶显示、可操作;不显示安装表单(伪造能力)。
     if let Startup::Unavailable(reason) = state.startup() {
         body = body.push(

@@ -116,6 +116,13 @@ fn action_row<'a>(state: &AppsState, app: &'a AppSummary) -> Element<'a, Message
     let mut buttons = row![].spacing(8);
 
     if acting.is_none() {
+        if !app.observed.is_transient() {
+            buttons = buttons.push(action_button(
+                "打开",
+                Message::OpenApp(id.clone()),
+                colors.gold,
+            ));
+        }
         // 运行中/启动中 → 停止;启动走宿主栏(与应用面板一致,不在此重复)。
         if matches!(
             app.observed,

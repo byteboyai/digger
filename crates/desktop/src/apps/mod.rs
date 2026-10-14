@@ -34,9 +34,11 @@ use bytehost_apps::registry::UninstallMode;
 use bytehost_client::AppApiError;
 use bytehost_client::in_process::InProcess;
 use bytehost_core::LogicalRect;
+use bytehost_panel::host::{Act, PanelEffect};
 use bytehost_panel::install::{
     ActKind, Effect as InstallEffect, InstallFlowState, Message as InstallMessage,
 };
+use bytehost_panel::key::AppKey;
 use bytehost_webview::StoreRemovalOutcome;
 
 use digger_app_host::effects::{Executor, InstallAction, InstallDetail, Outcome, ReplySink};
@@ -115,7 +117,13 @@ pub enum Message {
     /// 原生"选目录/选压缩包"对话框返回;`None` = 用户取消。
     SourcePicked(Option<PathBuf>),
     /// 应用 Surface 创建结果(`Ok` = 拿到原生句柄)。
-    SurfaceOpened(String, Result<(), String>),
+    SurfaceOpened(String, u64, bytehost_core::SurfaceSlot, Result<(), String>),
+    OpenApp(String),
+    CloseApp,
+    Tick,
+    NativeSynced,
+    NativeOperationDone,
+    RetryCleanup(String),
     /// 一次浏览器数据存储清除的结果(窗口线程 `remove_data_store` 回调回传)。
     StoreRemovalResult(String, StoreRemovalOutcome),
     /// 一次清除请求已提交到窗口线程(真实结果随后经 [`Message::StoreRemovalResult`] 回);无需处理。
@@ -154,6 +162,15 @@ pub struct AppsState {
     /// 此前落进执行器兜底分支被静默丢弃(回滚失败/运行时卸载失败主要靠它暴露),
     /// 现在由组合根接住并渲染为面板顶部可关闭的提示条。
     notice: Option<Notice>,
+    service_root: PathBuf,
+    quitting: bool,
+    selected: Option<String>,
+    native_actions: Vec<SurfaceAction>,
+    native_busy: bool,
+    opening: bool,
+    list_in_flight: bool,
+    list_dirty: bool,
+    last_poll: std::time::Instant,
 }
 
 /// 面板顶部展示的一条状态机瞬时消息(复审 #8)。`key` 是状态机给的稳定标识,
@@ -162,17 +179,26 @@ pub struct AppsState {
 pub struct Notice {
     pub level: bytehost_panel::notice::NoticeLevel,
     pub text: String,
-    pub key: String,
+    pub _key: String,
 }
 
 impl AppsState {
     /// 在组合根启动时构造:服务以不可用占位开始,后台异步起真服务。
     pub fn new() -> Self {
-        Self::with_ledger_path(paths::state_dir().join("store_cleanups.json"))
+        Self::with_paths(
+            paths::state_dir().join("store_cleanups.json"),
+            paths::bytehost_root(),
+        )
     }
 
     /// 构造并指定清除台账文件路径(生产传产品状态目录;测试传临时路径,避免碰真实用户数据)。
+    #[cfg(test)]
     fn with_ledger_path(ledger: PathBuf) -> Self {
+        let root = ledger.with_extension("host");
+        Self::with_paths(ledger, root)
+    }
+
+    fn with_paths(ledger: PathBuf, service_root: PathBuf) -> Self {
         let requests = Arc::new(RequestTable::new());
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sink: Arc<dyn ReplySink> = Arc::new(ChannelSink(tx));
@@ -199,6 +225,15 @@ impl AppsState {
             pending_uninstall: std::collections::HashMap::new(),
             usage: None,
             notice: None,
+            service_root,
+            quitting: false,
+            selected: None,
+            native_actions: Vec::new(),
+            native_busy: false,
+            opening: false,
+            list_in_flight: false,
+            list_dirty: false,
+            last_poll: std::time::Instant::now(),
         }
     }
 
@@ -268,7 +303,11 @@ impl AppsState {
         key: String,
     ) {
         eprintln!("digger: 应用面板/{level:?}: {text}"); // cli-output
-        self.notice = Some(Notice { level, text, key });
+        self.notice = Some(Notice {
+            level,
+            text,
+            _key: key,
+        });
     }
 
     /// 当前要展示的瞬时消息(视图读取);`None` = 无。
@@ -284,7 +323,7 @@ impl AppsState {
     /// 后台异步起一个进程内应用服务(不阻塞窗口)。
     fn start_service(&mut self) {
         self.exec
-            .start_service(self.scope, self.panel, paths::bytehost_root());
+            .start_service(self.scope, self.panel, self.service_root.clone());
     }
     /// 订阅流的接收端句柄(交给 [`take_reply_receiver`] / boot 建立 iced 流)。
     pub fn reply_receiver(
@@ -297,23 +336,77 @@ impl AppsState {
     pub fn update(&mut self, msg: Message) -> iced::Task<Message> {
         let task = match msg {
             Message::Opened => {
-                if self.opened {
+                if !self.opened && !self.quitting {
+                    self.opened = true;
+                    self.startup = Startup::Starting;
+                    self.start_service();
+                }
+                iced::Task::none()
+            }
+            Message::OpenApp(id) => {
+                if !self.quitting && matches!(self.startup, Startup::Ready) {
+                    self.close_selected();
+                    if self.store.is_pending(&id) {
+                        self.push_notice(
+                            bytehost_panel::notice::NoticeLevel::Error,
+                            "浏览器数据尚未清除，完成清理后才能打开此应用".into(),
+                            "cleanup".into(),
+                        );
+                    } else if let Ok(app) = bytehost_apps::id::AppId::new(id.clone())
+                        && let Some(key) = digger_app_host::AppKeyId::from_app_id(&app)
+                    {
+                        self.selected = Some(id);
+                        self.opening = true;
+                        self.exec.run(
+                            self.scope,
+                            self.panel,
+                            self.generation,
+                            PanelEffect::StartApp(key),
+                        );
+                    }
+                }
+                iced::Task::none()
+            }
+            Message::CloseApp => {
+                self.close_selected();
+                iced::Task::none()
+            }
+            Message::Tick => {
+                if !self.quitting
+                    && matches!(self.startup, Startup::Ready)
+                    && self.last_poll.elapsed() >= std::time::Duration::from_secs(5)
+                {
+                    self.last_poll = std::time::Instant::now();
+                    self.refresh_list();
+                }
+                iced::Task::none()
+            }
+            Message::NativeSynced => {
+                self.native_busy = false;
+                iced::Task::none()
+            }
+            Message::NativeOperationDone => iced::Task::none(),
+            Message::RetryCleanup(id) => {
+                self.store.request(&id);
+                iced::Task::none()
+            }
+            Message::Install(m) => {
+                if self.quitting || !matches!(self.startup, Startup::Ready) {
                     iced::Task::none()
                 } else {
-                    self.opened = true;
-                    // 首次打开:异步起真服务(在 iced 运行时内 spawn);`ServiceReady` 到达后
-                    // 会再喂一次 `Opened` 触发真正的探测 + 拉列表。
-                    self.start_service();
-                    self.step(InstallMessage::Opened)
+                    self.step(m)
                 }
             }
-            Message::Install(m) => self.step(m),
             Message::Outcome(outcome) => self.deliver(outcome),
             Message::SourcePicked(path) => self.step(InstallMessage::SourcePicked(path)),
             // 应用 Surface 的上行事件:创建结果/导航完成/IPC。三者都不改状态机。
             // 创建失败记进控制器(持久状态,留给未来视口内联显示),不是一次性 Toast。
-            Message::SurfaceOpened(app, result) => {
-                self.surfaces.report_open_result(&app, result);
+            Message::SurfaceOpened(app, generation, slot, result) => {
+                if self.surfaces.accepts(&app, generation) {
+                    self.surfaces.report_open_result(&app, result);
+                } else {
+                    self.native_actions.push(SurfaceAction::Destroy { slot });
+                }
                 iced::Task::none()
             }
             // 一次浏览器数据存储清除的结果:更新持久台账与内存重试队列;仍待重试的靠 `store_wake_task`
@@ -327,9 +420,7 @@ impl AppsState {
             Message::RetryService => {
                 if matches!(self.startup, Startup::Unavailable(_)) {
                     self.opened = false;
-                    self.startup = Startup::Starting;
-                    self.start_service();
-                    self.step(InstallMessage::Opened)
+                    self.update(Message::Opened)
                 } else {
                     iced::Task::none()
                 }
@@ -367,6 +458,10 @@ impl AppsState {
     /// 派发一条安装流 effect。返回 `Some(task)` = 需要 iced 任务(原生对话框 / 延后轮询)。
     fn dispatch(&mut self, effect: InstallEffect) -> Option<iced::Task<Message>> {
         match effect {
+            InstallEffect::List | InstallEffect::HostChanged => {
+                self.refresh_list();
+                None
+            }
             // 原生对话框:目录 / 压缩包。
             InstallEffect::PickSource => Some(Self::pick_task(true)),
             InstallEffect::PickArchive => Some(Self::pick_task(false)),
@@ -398,6 +493,9 @@ impl AppsState {
             // 卸载:先记下卸载模式——状态机回来的 `ActionDone` 不带模式,而"连数据一起删"需要在
             // 卸载成功后清浏览器数据存储(Task 17)。随后照常交给执行器。
             InstallEffect::Uninstall(id, mode) => {
+                if self.selected.as_deref() == Some(&id) {
+                    self.close_selected();
+                }
                 self.pending_uninstall.insert(id.clone(), mode);
                 let effect = InstallEffect::Uninstall(id.clone(), mode);
                 let ticket = self.exec.run_install_traced(
@@ -441,17 +539,58 @@ impl AppsState {
     /// (`Arc<InProcess>`)直接取出装入。
     fn deliver(&mut self, outcome: Arc<Outcome>) -> iced::Task<Message> {
         match outcome.as_ref() {
+            Outcome::Changed => {
+                self.refresh_list();
+                iced::Task::none()
+            }
+            Outcome::Action {
+                ticket,
+                app,
+                act,
+                result,
+            } => {
+                if self.requests.accept(*ticket) {
+                    if self.selected.as_deref() == Some(app.as_str()) {
+                        self.opening = false;
+                    }
+                    self.refresh_list();
+                    match result {
+                        Ok(())
+                            if *act == Act::Start
+                                && self.selected.as_deref() == Some(app.as_str())
+                                && !self.quitting =>
+                        {
+                            if let Some(key) = digger_app_host::AppKeyId::from_app_id(app) {
+                                self.exec.run(
+                                    self.scope,
+                                    self.panel,
+                                    self.generation,
+                                    PanelEffect::FetchLaunchUrl(key),
+                                );
+                            }
+                        }
+                        Err(e) => self.push_notice(
+                            bytehost_panel::notice::NoticeLevel::Error,
+                            e.text().into(),
+                            "app-start".into(),
+                        ),
+                        _ => {}
+                    }
+                }
+                iced::Task::none()
+            }
             Outcome::ServiceReady(ticket, in_process) => {
                 let in_process = in_process.clone();
                 if self.requests.accept(*ticket) {
                     self.service_ready(in_process)
                 } else {
-                    self.service.install_service(in_process);
-                    self.startup = Startup::Ready;
                     iced::Task::none()
                 }
             }
-            Outcome::ServiceFailed(_ticket, err) => {
+            Outcome::ServiceFailed(ticket, err) => {
+                if !self.requests.accept(*ticket) || self.quitting {
+                    return iced::Task::none();
+                }
                 // 启动失败:复位 `opened`,否则重开面板会被 `opened` 挡住、永不重试
                 // (复审 #7)。失败原因保留在 `startup` 里供界面显示。
                 self.startup = Startup::Unavailable(err.text().to_owned());
@@ -460,6 +599,24 @@ impl AppsState {
             }
             Outcome::List { ticket, result } => {
                 if self.requests.accept(*ticket) {
+                    self.list_in_flight = false;
+                    if self.list_dirty {
+                        self.list_dirty = false;
+                        self.refresh_list();
+                    }
+                    if let (Some(selected), Ok(apps)) = (&self.selected, result)
+                        && !self.opening
+                        && !apps.iter().any(|a| {
+                            a.id.as_str() == selected
+                                && matches!(
+                                    a.observed,
+                                    bytehost_apps::state::ObservedState::Running
+                                        | bytehost_apps::state::ObservedState::Starting
+                                )
+                        })
+                    {
+                        self.close_selected();
+                    }
                     self.step(InstallMessage::ListLoaded(
                         result.clone().map_err(|e| failure(&e)),
                     ))
@@ -512,21 +669,28 @@ impl AppsState {
                 app,
                 result,
             } => {
-                if self.requests.accept(*ticket) {
+                if self.requests.accept(*ticket)
+                    && !self.quitting
+                    && self.selected.as_deref() == Some(app.as_str())
+                {
                     match result {
                         // 地址到手只登记为"待创建":一期尚无应用视口几何,创建由产品在拿到视口时
                         // 调 `surface_open_pending` 触发。地址不入日志、不入任何持久状态。
                         Ok(url) => self.surfaces.set_pending_url(app.as_str(), url.clone()),
                         // 取地址失败:不残留任何凭证。
                         Err(_) => {
-                            let _ = self.surfaces.close(app.as_str());
+                            self.native_actions
+                                .extend(self.surfaces.close(app.as_str()));
+                            self.push_notice(
+                                bytehost_panel::notice::NoticeLevel::Error,
+                                "获取应用地址失败，请重新打开".into(),
+                                "launch".into(),
+                            );
                         }
                     }
                 }
                 iced::Task::none()
             }
-            // 其余结果(动作)由后续组接。
-            _ => iced::Task::none(),
         }
     }
 
@@ -561,7 +725,8 @@ impl AppsState {
     fn service_ready(&mut self, in_process: Arc<InProcess>) -> iced::Task<Message> {
         self.service.install_service(in_process);
         self.startup = Startup::Ready;
-        if self.opened {
+        if self.opened && !self.quitting {
+            self.exec.subscribe();
             self.step(InstallMessage::Opened)
         } else {
             iced::Task::none()
@@ -640,7 +805,7 @@ impl AppsState {
                     // 卸载成功且是"连数据一起删":先撤该应用所有 Surface(webview 离池,wry 才允许清存储),
                     // 再排一次浏览器数据存储清除(落盘台账 + 内存重试;失败留可见)。
                     if mode.is_some_and(store::purges_browser_data) {
-                        let _ = self.surfaces.close(id.as_str());
+                        self.native_actions.extend(self.surfaces.close(id.as_str()));
                         self.store.request(id.as_str());
                     }
                 }
@@ -656,9 +821,107 @@ impl AppsState {
         }
     }
 
+    fn refresh_list(&mut self) {
+        if self.quitting || !matches!(self.startup, Startup::Ready) {
+            return;
+        }
+        if self.list_in_flight {
+            self.list_dirty = true;
+            return;
+        }
+        self.list_in_flight = true;
+        self.exec.run(
+            self.scope,
+            self.panel,
+            self.generation,
+            PanelEffect::FetchList,
+        );
+    }
+
+    pub fn close_selected(&mut self) {
+        self.opening = false;
+        if let Some(id) = self.selected.take() {
+            if let Ok(app) = bytehost_apps::id::AppId::new(id.clone())
+                && let Some(key) = digger_app_host::AppKeyId::from_app_id(&app)
+            {
+                self.requests.invalidate_app(key);
+            }
+            self.native_actions.extend(self.surfaces.close(&id));
+        }
+    }
+
+    pub fn sync_native(
+        &mut self,
+        window: iced::window::Id,
+        rect: LogicalRect,
+    ) -> iced::Task<Message> {
+        if self.native_busy {
+            return iced::Task::none();
+        }
+        if let Some(id) = self.selected.clone() {
+            self.native_actions
+                .extend(self.surfaces.open_pending(&id, rect));
+            self.native_actions.extend(self.surfaces.resize(&id, rect));
+        }
+        let actions = std::mem::take(&mut self.native_actions);
+        if !actions.is_empty() {
+            self.native_busy = true;
+            let mut task = iced::Task::none();
+            for action in actions {
+                task = task.chain(surface_task(window, action));
+            }
+            // 仅在原生 Destroy 完成后消费待清队列。
+            return task.chain(iced::Task::done(Message::NativeSynced));
+        }
+        if self.quitting {
+            iced::Task::none()
+        } else {
+            store_removal_task(window, self.store_take_ready())
+        }
+    }
+
+    pub fn prepare_shutdown(&mut self) {
+        self.quitting = true;
+        self.service.begin_shutdown();
+        self.close_selected();
+        self.native_actions.extend(self.surfaces.close_all());
+    }
+
+    pub fn native_idle(&self) -> bool {
+        !self.native_busy && self.native_actions.is_empty()
+    }
+
+    pub fn shutdown(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send + 'static {
+        self.exec.shutdown()
+    }
+
     /// 视图渲染入口。
     pub fn view(&self) -> iced::Element<'_, Message> {
-        management::view(self)
+        if let Some(id) = &self.selected {
+            use iced::widget::{button, column, text};
+            let status = self
+                .surfaces
+                .open_error(id)
+                .unwrap_or(if self.surfaces.is_open(id) {
+                    "应用内容"
+                } else {
+                    "正在打开应用…"
+                });
+            let mut content = column![
+                button("返回应用管理").on_press(Message::CloseApp),
+                text(id),
+                text(status)
+            ]
+            .spacing(8);
+            if let Some(notice) = &self.notice {
+                content = content.push(text(&notice.text));
+            }
+            content.into()
+        } else {
+            management::view(self)
+        }
     }
 
     /// 应用 Surface 登记(只读):产品视口据此决定渲染哪些应用、显示哪些创建失败。
@@ -817,7 +1080,7 @@ pub fn surface_task(window: iced::window::Id, action: SurfaceAction) -> iced::Ta
             slot,
             url,
             rect,
-            ..
+            generation,
         } => {
             let spec = bytehost_desktop::AppSurfaceSpec {
                 slot,
@@ -828,22 +1091,39 @@ pub fn surface_task(window: iced::window::Id, action: SurfaceAction) -> iced::Ta
             bytehost_desktop::build_app_child(
                 window,
                 spec,
-                |_slot, _ipc| {},
+                |slot, ipc| {
+                    use bytehost_desktop::app_webview::AppSurfaceIpc;
+                    let change = match ipc {
+                        AppSurfaceIpc::ZoomIn => {
+                            "Math.min(3, (Number(document.documentElement.style.zoom)||1)+0.1)"
+                        }
+                        AppSurfaceIpc::ZoomOut => {
+                            "Math.max(0.5, (Number(document.documentElement.style.zoom)||1)-0.1)"
+                        }
+                        AppSurfaceIpc::ZoomReset => "1",
+                        // WKWebView owns focus and mouse release; no competing drag state.
+                        AppSurfaceIpc::Focus | AppSurfaceIpc::MouseUp => return,
+                    };
+                    bytehost_desktop::evaluate_app(
+                        slot,
+                        &format!("document.documentElement.style.zoom={change};"),
+                    );
+                },
                 |_slot| {},
                 move |built| match built.result {
-                    Ok(()) => Message::SurfaceOpened(app.clone(), Ok(())),
-                    Err(e) => Message::SurfaceOpened(app.clone(), Err(e)),
+                    Ok(()) => Message::SurfaceOpened(app.clone(), generation, slot, Ok(())),
+                    Err(e) => Message::SurfaceOpened(app.clone(), generation, slot, Err(e)),
                 },
             )
         }
-        SurfaceAction::Resize { slot, rect } => {
-            let _ = bytehost_desktop::set_app_bounds(slot, rect);
-            iced::Task::none()
-        }
-        SurfaceAction::Destroy { slot } => {
-            let _ = bytehost_desktop::destroy_app(slot);
-            iced::Task::none()
-        }
+        SurfaceAction::Resize { slot, rect } => iced::window::run(window, move |_| {
+            bytehost_desktop::set_app_bounds(slot, rect);
+            Message::NativeOperationDone
+        }),
+        SurfaceAction::Destroy { slot } => iced::window::run(window, move |_| {
+            bytehost_desktop::destroy_app(slot);
+            Message::NativeOperationDone
+        }),
     }
 }
 
@@ -878,7 +1158,7 @@ pub fn store_removal_task(
         );
         // 把通道接成一条流:清除完成后可能还有重试,产品会在下一拍再调本函数,故这条流处理一条即结束
         // (每条清除一张通道,结果一一对应,不会串台)。
-        let drain = iced::Task::stream(rx);
+        let drain = iced::Task::stream(iced::futures::StreamExt::take(rx, 1));
         tasks.push(iced::Task::batch([submit, drain]));
     }
     if tasks.is_empty() {
@@ -1217,38 +1497,100 @@ mod tests {
     /// 且 `Message::RetryService` 可在 Unavailable 下重新起服务。
     #[tokio::test]
     async fn a_failed_service_start_can_retry() {
-        use digger_app_host::effects::Outcome;
-        use digger_app_host::request::{PanelInstanceId, RequestKey, RequestTicket, ScopeId};
-
-        let path = usage_ledger_path("retry");
-        let ledger = shared_ledger(&path);
-        let mut s = AppsState::with_ledger_path(temp_ledger("retry"));
-        s.attach_usage(ledger, "/digger/scope".into());
-
-        // 首次打开:发起启动。
+        let ledger = temp_ledger("retry-real");
+        let root = ledger.with_extension("host");
+        std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+        std::fs::write(&root, "not a directory").unwrap();
+        let mut s = AppsState::with_paths(ledger, root.clone());
+        let mut rx = take_reply_receiver(&s.reply_receiver()).unwrap();
         let _ = s.update(Message::Opened);
-        assert!(matches!(s.startup(), Startup::Starting));
-
-        // 启动失败:进入 Unavailable,且 `opened` 被复位(否则重开面板无效)。
-        let ticket = RequestTicket {
-            scope: ScopeId(1),
-            panel: PanelInstanceId(1),
-            generation: 0,
-            key: RequestKey::List,
-            sequence: 0,
-        };
-        let err = AppApiError::Host(AppFailure::new(AppErrorKind::Internal, "端口被占用"));
-        let _ = s.update(Message::Outcome(Arc::new(Outcome::ServiceFailed(
-            ticket, err,
-        ))));
-        assert!(matches!(s.startup(), Startup::Unavailable(_)));
-        assert!(!s.opened, "失败后必须复位 opened,重开面板才可能重试");
-
-        // 显式「重试」:回到 Starting 并重新起服务。
-        let _ = s.update(Message::RetryService);
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(
-            matches!(s.startup(), Startup::Starting),
-            "重试应重新进入启动流程,而不是停在 Unavailable"
+            matches!(outcome, Outcome::ServiceFailed(..)),
+            "real failure: {outcome:?}"
+        );
+        let _ = s.update(Message::Outcome(Arc::new(outcome)));
+        assert!(matches!(s.startup, Startup::Unavailable(_)));
+        assert!(!s.opened);
+
+        std::fs::remove_file(&root).unwrap();
+        let _ = s.update(Message::RetryService);
+        assert!(s.opened, "retry owns the in-flight startup");
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(outcome, Outcome::ServiceReady(..)),
+            "real recovery: {outcome:?}"
+        );
+        let _ = s.update(Message::Outcome(Arc::new(outcome)));
+        assert!(matches!(s.startup, Startup::Ready));
+        assert!(s.list_in_flight, "success must refresh authoritative state");
+        let api = s.service.api();
+        let before = api.read().await.service().clone();
+        let _ = s.update(Message::Opened);
+        // If a duplicate genesis was dispatched it is included in shutdown's tracked tasks.
+        s.prepare_shutdown();
+        s.shutdown().await.unwrap();
+        let after = api.read().await.service().clone();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "reopening cannot replace the active backend"
+        );
+        let restarted = InProcess::start(&root).await;
+        use bytehost_client::AppHostApi;
+        assert!(
+            restarted.app_list().await.is_ok(),
+            "shutdown releases same-root ownership"
+        );
+        restarted.service().shutdown_reporting().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn closing_during_startup_waits_and_releases_the_root() {
+        use bytehost_client::AppHostApi;
+        let ledger = temp_ledger("exit-starting");
+        let root = ledger.with_extension("host");
+        let mut s = AppsState::with_paths(ledger, root.clone());
+        let _ = s.update(Message::Opened);
+        s.prepare_shutdown();
+        s.shutdown().await.unwrap();
+        let restarted = InProcess::start(&root).await;
+        assert!(restarted.app_list().await.is_ok());
+        restarted.service().shutdown_reporting().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_native_creation_is_destroyed_after_close() {
+        let mut s = AppsState::with_ledger_path(temp_ledger("stale-native"));
+        let slot = bytehost_core::SurfaceSlot(9999);
+        let _ = s.update(Message::SurfaceOpened("closed".into(), 0, slot, Ok(())));
+        assert_eq!(s.native_actions, vec![SurfaceAction::Destroy { slot }]);
+    }
+
+    #[tokio::test]
+    async fn changes_coalesce_while_a_list_request_is_in_flight() {
+        let mut s = AppsState::with_ledger_path(temp_ledger("coalesced"));
+        s.startup = Startup::Ready;
+        let mut rx = take_reply_receiver(&s.reply_receiver()).unwrap();
+        s.refresh_list();
+        s.refresh_list();
+        s.refresh_list();
+        assert!(s.list_dirty);
+        let first = rx.recv().await.unwrap();
+        let _ = s.deliver(Arc::new(first));
+        assert!(!s.list_dirty);
+        assert!(s.list_in_flight);
+        let second = rx.recv().await.unwrap();
+        let _ = s.deliver(Arc::new(second));
+        assert!(!s.list_in_flight);
+        assert!(
+            rx.try_recv().is_err(),
+            "three invalidations require only two reads"
         );
     }
 

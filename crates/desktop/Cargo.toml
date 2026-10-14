@@ -45,3 +45,6 @@ serde_json.workspace = true
 tokio.workspace = true
 directories.workspace = true
 rfd = "0.15"
+
+[build-dependencies]
+dozer-panel-usage.workspace = true

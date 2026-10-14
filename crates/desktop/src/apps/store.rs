@@ -59,7 +59,12 @@ impl StoreCleanup {
     /// 把它排进持久台账与内存队列:落盘失败不影响内存记账(下次仍会尝试),但会让"重启恢复"这一保证
     /// 打折扣——调用方据此可提示,这里不 panic。
     pub fn request(&mut self, app_id: &str) {
-        if let Err(_e) = self.ledger.request(app_id) {
+        let result = if matches!(self.ledger.state(app_id), Some(CleanupState::Failed { .. })) {
+            self.ledger.retry(app_id)
+        } else {
+            self.ledger.request(app_id).map(|_| ())
+        };
+        if let Err(_e) = result {
             // 落盘失败:内存里已加,仍会尝试清除;但重启后不保证继续,这是有意的降级(不 panic)。
             // 日志由调用方按需补(本层无日志框架)。
         }
@@ -272,6 +277,21 @@ mod tests {
             reloaded.take_ready(Instant::now(), |_| false).is_empty(),
             "终态失败不重新驱动"
         );
+    }
+
+    #[test]
+    fn manual_retry_is_persisted_across_restart() {
+        let path = temp_ledger("manual-retry");
+        let mut c = StoreCleanup::load(path.clone());
+        c.request("notes");
+        c.settle(
+            "notes",
+            StoreRemovalOutcome::Failed("busy".into()),
+            Instant::now(),
+        );
+        c.request("notes");
+        let mut reloaded = StoreCleanup::load(path);
+        assert_eq!(reloaded.take_ready(Instant::now(), |_| false).len(), 1);
     }
 
     #[test]
