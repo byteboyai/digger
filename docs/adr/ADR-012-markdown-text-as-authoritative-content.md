@@ -330,7 +330,7 @@ Validation item 4, with SQLite (rusqlite) as the authority and the text-merge sp
 - **Guard:** the outbox never overwrites a file whose hash is neither the recorded mirror hash nor the database's (an unimported external edit); without it three tests fail, including the random campaign.
 - **Normalisation:** a BOM and CRLF alone are not an edit; invalid UTF-8 is reported and ignored; a deleted mirror file is rewritten, never treated as deleting the chapter. The author's imported file text is kept in history so it can be a base later.
 - **Randomised check:** 300 random interleavings (app edits, external edits, drains, imports, crashes with restart) of uniquely marked edits: no marker is lost silently (each is in the text, in a parked conflict, or still in the file), and with nothing parked the file equals the database. 182 of the runs ended with a parked item, which is expected because both sides often insert at the same place.
-- **Not covered:** the check-then-rename race (an editor saving between the guard and the rename; needs an OS file lock or a post-rename hash check, to be decided), a real file watcher (the spike calls `import` explicitly), several documents, renames and moves of chapter files, `book.yaml`, and Windows/Linux rename and fsync semantics.
+- **Not covered:** a real file watcher (the spike calls `import` explicitly), several documents, renames and moves of chapter files, `book.yaml`, and Windows/Linux rename and fsync semantics.
 
 ### Agent runtime: ids are resolved in Rust when the step runs (`spike/md-engine`, `sync.rs`)
 
@@ -341,6 +341,15 @@ Follow-up to the finding that 7 to 19 of 58 randomized Agent operations were ref
 - **Plans are all or nothing.** If any step is `NoBlock` or `Stale`, the document (text, version, forwarding) is restored exactly. Each step yields its own patch in the coordinates of the version before it, so the existing `update` message and the editor's transform are unchanged. `NoBlock` and `Stale` are reported to the Agent as ordinary outcomes.
 - **Results.** 1,500 randomized races (author edits, deletions and new paragraphs between the Agent's read and its plan; plans of 1 to 3 rewrites): 1,073 applied, 204 refused as stale, 223 refused because the block was gone; in every applied plan all author edits survive and every rewrite is present, and every refused plan left the document byte-identical. Removing the precondition, the same-run rule or the rollback each fails tests. The editor suite is unchanged (`ENGINE=cm MODE=test`: 23 passed).
 - **Not done:** what the Agent does after `Stale` (re-read and re-plan, or offer the author a choice) is runtime/product behaviour; forwarding survives only in memory, not across restarts, and is not yet recorded in `block_agent_history`; refusing versus keeping both when the author is typing in the same block (T21) remains a product decision.
+
+### Write race: detect and recover instead of lock (2026-10-12)
+
+The guard (file hash is the mirror hash) and the replace are not atomic: an editor can save between them, and the replace would overwrite that save. Decision: **no file lock; keep the file being replaced and check it afterwards.**
+
+- Before replacing, `drain` hard-links the existing file to `.digger/trash/<doc>.prev`; then `rename`s the temp file over it. The link keeps the old inode alive, so it also holds writes made in place through an old file handle. A file that did not exist is created with `link(tmp, path)`, which fails if someone created it meanwhile (then nothing is written and the edit is treated as external).
+- Right after the replace, and again at the start of the next drain, the backup's hash is compared with the hash that was validated. If it differs, an edit slipped in; it is absorbed exactly like an external edit (same base, same three-way merge, same conflict/working-state outcomes), and the mirror hash is set to what the file actually holds, so the outbox is not blocked. Result: `Drain::WrittenAfterRace(..)`.
+- Tests: an editor saving atomically or in place in the window, with a non-overlapping edit (merged, both present, file rewritten) and an overlapping one (parked with the author's text, file equals database, nothing stuck); a write through an old handle after the replace; and the 300-run random campaign now includes saves in the window (208 runs ended with a parked item, no edit lost). Removing the post-check, or replacing the hard link with an empty file, fails these tests.
+- Limits: the author's save is visible in the file only until the replace; it is restored from the backup, so for a moment the file shows the database text and the editor may report that the file changed on disk. A write through an old handle later than the next drain is not seen. Windows needs `CreateHardLink` and different replace semantics (sharing violations when an editor holds the file) and is untested. Backups are one per document and are overwritten by the next drain.
 
 ## Consequences
 

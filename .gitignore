@@ -10,3 +10,6 @@
 
 # OS
 .DS_Store
+
+# spike build outputs
+**/target/

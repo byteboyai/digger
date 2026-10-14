@@ -24,7 +24,8 @@ pub fn normalize(s: &str) -> String { s.strip_prefix('\u{feff}').unwrap_or(s).re
 pub enum Fault { AfterTempWritten, AfterRename }
 
 #[derive(Debug, PartialEq)]
-pub enum Drain { Written(i64), AlreadyInSync, SkippedExternalEditPending }
+pub enum Drain { Written(i64), AlreadyInSync, SkippedExternalEditPending, /// written, but an edit slipped into the window; it was recovered from the replaced file
+    WrittenAfterRace(Import) }
 
 #[derive(Debug, PartialEq)]
 pub enum Import {
@@ -42,7 +43,11 @@ pub enum Import {
 #[derive(Debug, Clone)]
 pub struct Pending { pub id: i64, pub kind: String, pub base: String, pub ours: String, pub theirs: String }
 
-pub struct Store { pub db: Connection, pub root: PathBuf, pub fault: Option<Fault> }
+/// Test seams for the window between the guard check and the rename (and for after it).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Hook { BeforeRename, AfterRename }
+
+pub struct Store { pub db: Connection, pub root: PathBuf, pub fault: Option<Fault>, pub hook: Option<Box<dyn FnMut(Hook, &Path)>> }
 
 impl Store {
     pub fn open(root: &Path) -> Result<Store> {
@@ -53,10 +58,11 @@ impl Store {
             CREATE TABLE IF NOT EXISTS doc(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, text TEXT NOT NULL, version INTEGER NOT NULL, hash TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS history(doc_id INTEGER NOT NULL, hash TEXT NOT NULL, text TEXT NOT NULL, version INTEGER, actor TEXT NOT NULL, PRIMARY KEY(doc_id, hash));
             CREATE TABLE IF NOT EXISTS mirror(doc_id INTEGER PRIMARY KEY, hash TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS replaced(doc_id INTEGER PRIMARY KEY, expected TEXT NOT NULL, written TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outbox(doc_id INTEGER PRIMARY KEY, version INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS pending(id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL, kind TEXT NOT NULL, base TEXT NOT NULL, ours TEXT NOT NULL, theirs TEXT NOT NULL, ours_hash TEXT NOT NULL, theirs_hash TEXT NOT NULL, UNIQUE(doc_id, kind, ours_hash, theirs_hash));
         ")?;
-        Ok(Store { db, root: root.into(), fault: None })
+        Ok(Store { db, root: root.into(), fault: None, hook: None })
     }
 
     pub fn create_doc(&self, path: &str, text: &str) -> Result<i64> {
@@ -98,10 +104,15 @@ impl Store {
         Ok(out)
     }
 
+    fn trash(&self, id: i64) -> PathBuf { self.root.join(format!(".digger/trash/{id}.prev")) }
+
     fn drain_one(&mut self, id: i64) -> Result<Drain> {
+        // an editor that still held the previous file open may have written to it after our last replace
+        if let Some(r) = self.check_replaced(id)? { return Ok(Drain::WrittenAfterRace(r)); }
         let (path, text, version, h) = self.doc(id)?;
         let full = self.root.join(&path);
         let mirror: Option<String> = self.db.query_row("SELECT hash FROM mirror WHERE doc_id=?", [id], |r| r.get(0)).optional()?;
+        let mut expected: Option<String> = None; // hash of the file as we validated it; None = it did not exist
         match std::fs::read(&full) {
             Ok(bytes) => {
                 let fh = match String::from_utf8(bytes) { Ok(s) => hash(&normalize(&s)), Err(_) => return Ok(Drain::SkippedExternalEditPending) };
@@ -111,6 +122,7 @@ impl Store {
                     return Ok(Drain::AlreadyInSync);
                 }
                 if Some(&fh) != mirror.as_ref() { return Ok(Drain::SkippedExternalEditPending); }
+                expected = Some(fh);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
@@ -124,11 +136,57 @@ impl Store {
             f.sync_all()?;
         }
         if self.fault == Some(Fault::AfterTempWritten) { self.fault = None; return Err("injected crash after temp write".into()); }
-        std::fs::rename(&tmp, &full)?;
+        if let Some(mut hk) = self.hook.take() { hk(Hook::BeforeRename, &full); self.hook = Some(hk); }
+        // The guard above and the replace below are not atomic, so keep the file we replace: a hard link to it
+        // survives the rename (also when the editor writes in place), and is checked afterwards.
+        std::fs::create_dir_all(self.root.join(".digger/trash"))?;
+        let trash = self.trash(id);
+        match &expected {
+            Some(_) => {
+                let _ = std::fs::remove_file(&trash);
+                match std::fs::hard_link(&full, &trash) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => { // deleted in the window: nothing to protect
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+                std::fs::rename(&tmp, &full)?;
+            }
+            None => {
+                // the file did not exist: create it only if it still does not (link fails on an existing file)
+                match std::fs::hard_link(&tmp, &full) {
+                    Ok(()) => { std::fs::remove_file(&tmp)?; }
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => { std::fs::remove_file(&tmp)?; return Ok(Drain::SkippedExternalEditPending); }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
         if let Some(parent) = full.parent() { std::fs::File::open(parent)?.sync_all()?; }
         if self.fault == Some(Fault::AfterRename) { self.fault = None; return Err("injected crash after rename".into()); }
+        self.db.execute("INSERT INTO replaced VALUES(?,?,?) ON CONFLICT(doc_id) DO UPDATE SET expected=excluded.expected, written=excluded.written", params![id, expected.clone().unwrap_or_default(), h])?;
         self.finish_drain(id, version, &h)?;
-        Ok(Drain::Written(version))
+        if let Some(mut hk) = self.hook.take() { hk(Hook::AfterRename, &full); self.hook = Some(hk); }
+        match self.check_replaced(id)? {
+            Some(r) => Ok(Drain::WrittenAfterRace(r)),
+            None => Ok(Drain::Written(version)),
+        }
+    }
+
+    /// Compare the file we replaced with what we validated before replacing it. If an edit slipped into the window
+    /// (or arrives late through an old file handle), absorb it exactly like an external edit, against the same base.
+    fn check_replaced(&mut self, id: i64) -> Result<Option<Import>> {
+        let row: Option<(String, String)> = self.db.query_row("SELECT expected,written FROM replaced WHERE doc_id=?", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let Some((expected, written)) = row else { return Ok(None) };
+        let trash = self.trash(id);
+        let Ok(bytes) = std::fs::read(&trash) else { return Ok(None) };
+        let Ok(prev) = String::from_utf8(bytes) else { return Ok(None) };
+        let prev = normalize(&prev);
+        if expected.is_empty() || hash(&prev) == expected { return Ok(None); }
+        // changed since we validated it, and we have already replaced it: the changed content is `prev`
+        let r = self.absorb(id, Some(&expected), &prev, &written)?;
+        // the recovered edit is now in history/pending; remember we handled this content
+        self.db.execute("UPDATE replaced SET expected=? WHERE doc_id=?", params![hash(&prev), id])?;
+        Ok(Some(r))
     }
 
     /// Record the mirror hash; drop the outbox row only if nothing newer was committed meanwhile.
@@ -167,24 +225,32 @@ impl Store {
             return Ok(Import::Unchanged);
         }
         if mirror.as_deref() == Some(th.as_str()) { return Ok(Import::Unchanged); } // the file is just behind the database
-        // an external edit. Keep what the author wrote in history first, so a later import can find it as a base.
-        let base: Option<String> = match &mirror {
+        // an external edit
+        self.absorb(id, mirror.as_deref(), &theirs, &th)
+    }
+
+    /// Merge `theirs` (an author's version of the file, edited from the text whose hash is `base_hash`) into the
+    /// database. `mirror_after` is the hash the file is known to hold once this is done.
+    fn absorb(&mut self, id: i64, base_hash: Option<&str>, theirs: &str, mirror_after: &str) -> Result<Import> {
+        let (_p, ours, _v, cur_hash) = self.doc(id)?;
+        let th = hash(theirs);
+        // keep what the author wrote in history first, so it can be a base later
+        let base: Option<String> = match base_hash {
             Some(m) => self.db.query_row("SELECT text FROM history WHERE doc_id=? AND hash=?", params![id, m], |r| r.get(0)).optional()?,
             None => None,
         };
         let ours_hash = cur_hash.clone();
         let Some(base) = base else {
-            return Ok(Import::WorkingState(self.park(id, "working", "", &ours, &theirs, &ours_hash, &th)?));
+            return Ok(Import::WorkingState(self.park(id, "working", "", &ours, theirs, &ours_hash, &th)?));
         };
-        let m = merge(&base, &ours, &theirs);
+        let m = merge(&base, &ours, theirs);
         let Some(text) = m.text() else {
-            return Ok(Import::Conflict(self.park(id, "conflict", &base, &ours, &theirs, &ours_hash, &th)?));
+            return Ok(Import::Conflict(self.park(id, "conflict", &base, &ours, theirs, &ours_hash, &th)?));
         };
         let tx = self.db.unchecked_transaction()?;
         tx.execute("INSERT OR IGNORE INTO history VALUES(?,?,?,NULL,'External')", params![id, th, theirs])?;
         let v = if text == ours { None } else { Some(commit_in(&tx, id, &text, "External")?) };
-        // the file now reflects `theirs`; the outbox rewrites it with the merged text
-        tx.execute("INSERT INTO mirror VALUES(?,?) ON CONFLICT(doc_id) DO UPDATE SET hash=excluded.hash", params![id, th])?;
+        tx.execute("INSERT INTO mirror VALUES(?,?) ON CONFLICT(doc_id) DO UPDATE SET hash=excluded.hash", params![id, mirror_after])?;
         if v.is_none() { tx.execute("INSERT INTO outbox VALUES(?,(SELECT version FROM doc WHERE id=?)) ON CONFLICT(doc_id) DO NOTHING", params![id, id])?; }
         tx.commit()?;
         Ok(Import::Merged(v.unwrap_or(self.version(id)?)))

@@ -127,6 +127,78 @@ fn invalid_utf8_and_a_deleted_file_do_nothing_destructive() {
     assert_eq!(read(&s, id), BASE, "a deleted mirror file is rewritten, not treated as deleting the chapter");
 }
 
+/// the author's editor saves in the window between the guard and the replace, the way editors do it
+fn save_atomically(path: &std::path::Path, text: &str) {
+    let tmp = path.with_extension("md.swp");
+    std::fs::write(&tmp, text).unwrap();
+    std::fs::rename(&tmp, path).unwrap();
+}
+
+#[test]
+fn an_edit_saved_between_the_guard_and_the_replace_is_recovered_not_lost() {
+    for in_place in [false, true] {
+        let (mut s, id) = setup(&format!("race{in_place}"));
+        s.commit(id, &BASE.replace("天色渐暗", "天色已暗"), "App").unwrap();
+        let theirs = BASE.replace("风从北边来", "风从南边来");
+        let t2 = theirs.clone();
+        s.hook = Some(Box::new(move |h, path| {
+            if h == Hook::BeforeRename { if in_place { std::fs::write(path, &t2).unwrap() } else { save_atomically(path, &t2) } }
+        }));
+        let r = s.drain().unwrap().remove(0).1;
+        s.hook = None;
+        assert!(matches!(r, Drain::WrittenAfterRace(Import::Merged(_))), "{in_place}: {r:?}");
+        let t = s.text(id).unwrap();
+        assert!(t.contains("天色已暗") && t.contains("风从南边来"), "{in_place}: {t}");
+        s.drain().unwrap();
+        assert_eq!(read(&s, id), t, "{in_place}: the merged text reaches the file");
+    }
+}
+
+#[test]
+fn an_overlapping_edit_in_the_window_is_parked_with_the_authors_text() {
+    let (mut s, id) = setup("race-conflict");
+    s.commit(id, &BASE.replace("天色渐暗", "天色已暗"), "App").unwrap();
+    let theirs = BASE.replace("天色渐暗", "天色昏沉");
+    let t2 = theirs.clone();
+    s.hook = Some(Box::new(move |h, path| if h == Hook::BeforeRename { save_atomically(path, &t2) }));
+    let r = s.drain().unwrap().remove(0).1;
+    assert!(matches!(r, Drain::WrittenAfterRace(Import::Conflict(_))), "{r:?}");
+    s.hook = None;
+    let p = s.pending(id).unwrap();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].theirs, theirs, "the author's version is kept");
+    assert_eq!(read(&s, id), s.text(id).unwrap(), "the file holds the database text, and nothing is stuck waiting");
+    assert_eq!(s.drain().unwrap().iter().filter(|(_, d)| *d == Drain::SkippedExternalEditPending).count(), 0);
+}
+
+#[test]
+fn a_write_through_an_old_file_handle_after_the_replace_is_caught() {
+    use std::io::{Seek, Write};
+    let (mut s, id) = setup("late");
+    s.commit(id, &BASE.replace("天色渐暗", "天色已暗"), "App").unwrap();
+    // an editor holds the file open (in-place saver) and writes after our replace
+    let held = std::sync::Arc::new(std::sync::Mutex::new(None::<std::fs::File>));
+    let h2 = held.clone();
+    let theirs = BASE.replace("门没有关", "门没有关死");
+    let t2 = theirs.clone();
+    s.hook = Some(Box::new(move |h, path| match h {
+        Hook::BeforeRename => *h2.lock().unwrap() = Some(std::fs::OpenOptions::new().write(true).open(path).unwrap()),
+        Hook::AfterRename => {
+            let mut g = h2.lock().unwrap();
+            let f = g.as_mut().unwrap();
+            f.set_len(0).unwrap(); f.rewind().unwrap(); f.write_all(t2.as_bytes()).unwrap(); f.sync_all().unwrap();
+        }
+    }));
+    // the late write lands after finish_drain; the immediate check (hard link shares the old inode) already sees it
+    let r = s.drain().unwrap().remove(0).1;
+    s.hook = None;
+    assert!(matches!(r, Drain::WrittenAfterRace(Import::Merged(_))), "{r:?}");
+    let t = s.text(id).unwrap();
+    assert!(t.contains("天色已暗") && t.contains("门没有关死"), "{t}");
+    s.drain().unwrap();
+    assert_eq!(read(&s, id), t);
+}
+
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 }
@@ -149,7 +221,7 @@ fn random_interleavings_never_lose_an_edit_silently() {
         let (mut s, id) = setup(&format!("rand{seed}"));
         let mut markers = vec![];
         for step in 0..(5 + r.below(20)) {
-            match r.below(6) {
+            match r.below(7) {
                 0 | 1 => { let m = format!("甲{seed}x{step}"); let t = mark(&mut r, &s.text(id).unwrap(), &m); s.commit(id, &t, "App").unwrap(); markers.push(m); }
                 2 => { // the author edits the file as it currently is
                     let m = format!("乙{seed}x{step}");
@@ -159,6 +231,17 @@ fn random_interleavings_never_lose_an_edit_silently() {
                 }
                 3 => { let _ = s.drain(); }
                 4 => { let _ = s.import(id); }
+                6 => { // the author saves in the window of a drain
+                    let m = format!("丙{seed}x{step}");
+                    let cur = std::fs::read_to_string(s.file_path(id).unwrap()).unwrap();
+                    let t = mark(&mut r, &cur, &m);
+                    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+                    let f2 = fired.clone();
+                    s.hook = Some(Box::new(move |h, path| if h == Hook::BeforeRename { save_atomically(path, &t); f2.set(true); }));
+                    let _ = s.drain();
+                    s.hook = None;
+                    if fired.get() { markers.push(m); } // the author only saved if the drain reached the window
+                }
                 _ => { // crash during a write, then restart
                     s.fault = Some(if r.below(2) == 0 { Fault::AfterTempWritten } else { Fault::AfterRename });
                     let _ = s.drain();
