@@ -12,6 +12,7 @@
 - [ADR-006: Writing Document Representation](docs/adr/ADR-006-writing-document-representation.md)
 - [ADR-011: Embedding bytehost as the Application Host](docs/adr/ADR-011-bytehost-app-host-embedding.md)
 - [ADR-012: Markdown Text as the Authoritative Chapter Content](docs/adr/ADR-012-markdown-text-as-authoritative-content.md)
+- [ADR-013: A First-Party Markdown Panel from the md-engine Spike](docs/adr/ADR-013-markdown-panel-from-md-engine-spike.md)
 - Engine spike: `spike/md-engine` (CodeMirror 6 vs ProseMirror under ADR-012)
 - Block identity spike: `spike/block-identity` (stable block ids across edits, with property tests)
 - Parser agreement spike: `spike/parser-agreement` (Rust vs Lezer block boundaries, with a conformance check)
