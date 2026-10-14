@@ -44,12 +44,12 @@ S1 是其余所有子项目的前提:S2–S4 的面板要挂在它的配对视�
 
 | 单元 | 职责 | 依赖 |
 |---|---|---|
-| `ShellModel` | 无界面的骨架状态与 `update(ShellMsg)` | `PanelId`、`Layout`、`PaneStore` |
+| `ShellModel` | 无界面的骨架状态与 `update(ShellMsg)` | `PanelId`、`PaneStore` |
 | `geometry` | 纯函数:窗口 + 模型 → 各区域矩形 | 无 iced |
 | 控件 | 图标栏(含拖拽换栏换序)、面板区外框、分隔线、配对视图、放大浮层、顶栏外壳 | iced、byteui |
 | `ShellHost` trait | 产品实现:面板清单(`PanelId` + 标题 + 图标)、渲染某面板 body 的回调、顶栏各槽位 | 由产品提供 |
 
-bytehost 已有、直接复用:`Layout`/`Rail`、`PaneStore` 与 `apply_pane_split_drag`、`FocusRouter`、`route_lifecycle`。
+bytehost 已有、直接复用:`PanelId`、`PaneStore` 与 `apply_pane_split_drag`、`route_lifecycle`(Digger 一侧)。
 
 **数据流**:产品的 `update` 把 `ShellMsg` 交给 `ShellModel`;产品的 `view` 调 `chrome::view(&model, &host)`;骨架画 rail、分隔线、外框,面板 body 由 `host` 回调画;产品摆原生 webview 时问 `geometry` 要内容矩形。
 
@@ -58,7 +58,7 @@ bytehost 已有、直接复用:`Layout`/`Rail`、`PaneStore` 与 `apply_pane_spl
 ### 4.2 `ShellModel`
 
 **持久状态**(键全是 `PanelId`):
-- `Layout`:两条 rail,`rails[0]` 左、`rails[1]` 右,各为有序的 `PanelId` 列表。
+- 两条图标栏:`[Vec<PanelId>; 2]`,`[0]` 左、`[1]` 右,各为有序的 `PanelId` 列表。(骨架用自己的 `shell.json` 格式,**不用** `bytehost_core::Layout`:骨架恒为左右两栏,而 `Layout` 是 N 栏、栏宽语义也不同。)
 - 每侧选中的 `PanelId`、每侧收起态。
 - 左面板区宽度(像素);右区恒为剩余空间,只有一条 LeftRight 分隔线。
 - `PaneStore`:每个面板的 `split` 与 `collapsed`。
@@ -74,7 +74,7 @@ bytehost 已有、直接复用:`Layout`/`Rail`、`PaneStore` 与 `apply_pane_spl
 **持久化**:
 - 一个 JSON 文件,字段全部 `#[serde(default)]`,缺字段补默认而不是整份失败。
 - 内容:窗口大小(全局)、rail 布局、左宽、每侧选中面板、`PaneStore`。Digger 暂时全局一份;接口按 scope id 留好,S5 有了 Project 再把后几项拆成按项目一份。
-- 读盘后统一消毒:分割比例为 0 或 1、左宽过小、窗口尺寸为 0、rail 为空,都回落到合法值。更高 schema 版本的文件沿用 Digger 现有做法:内存里用默认值,拒绝覆盖原文件。
+- 读盘后统一消毒:顶层不是对象(serde 会把 `[1,2]` 这样的数组按"位置序列"塞进结构体,把损坏文件当成已恢复)、分割比例不在合法区间、左宽非正、窗口尺寸为 0 或小于下限、两侧都收起,都回落到合法值;任一 rail 为空则整体回落默认布局。**清单里有而文件里没有的面板回到它的默认栏末尾**(与 Dozer 有意不同:Dozer 对布局"不做部分修复",因此为"新增面板"专门写了迁移函数;这里新版本新增面板不会重置用户布局)。更高 schema 版本的文件沿用 Digger 现有做法:内存里用默认值,拒绝覆盖原文件。
 
 **行为来源**:图标栏点击、拖拽换栏、放大态进出、分隔线手感,spec 阶段**尚未逐条读过** Dozer 的 `chrome/rail.rs`(1487 行)和 `app/update.rs` 里的对应分支。实现计划的第一步就是逐条读出并整理成行为表,Dozer 现有测试移植过来作验收,而不是凭印象重写。
 
@@ -148,3 +148,6 @@ bytehost 已有、直接复用:`Layout`/`Rail`、`PaneStore` 与 `apply_pane_spl
 3. Dozer 的放大态没有生产入口。→ 只做消息入口,不加界面(§4.4)。
 4. Dozer 的窗口是透明标题栏 + 全尺寸内容视图,红绿灯挪进顶栏。→ 纳入 S1(§4.4)。
 5. Dozer 的拖拽事件由它自己的 winit 层追踪;Digger 用 iced 运行时,计划里改用 iced 的 `event::listen_with` 追踪光标与松开。
+6. 落盘格式:自己的 `shell.json` DTO(§4.2),不用 `bytehost_core::Layout`;缺失面板回到默认栏(§4.2)。原因见 §4.2。
+7. 顶栏拖窗保护(Dozer 覆写 `mouseDownCanMoveWindow` 的那段 unsafe 代码)**不在 S1**:S1 的顶栏没有任何可交互控件,等顶栏有了项目页签(S5)再移植并加真实窗口验证。
+8. 计划阶段发现原生视图的大小是取整的,真实窗口自检的比较容差取半个像素(够吸收取整,又抓得住 1 像素的几何漂移)。
