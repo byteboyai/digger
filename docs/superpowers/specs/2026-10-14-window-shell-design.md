@@ -1,7 +1,7 @@
 # S1 窗口骨架:参照 Dozer 的窗口结构,抽成 bytehost 共享 crate
 
 - 日期:2026-10-14
-- 状态:待评审
+- 状态:已通过评审;2026-10-14 读完 Dozer 实现后修订(见 §8)
 - 路径:架构级(新增共享 crate,重组 Digger 外壳里面板的组织方式)
 - 相关:ADR-001(外壳与编辑器宿主边界)、ADR-011(bytehost 应用宿主)、ADR-013(Markdown 面板)、
   Dozer 的 `docs/dozer-v2/dozer-v2-面板独立性与服务化要求.md` 与 `docs/dozer-v2/digger-bytehost-integration/ownership.md`
@@ -80,7 +80,9 @@ bytehost 已有、直接复用:`Layout`/`Rail`、`PaneStore` 与 `apply_pane_spl
 
 ### 4.3 几何与原生 webview
 
-**一份度量,两处使用**:`ChromeMetrics`(图标栏宽、分隔线宽、最小区宽、各区外边距 / 内边距 / 边框,取自 byteui geometry)只定义一次,控件和几何函数都读它,不允许各自写常量。
+**一份度量,两处使用**:控件和几何函数读同一份度量,不允许各自写常量。度量有两个来源:
+- `byteui::theme::geometry`(已有,Dozer 早已把图标栏宽、分隔线宽、最小区宽、顶栏高度、放大浮层内边距等迁到这里);
+- **`byteui::theme::region` 的外壳区域样式(S1 新增)**:顶栏、左右图标栏、左右面板区、放大浮层、底栏的背景 / 边框 / 内边距 / 间距 / 外边距。Dozer 里这部分现在在 `dozer-app` 自己的 `theme::region`,数据来自 `assets/theme/workspace.json`,不在 byteui。S1 把这 7 个外壳区域的数据搬进 byteui,**数值与 Dozer 的 workspace.json 逐项相同**,用一个跨仓库的一致性检查脚本守住;Dozer 的 `region.rs` 在 S1 里不动,等 Dozer 迁移时再改为引用 byteui。
 
 **纯几何函数**(无 iced、无窗口,可直接单测):
 - `layout(window, &model, &metrics) -> ShellRects`:顶栏、两条图标栏、两个面板区、分隔线、放大态下被放大那一侧的矩形。
@@ -101,14 +103,25 @@ bytehost 已有、直接复用:`Layout`/`Rail`、`PaneStore` 与 `apply_pane_spl
   - 左 rail:编辑器、信息;右 rail:应用、用量。
   - 启动选中:左 = 编辑器,右 = 用量。左宽默认 640,与 Dozer 一致,可拖。
 - **S1 做**:顶栏结构(项目页签行、置灰的“＋”、首页入口位、窗口控制)、两条图标栏、两个面板区、分隔线、配对视图控件、放大态、底栏占位槽、布局持久化。
+- **窗口装饰**(S1 做):与 Dozer 一致,透明标题栏 + 全尺寸内容视图,顶栏取代系统标题栏;macOS 红绿灯按钮挪进顶栏内垂直居中;双击顶栏空白处缩放窗口。
+- **放大态**:Dozer 的生产代码里目前**没有任何入口**把放大态置为 `Some`(只有退出路径和测试)。S1 照搬状态、浮层、几何和退出路径,入口只做成一条 `ShellMsg::Maximize(side)` 消息,不加任何界面按钮,与 Dozer 现状一致。
 - **S1 不做**:首页落地页内容、项目页签内容、底栏内容、各类业务浮层(设置、搜索等)。保留结构位置,内容随后续子项目补。
 - 配对视图控件在 S1 交付并用测试夹具验证;Digger 里真正的“列表 \| 内容”配对要等 S2 起的面板才出现。
 
 ## 5. 交付方式
 
-- `bytehost-chrome` 是 `../bytehost` 仓库里的新 crate。开发期 Digger 用本地路径依赖;完成后在 bytehost 打新 tag(如 v0.3.0),Digger 改为固定 tag,与现在的方式一致。
+涉及三个仓库:
+
+| 仓库 | 改什么 | 隔离方式 |
+|---|---|---|
+| `../byteui` | 新增 `theme::region`(外壳区域样式) | 工作区干净,可在 `main` 上建分支 |
+| `../bytehost` | 新增 crate `bytehost-chrome` | **主工作区有他人未提交的 i18n 改动(十几个文件)**,不得混入、不得让 Digger 依赖它;改用 `git worktree` 从 `v0.2.0` 切出独立分支 |
+| `digger` | 接入、删除标签页、窗口装饰、自检 | 本仓库 |
+
+- **开发期依赖**:Digger 用 `[patch]` 把 bytehost 与 byteui 的 git 来源指向上面两个 worktree 的路径,使整个依赖图只有一份 `bytehost-core` 和一份 byteui(两份会让 `PanelId` 类型不兼容,也会让 byteui 的全局主题状态分裂,用量面板的主题会错)。`[patch]` 段是开发期临时配置,在最后一个任务里随 tag 的出现而移除。
+- 完成后,bytehost 与 byteui 各打新 tag,Digger 改为固定 tag,与现在的方式一致。
 - **Dozer 在 S1 里不动**。Dozer 迁移是单独的后续工作。
-- 在 bytehost 仓库只做**本地提交**,不推送、不打 tag;推送与打 tag 由用户决定。
+- 在 bytehost、byteui 仓库只做**本地提交**,不推送、不打 tag;推送与打 tag 由用户决定。
 
 ## 6. 验收
 
@@ -121,6 +134,17 @@ bytehost 已有、直接复用:`Layout`/`Rail`、`PaneStore` 与 `apply_pane_spl
 ## 7. 风险与未决
 
 - **行为表尚未读出**(见 §4.2):图标栏与放大态的细节可能比设计里写的多;计划阶段先读,读完若发现范围显著变大,回到本 spec 修订,不带着假设往下做。
-- **bytehost 是单独仓库**:新 crate 需要在那边通过它自己的门禁与审查;`bytehost-desktop` 现在是否已依赖 iced 控件、`byteui` 是否允许被 bytehost 依赖,计划第一步要确认。
+- **bytehost 是单独仓库,且主工作区正有他人的未提交改动**:见 §5。新 crate 在隔离 worktree 里做,最终合并回 bytehost 主线要处理与 i18n 改动的冲突,这不在 S1 范围内,由用户决定何时合并。
+- **bytehost 现有依赖约束**:`bytehost-desktop` 的 iced 依赖是 `default-features = false`(不绑渲染器 feature,见其 Cargo.toml 的 R2 注释)。`bytehost-chrome` 沿用 byteui 的做法,控件返回 `Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>`,不额外开渲染器 feature。
+- **区域样式一致性**:byteui 里新增的 7 个外壳区域数据与 Dozer 的 workspace.json 是两份;S1 期间靠一致性检查脚本守住,Dozer 迁移时才合成一份。
 - **S2–S4 的“同步”不在本文范围**:每个面板抽成共享库要先在 Dozer 里做,工作量大,各自单独立 spec。
 - **默认栏位是提议**,可随时改默认布局而不影响结构。
+
+## 8. 修订记录
+
+2026-10-14,读完 Dozer 的图标栏 / 拖拽 / 放大 / 顶栏 / 窗口创建代码后修订,原因是发现与原 spec 不一致的事实:
+1. 外壳区域样式在 Dozer 自己的 `theme::region` 里,不在 byteui;原 §4.3 写成"取自 byteui geometry"不准确。→ 新增 byteui `theme::region`(§4.3)。
+2. `../bytehost` 主工作区有他人未提交的 i18n 改动;Digger 若直接依赖它,`AppSummary` 与 `AppSurfaceBuilt` 的形状已变,Digger 会编译失败。→ 用 worktree 隔离(§5)。
+3. Dozer 的放大态没有生产入口。→ 只做消息入口,不加界面(§4.4)。
+4. Dozer 的窗口是透明标题栏 + 全尺寸内容视图,红绿灯挪进顶栏。→ 纳入 S1(§4.4)。
+5. Dozer 的拖拽事件由它自己的 winit 层追踪;Digger 用 iced 运行时,计划里改用 iced 的 `event::listen_with` 追踪光标与松开。
