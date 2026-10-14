@@ -43,10 +43,21 @@ pub struct Doc {
     pub version: u64,
     tracked: Vec<Tracked>,
     next_id: u64,
-    last: Option<(Vec<Parsed>, Vec<(u64, String)>)>,
+    last: Option<(Vec<Parsed>, Vec<(u64, &'static str)>)>,
     /// old block id -> (id of the block that replaced it, plan run that did it): a rewrite gives the block a new id
     aliases: std::collections::HashMap<u64, (u64, u64)>,
     runs: u64,
+    /// re-parse only the blocks around an edit (falls back to the whole document whenever it cannot prove the result equal)
+    pub incremental: bool,
+    pub stats: ReparseStats,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReparseStats {
+    pub incremental: u64,
+    pub full: u64,
+    /// total bytes handed to the parser
+    pub parsed_bytes: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -81,6 +92,11 @@ pub fn fnv(text: &str) -> String {
     format!("{h:016x}")
 }
 
+fn how_name(h: block_identity_spike::reconcile::How) -> &'static str {
+    use block_identity_spike::reconcile::How::*;
+    match h { Exact => "Exact", Moved => "Moved", Similar => "Similar", Split => "Split", Merged => "Merged", Fresh => "Fresh" }
+}
+
 fn kind_name(k: &Kind) -> (&'static str, Option<u8>) {
     match k {
         Kind::Heading(l) => ("heading", Some(*l)),
@@ -98,7 +114,7 @@ fn kind_name(k: &Kind) -> (&'static str, Option<u8>) {
 
 impl Doc {
     pub fn new() -> Doc {
-        Doc { text: String::new(), version: 0, tracked: vec![], next_id: 1, last: None, aliases: Default::default(), runs: 0 }
+        Doc { text: String::new(), version: 0, tracked: vec![], next_id: 1, last: None, aliases: Default::default(), runs: 0, incremental: true, stats: ReparseStats::default() }
     }
 
     /// A new document: every block gets a fresh id.
@@ -125,11 +141,16 @@ impl Doc {
             let t = byte_offset(&self.text, *to).ok_or(EditError::BadPosition(*to))?;
             spans.push((f, t));
         }
+        let old_len = self.text.len();
         for ((f, t), (_, _, ins)) in spans.iter().zip(changes).rev() {
             self.text.replace_range(*f..*t, ins);
         }
         self.version += 1;
-        self.reparse();
+        let delta: isize = self.text.len() as isize - old_len as isize;
+        let region = (spans.first().map(|x| x.0).unwrap_or(0), spans.last().map(|x| x.1).unwrap_or(0));
+        if !(self.incremental && self.reparse_window(region, delta)) {
+            self.reparse();
+        }
         Ok(())
     }
 
@@ -225,13 +246,75 @@ impl Doc {
         m
     }
 
+    /// Re-parse only the blocks around the edit: the edited blocks plus one neighbour on each side, taken as a
+    /// window of text. The result is used only if the window parses back to exactly the same neighbours (same
+    /// kind, text and position) — then nothing outside it can have changed — and is spliced into the old block list.
+    /// `region` is the edited byte range in the OLD text, `delta` the change in length. Returns false to fall back.
+    fn reparse_window(&mut self, region: (usize, usize), delta: isize) -> bool {
+        let Some((old, _)) = self.last.as_ref() else { return false };
+        let n = old.len();
+        if n < 8 { return false; }
+        // first block that ends at or after the edit, last block that starts at or before its end
+        let first = old.partition_point(|p| p.end < region.0);
+        let last = old.partition_point(|p| p.start <= region.1).saturating_sub(1);
+        // the neighbours must come back unchanged, at the same place; typing right after a paragraph can turn it into a
+        // continuation of that paragraph, so a failed check retries with a wider window before giving up
+        let old_len = (self.text.len() as isize - delta) as usize;
+        let mut found = None;
+        for pad in [1usize, 2, 4] {
+            let i = first.saturating_sub(pad);
+            let j = (last.max(first) + pad).min(n - 1);
+            if j - i > 64 { return false; } // a big edit: the window would be most of the document anyway
+            let ws = if i == 0 { 0 } else { old[i].start };
+            let we_old = if j == n - 1 { old_len } else { old[j].end };
+            let we = (we_old as isize + delta) as usize;
+            if we < ws || we > self.text.len() || !self.text.is_char_boundary(ws) || !self.text.is_char_boundary(we) { return false; }
+            let mut win = parse_blocks(&self.text[ws..we]);
+            self.stats.parsed_bytes += (we - ws) as u64;
+            for p in &mut win { p.start += ws; p.end += ws; }
+            if i > 0 {
+                let (a, b) = (&old[i], win.first());
+                if !b.is_some_and(|b| b.kind == a.kind && b.text == a.text && b.start == a.start) { continue; }
+            }
+            if j < n - 1 {
+                let (a, b) = (&old[j], win.last());
+                if !b.is_some_and(|b| b.kind == a.kind && b.text == a.text && b.end as isize == a.end as isize + delta) { continue; }
+            }
+            found = Some((i, j, win));
+            break;
+        }
+        let Some((i, j, win)) = found else { return false };
+        self.stats.incremental += 1;
+        let (mut parsed, mut hows) = self.last.take().unwrap();
+        let mut next = self.next_id;
+        let assigned = reconcile(&self.tracked[i..=j], &win, &Config::default(), || { next += 1; next - 1 });
+        self.next_id = next;
+        // splice in place: only the window is replaced, the rest keeps its strings (offsets after it just shift)
+        let new_tracked: Vec<Tracked> = win.iter().zip(&assigned).map(|(p, a)| Tracked { id: a.id, kind: p.kind.clone(), text: p.text.clone() }).collect();
+        let new_hows: Vec<(u64, &'static str)> = assigned.iter().map(|a| (a.id, how_name(a.how))).collect();
+        let added = win.len();
+        parsed.splice(i..=j, win);
+        for p in &mut parsed[i + added..] {
+            p.start = (p.start as isize + delta) as usize;
+            p.end = (p.end as isize + delta) as usize;
+        }
+        for h in &mut hows[j + 1..] { h.1 = "Exact"; }
+        hows.splice(i..=j, new_hows);
+        self.tracked.splice(i..=j, new_tracked);
+        let new_hows = hows;
+        self.last = Some((parsed, new_hows));
+        true
+    }
+
     fn reparse(&mut self) {
+        self.stats.full += 1;
+        self.stats.parsed_bytes += self.text.len() as u64;
         let parsed = parse_blocks(&self.text);
         let mut next = self.next_id;
         let assigned = reconcile(&self.tracked, &parsed, &Config::default(), || { next += 1; next - 1 });
         self.next_id = next;
         self.tracked = parsed.iter().zip(&assigned).map(|(p, a)| Tracked { id: a.id, kind: p.kind.clone(), text: p.text.clone() }).collect();
-        self.last = Some((parsed, assigned.iter().map(|a| (a.id, format!("{:?}", a.how))).collect()));
+        self.last = Some((parsed, assigned.iter().map(|a| (a.id, how_name(a.how))).collect()));
     }
 
     /// (from, to) of every block in UTF-16 positions, in document order.
@@ -482,5 +565,125 @@ mod tests {
         }
         eprintln!("1500 races: {ok} plans applied, {stale} refused as stale, {gone} refused because the block was gone");
         assert!(ok > 200 && stale > 50 && gone > 50);
+    }
+
+    // ---- incremental re-parse must be indistinguishable from a full re-parse ------------------------------------
+
+    /// Blocks must be identical. Ids may differ only where the full reconciler reused the id of a far-away look-alike
+    /// (a template twin), which the window cannot see; ids must stay unique either way. Returns whether ids differed.
+    fn same(a: &Doc, b: &Doc) -> Result<bool, String> {
+        let mut differ = false;
+        let (pa, ia) = a.last.as_ref().unwrap();
+        let (pb, ib) = b.last.as_ref().unwrap();
+        if pa.len() != pb.len() { return Err(format!("{} blocks vs {}", pa.len(), pb.len())); }
+        for (k, (x, y)) in pa.iter().zip(pb).enumerate() {
+            if (x.start, x.end, &x.kind, &x.text) != (y.start, y.end, &y.kind, &y.text) { return Err(format!("block {k} differs: {:?} vs {:?}", (x.start, x.end), (y.start, y.end))); }
+            differ |= ia[k].0 != ib[k].0;
+        }
+        let mut seen = std::collections::HashSet::new();
+        if !ia.iter().all(|(id, _)| seen.insert(*id)) { return Err("duplicate block id after incremental re-parse".into()); }
+        Ok(differ)
+    }
+
+    const PIECES: &[&str] = &["```\n", "~~~", "---\n", "===\n", "- ", "1. ", "> ", "| a | b |\n|---|---|\n", "|", "# ", "\n\n", "\n", " ", "    ", "[^a]: ", "[^a]", "<div>\n", "</div>\n\n", "*", "**", "`", "字", "😀", "。", "abc ", "[x]: http://e.com\n", "\t"];
+
+    fn sample_doc(r: &mut R, n: usize) -> String {
+        let mut t = String::new();
+        for i in 0..n {
+            match r.next() % 10 {
+                0 => t.push_str(&format!("# 标题{i}\n\n")),
+                1 => t.push_str(&format!("- 项目{i}\n- 项目{i}b\n\n")),
+                2 => t.push_str(&format!("```\ncode {i}\n\n```\n\n")),
+                3 => t.push_str(&format!("> 引用{i}\n\n")),
+                4 => t.push_str(&format!("| a | b |\n|---|---|\n| {i} | x |\n\n")),
+                5 => t.push_str(&format!("标题{i}\n---\n\n")),
+                6 => t.push_str(&format!("脚注引用[^{i}]。\n\n[^{i}]: 脚注内容{i}。\n\n")),
+                7 => t.push_str("---\n\n"),
+                _ => t.push_str(&format!("第{i}段。内容足够长,讲的是故事{i}里的事情。\n\n")),
+            }
+        }
+        t
+    }
+
+    #[test]
+    fn incremental_reparse_equals_full_reparse_under_adversarial_edits() {
+        let (mut inc, mut fallbacks, mut total, mut id_diff) = (0u64, 0u64, 0u64, 0u64);
+        for seed in 1..=400u64 {
+            let mut r = R(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut a = Doc::new();
+            let n = 12 + r.next() % 30; a.load(&sample_doc(&mut r, n));
+            let mut b = a.clone();
+            b.incremental = false;
+            for step in 0..40 {
+                // random edit: insert a tricky piece, or delete a short span, at a random character boundary
+                let chars: Vec<usize> = a.text.char_indices().map(|(i, _)| i).chain(std::iter::once(a.text.len())).collect();
+                let at = chars[r.next() % chars.len()];
+                let (from, to, ins) = if r.next() % 3 == 0 {
+                    let e = chars[(chars.iter().position(|c| *c == at).unwrap() + r.next() % 6).min(chars.len() - 1)];
+                    (at, e, String::new())
+                } else { (at, at, PIECES[r.next() % PIECES.len()].to_string()) };
+                let (f16, t16) = (a.text[..from].encode_utf16().count(), a.text[..to].encode_utf16().count());
+                let (before_i, before_f) = (a.stats.incremental, a.stats.full);
+                a.edit(a.version, &[(f16, t16, ins.clone())]).unwrap();
+                b.edit(b.version, &[(f16, t16, ins.clone())]).unwrap();
+                assert_eq!(a.text, b.text);
+                match same(&a, &b) {
+                    Err(e) => panic!("seed {seed} step {step}: {e}\nedit {from}..{to} {ins:?}\n{:?}", a.text),
+                    Ok(true) => { id_diff += 1; b = a.clone(); b.incremental = false; } // resynchronise the shadow's ids
+                    Ok(false) => {}
+                }
+                inc += a.stats.incremental - before_i;
+                fallbacks += a.stats.full - before_f;
+                total += 1;
+            }
+        }
+        eprintln!("{total} adversarial edits: {inc} re-parsed a window, {fallbacks} fell back to the whole document; ids differed from a full re-parse in {id_diff}");
+        assert!(inc as f64 > 0.5 * total as f64);
+        assert!((id_diff as f64) < 0.02 * total as f64);
+    }
+
+    #[test]
+    fn multi_span_patches_also_agree() {
+        for seed in 1..=300u64 {
+            let mut r = R(seed.wrapping_mul(0x2545_F491_4F6C_DD1D) | 1);
+            let mut a = Doc::new();
+            a.load(&sample_doc(&mut r, 20));
+            let mut b = a.clone();
+            b.incremental = false;
+            let len16 = a.text.encode_utf16().count();
+            let mut cuts: Vec<usize> = (0..4).map(|_| r.next() % (len16 + 1)).collect();
+            cuts.sort_unstable();
+            let mut ch = vec![];
+            let mut prev = 0;
+            for w in cuts.chunks(2) { if w[0] >= prev && w[0] <= w[1] { ch.push((w[0], w[1], PIECES[r.next() % PIECES.len()].to_string())); prev = w[1]; } }
+            let (ra, rb) = (a.edit(a.version, &ch), b.edit(b.version, &ch));
+            assert_eq!(ra, rb);
+            if ra.is_ok() { same(&a, &b).unwrap_or_else(|e| panic!("seed {seed}: {e} {ch:?}")); }
+        }
+    }
+
+    #[test]
+    fn typing_in_a_book_parses_a_few_blocks_not_the_book() {
+        let mut r = R(7);
+        let mut a = Doc::new();
+        let mut t = String::new();
+        for c in 0..1000 { t.push_str(&sample_doc(&mut r, 15).replace("标题", &format!("章{c}标题"))); }
+        a.load(&t);
+        let mut b = a.clone();
+        b.incremental = false;
+        let blocks = a.last.as_ref().unwrap().0.len();
+        let (mut ta, mut tb) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+        let base = (a.stats.clone(), b.stats.clone());
+        for k in 0..100 {
+            let mut cut = a.text.len() / 2 + k * 3; while !a.text.is_char_boundary(cut) { cut += 1; }
+            let at = a.text[..cut].encode_utf16().count();
+            let s0 = std::time::Instant::now(); a.edit(a.version, &[(at, at, "字".into())]).unwrap(); ta += s0.elapsed();
+            let s1 = std::time::Instant::now(); b.edit(b.version, &[(at, at, "字".into())]).unwrap(); tb += s1.elapsed();
+        }
+        same(&a, &b).unwrap();
+        let (da, db) = (a.stats.parsed_bytes - base.0.parsed_bytes, b.stats.parsed_bytes - base.1.parsed_bytes);
+        eprintln!("{} blocks, {} KB: 100 keystrokes — incremental {:?} total ({} bytes parsed, {} whole-document fallbacks), full {:?} total ({} bytes parsed)", blocks, a.text.len() / 1024, ta, da, a.stats.full - base.0.full, tb, db);
+        assert!(a.stats.full - base.0.full <= 5);
+        assert!(da * 20 < db, "incremental parsed {da} bytes vs {db}");
     }
 }
