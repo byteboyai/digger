@@ -8,6 +8,8 @@ cd "$(dirname "$0")/../crates/desktop/web"
 
 npm ci --no-audit --no-fund >/dev/null
 npx tsc --noEmit
+# T10 的基准必须来自生产解析器:已提交的 fixtures.ts 与 digger-editor 现在的输出逐字节一致
+node scripts/make-fixtures.mjs --check
 
 if [ "${1:-}" = "--check" ]; then
   tmp="$(mktemp -d)"
