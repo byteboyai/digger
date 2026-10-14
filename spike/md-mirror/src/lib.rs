@@ -8,6 +8,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use text_merge_spike::merge;
 
+pub mod watch;
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// Spike hash (FNV-1a 64). Production uses SHA-256.
@@ -62,7 +64,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS outbox(doc_id INTEGER PRIMARY KEY, version INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS pending(id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL, kind TEXT NOT NULL, base TEXT NOT NULL, ours TEXT NOT NULL, theirs TEXT NOT NULL, ours_hash TEXT NOT NULL, theirs_hash TEXT NOT NULL, UNIQUE(doc_id, kind, ours_hash, theirs_hash));
         ")?;
-        Ok(Store { db, root: root.into(), fault: None, hook: None })
+        Ok(Store { db, root: root.canonicalize()?, fault: None, hook: None })
     }
 
     pub fn create_doc(&self, path: &str, text: &str) -> Result<i64> {
@@ -153,9 +155,10 @@ impl Store {
                 std::fs::rename(&tmp, &full)?;
             }
             None => {
-                // the file did not exist: create it only if it still does not (link fails on an existing file)
-                match std::fs::hard_link(&tmp, &full) {
-                    Ok(()) => { std::fs::remove_file(&tmp)?; }
+                // the file did not exist: create it only if it still does not. (Not link + unlink: on macOS the file
+                // then carries hard-link history and FSEvents never reports its removal.)
+                match rename_noreplace(&tmp, &full) {
+                    Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => { std::fs::remove_file(&tmp)?; return Ok(Drain::SkippedExternalEditPending); }
                     Err(e) => return Err(e.into()),
                 }
@@ -234,6 +237,10 @@ impl Store {
     fn absorb(&mut self, id: i64, base_hash: Option<&str>, theirs: &str, mirror_after: &str) -> Result<Import> {
         let (_p, ours, _v, cur_hash) = self.doc(id)?;
         let th = hash(theirs);
+        // a file that became empty is far more likely a truncation or a cleared buffer than the intent to delete the chapter
+        if theirs.trim().is_empty() && !ours.trim().is_empty() {
+            return Ok(Import::WorkingState(self.park(id, "working", "", &ours, theirs, &cur_hash, &th)?));
+        }
         // keep what the author wrote in history first, so it can be a base later
         let base: Option<String> = match base_hash {
             Some(m) => self.db.query_row("SELECT text FROM history WHERE doc_id=? AND hash=?", params![id, m], |r| r.get(0)).optional()?,
@@ -283,4 +290,27 @@ fn commit_in(tx: &rusqlite::Transaction, id: i64, text: &str, actor: &str) -> Re
     tx.execute("INSERT INTO history VALUES(?,?,?,?,?) ON CONFLICT(doc_id,hash) DO UPDATE SET version=excluded.version", params![id, h, text, v, actor])?;
     tx.execute("INSERT INTO outbox VALUES(?,?) ON CONFLICT(doc_id) DO UPDATE SET version=excluded.version", params![id, v])?;
     Ok(v)
+}
+
+/// Rename that fails with AlreadyExists instead of replacing the target.
+#[cfg(target_os = "macos")]
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    let (f, t) = (c(from)?, c(to)?);
+    if unsafe { libc::renamex_np(f.as_ptr(), t.as_ptr(), libc::RENAME_EXCL) } == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+/// Linux: renameat2(RENAME_NOREPLACE). Not exercised by this spike (macOS only).
+#[cfg(target_os = "linux")]
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    let (f, t) = (c(from)?, c(to)?);
+    let r = unsafe { libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), 1u32) };
+    if r == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(from, to)?;
+    std::fs::remove_file(from)
 }

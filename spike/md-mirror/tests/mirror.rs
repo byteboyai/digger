@@ -267,3 +267,15 @@ fn random_interleavings_never_lose_an_edit_silently() {
     }
     eprintln!("{} runs, {} ended with a parked conflict/working state", stats.0, stats.1);
 }
+
+#[test]
+fn a_file_created_by_the_author_in_the_window_is_not_replaced() {
+    let mut s = Store::open(&dir("create-race")).unwrap();
+    let id = s.create_doc("chapters/01.md", BASE).unwrap(); // not drained: the file does not exist yet
+    let theirs = "# 作者抢先写的\n\n正文。\n";
+    s.hook = Some(Box::new(move |h, path| if h == Hook::BeforeRename { std::fs::write(path, theirs).unwrap() }));
+    assert_eq!(s.drain().unwrap()[0].1, Drain::SkippedExternalEditPending);
+    s.hook = None;
+    assert_eq!(read(&s, id), theirs, "the author's file is untouched");
+    assert_eq!(s.text(id).unwrap(), BASE);
+}
