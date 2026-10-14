@@ -333,6 +333,22 @@ data = "none"
     .unwrap();
 
     let api = Arc::new(rt.block_on(InProcess::start(&root)));
+    let host = HostService::with_api(
+        InProcess::new(api.service().clone()),
+        Some(api.service().clone()),
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let exec = Executor::new(
+        host.api(),
+        Arc::new(RequestTable::new()),
+        Arc::new(ChannelSink(tx)),
+        host.cancel_token(),
+    );
+    exec.subscribe();
+    assert!(
+        matches!(rt.block_on(rx.recv()), Some(Outcome::Changed)),
+        "subscription established"
+    );
     let source = AppSource::LocalDir { path: src.clone() };
 
     // 组合根按 Local 来源策略出计划。
@@ -355,6 +371,18 @@ data = "none"
     assert_eq!(apps.len(), 1, "装好一个:{apps:?}");
     assert_eq!(apps[0].id.as_str(), "notes");
 
+    let event = rt
+        .block_on(tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            rx.recv(),
+        ))
+        .unwrap();
+    assert!(
+        matches!(event, Some(Outcome::Changed)),
+        "real install reaches the event loop"
+    );
+    host.begin_shutdown();
+    rt.block_on(exec.shutdown()).unwrap();
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(src);
 }

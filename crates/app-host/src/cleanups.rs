@@ -69,6 +69,13 @@ impl StoreCleanups {
         Ok(true)
     }
 
+    /// 用户重试终态失败时重新持久化 Pending，重启后仍会驱动。
+    pub fn retry(&mut self, app_id: &str) -> io::Result<()> {
+        self.entries
+            .insert(app_id.to_owned(), CleanupState::Pending);
+        self.persist()
+    }
+
     /// 清除成功:从台账移除并落盘。
     pub fn finish(&mut self, app_id: &str) -> io::Result<()> {
         if self.entries.remove(app_id).is_some() {

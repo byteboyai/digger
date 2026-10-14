@@ -9,7 +9,7 @@
 //! 启动应用服务也走这条路: [`Executor::start_service`] 异步建 [`InProcess`],不阻塞窗口;结果
 //! [`Outcome::ServiceReady`] 回喂组合根。派发前核对取消令牌:退出开始后一律拒绝新操作。
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytehost_apps::id::AppId;
 use bytehost_client::in_process::InProcess;
@@ -66,6 +66,8 @@ pub enum Outcome {
         ticket: RequestTicket,
         result: Result<Vec<bytehost_apps::proto::RuntimeProbe>, AppApiError>,
     },
+    /// 订阅失效信号；桌面合并列表刷新。
+    Changed,
     /// 应用服务就绪(异步启动完成):组合根据此把服务装进 `HostService`。
     ServiceReady(RequestTicket, Arc<InProcess>),
     /// 应用服务启动失败(迟到的失败,不阻塞窗口)。
@@ -99,6 +101,7 @@ pub enum InstallDetail {
 impl std::fmt::Debug for Outcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Outcome::Changed => f.write_str("Changed"),
             Outcome::List { ticket, result } => f
                 .debug_struct("List")
                 .field("ticket", ticket)
@@ -166,6 +169,7 @@ pub struct Executor<A: AppHostApi + 'static> {
     requests: Arc<RequestTable>,
     sink: Arc<dyn ReplySink>,
     cancel: CancelToken,
+    tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl<A: AppHostApi + Sync + 'static> Executor<A> {
@@ -180,7 +184,14 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
             requests,
             sink,
             cancel,
+            tasks: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn track(&self, task: tokio::task::JoinHandle<()>) {
+        let mut tasks = self.tasks.lock().expect("task registry poisoned");
+        tasks.retain(|t| !t.is_finished());
+        tasks.push(task);
     }
 
     /// 后台调用网关:退出已开始时拒绝派发(`None`);否则派发一个任务把 `fut` 的结果包成 `Outcome`。
@@ -196,9 +207,10 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
         }
         let api = self.api.clone();
         let sink = self.sink.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             sink.send(f(api).await);
         });
+        self.track(task);
     }
 
     /// 执行一条应用面板 effect。返回 `false` = 由组合根处理(SetUrl/ClearUrl/Notice/SyncRail/
@@ -570,8 +582,8 @@ impl Executor<InProcess> {
     /// 立即返回一个被 `tokio::spawn` 的后台任务;窗口照常先画出来。
     ///
     /// `root` 是产品独立的数据根(调用方给 `paths::bytehost_root()`)。`AppService::start`
-    /// 本身**永不失败**——端口被占 / 目录不可用都会变成 `State::Unavailable`,经 `request` 以
-    /// `Host(Unavailable)` 回,与"连不上"同形(`ServiceReady` 因此只在极端内部错误时失败)。
+    /// 本身返回句柄；用真实列表请求识别 State::Unavailable，再发送 ServiceFailed。
+    /// 只有可用的服务才能替换后台句柄并发送 ServiceReady。
     pub fn start_service(&self, scope: ScopeId, panel: PanelInstanceId, root: std::path::PathBuf) {
         if self.cancel.is_cancelled() {
             return;
@@ -581,14 +593,87 @@ impl Executor<InProcess> {
             .dispatch(scope, panel, 0, RequestKey::Action(GENESIS_ACTION));
         let sink = self.sink.clone();
         let api = self.api.clone();
-        tokio::spawn(async move {
+        let cancel = self.cancel.clone();
+        let task = tokio::spawn(async move {
             let in_process = Arc::new(InProcess::start(&root).await);
-            // 在 tokio 工作线程里换后端:窗口线程不能阻塞等锁。`InProcess` 不可 Clone,拿内部
-            // 的 `Arc<AppService>` 重建等价实例后写入共享锁;此后所有请求走真服务。
-            let rebuilt = InProcess::new(in_process.service().clone());
-            *api.write().await = rebuilt;
+            if let Err(error) = in_process.app_list().await {
+                let _ = in_process.service().shutdown_reporting().await;
+                sink.send(Outcome::ServiceFailed(ticket, error));
+                return;
+            }
+            if cancel.is_cancelled() {
+                let _ = in_process.service().shutdown_reporting().await;
+                return;
+            }
+            *api.write().await = InProcess::new(in_process.service().clone());
             sink.send(Outcome::ServiceReady(ticket, in_process));
         });
+        self.track(task);
+    }
+    /// 停止新派发后等待已发出的写操作与启动，再关闭真实服务。
+    pub fn shutdown(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send + 'static {
+        let tasks = std::mem::take(&mut *self.tasks.lock().expect("task registry poisoned"));
+        let api = self.api.clone();
+        async move {
+            let work = async move {
+                for task in tasks {
+                    task.await.map_err(|e| e.to_string())?;
+                }
+                let service = api.read().await.service().clone();
+                let report = service
+                    .shutdown_reporting()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if report.is_clean() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "应用收尾未完成: {:?}; {:?}",
+                        report.app_failures, report.problems
+                    ))
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(45), work)
+                .await
+                .map_err(|_| "退出收尾超过 45 秒，可选择强制退出".to_string())?
+        }
+    }
+
+    /// 实际订阅、断线重订阅；Changed/Resync 统一交给 UI 合并刷新。
+    pub fn subscribe(&self) {
+        let api = self.api.clone();
+        let sink = self.sink.clone();
+        let cancel = self.cancel.clone();
+        self.track(tokio::spawn(async move {
+            let mut attempt = 0usize;
+            while !cancel.is_cancelled() {
+                let result = api.read().await.subscribe().await;
+                if let Ok(mut rx) = result {
+                    attempt = 0;
+                    sink.send(Outcome::Changed);
+                    loop {
+                        if cancel.is_cancelled() { return; }
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {},
+                            change = rx.recv() => match change {
+                                Some(bytehost_client::AppChange::Changed(_)) | Some(bytehost_client::AppChange::Resync) => sink.send(Outcome::Changed),
+                                _ => break,
+                            }
+                        }
+                    }
+                }
+                let delays = bytehost_panel::host::RESUBSCRIBE_BACKOFF;
+                let delay = delays[attempt.min(delays.len()-1)];
+                attempt = attempt.saturating_add(1);
+                let until = tokio::time::Instant::now() + delay;
+                while tokio::time::Instant::now() < until {
+                    if cancel.is_cancelled() { return; }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            }
+        }));
     }
 }
 
