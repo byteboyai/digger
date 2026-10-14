@@ -4,7 +4,6 @@
 use crate::blocks::parse::{Kind, Parsed, parse_blocks};
 use crate::blocks::reconcile::{Config, Tracked, reconcile};
 use crate::protocol::{BlockInfo, Change, EditorOutbound};
-use serde_json::Value;
 
 pub enum AgentOp {
     ReplaceBlock { id: String, text: String },
@@ -453,7 +452,7 @@ fn heading_title(src: &str) -> String {
 mod tests {
     use super::*;
 
-    fn val(m: EditorOutbound) -> Value { serde_json::to_value(m).unwrap() }
+    fn val(m: EditorOutbound) -> serde_json::Value { serde_json::to_value(m).unwrap() }
 
     fn ids(d: &Doc) -> Vec<String> {
         val(d.blocks_message())["blocks"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap().to_string()).collect()

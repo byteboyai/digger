@@ -30,10 +30,20 @@ pub enum Handled {
     Report(Report),
 }
 
+/// 宿主(iced 栏的按钮)驱动的 Agent 替身:不经过页面,页面也不能触发它(ADR-013 §5)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandIn {
+    /// 改写第 n 个段落(n 超出就取模,方便连点)
+    RewriteParagraph(usize),
+    Append,
+}
+
 pub struct Bridge {
     doc: Doc,
     mode: Mode,
     nonce: String,
+    /// 替身 Agent 已经做过的步数,写进它的文本里,让每次改写看得出区别
+    stand_in_runs: usize,
 }
 
 impl Bridge {
@@ -41,7 +51,7 @@ impl Bridge {
     pub fn new(initial: &str, mode: Mode, nonce: impl Into<String>) -> Self {
         let mut doc = Doc::new();
         doc.load(initial);
-        Self { doc, mode, nonce: nonce.into() }
+        Self { doc, mode, nonce: nonce.into(), stand_in_runs: 0 }
     }
 
     pub fn doc(&self) -> &Doc {
@@ -50,6 +60,25 @@ impl Bridge {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// 让替身 Agent 改文档,返回要推给页面的 `update`。没有可改的块或步骤失败时返回 `None`(文档不变)。
+    pub fn stand_in(&mut self, what: StandIn) -> Option<EditorOutbound> {
+        self.stand_in_runs += 1;
+        let text = format!("Agent 改写 #{}：这一段是 Agent 在你写作时改写的，用来检查输入法组合和撤销是否正常😀。", self.stand_in_runs);
+        let op = match what {
+            StandIn::Append => AgentOp::Append { text },
+            StandIn::RewriteParagraph(n) => {
+                let EditorOutbound::Blocks { blocks, .. } = self.doc.blocks_message() else { return None };
+                let paragraphs: Vec<_> = blocks.iter().filter(|b| b.kind == "paragraph").collect();
+                if paragraphs.is_empty() {
+                    return None;
+                }
+                AgentOp::ReplaceBlock { id: paragraphs[n % paragraphs.len()].id.clone(), text }
+            }
+        };
+        let mut patches = self.doc.agent_plan(&[Step { op, expect: None }]).ok()?;
+        Some(self.doc.update_message(&patches.remove(0), "agent"))
     }
 
     fn reject(&self, reason: impl Into<String>) -> Handled {
@@ -211,6 +240,20 @@ mod tests {
             assert_eq!(reason(b.handle(&msg(m.clone()))), "not accepted outside selftest", "{m}");
         }
         assert_eq!(b.doc().text, before, "a webview must not be able to rewrite blocks by id");
+    }
+
+    #[test]
+    fn the_host_can_drive_the_agent_stand_in_in_normal_operation() {
+        let mut b = normal();
+        let v = b.doc().version;
+        let up = b.stand_in(StandIn::RewriteParagraph(1)).expect("a paragraph exists");
+        assert!(matches!(up, EditorOutbound::Update { ref origin, version, .. } if origin == "agent" && version == v + 1), "{up:?}");
+        assert!(b.doc().text.contains("第一段。") && !b.doc().text.contains("第二段。"), "{:?}", b.doc().text);
+        assert!(b.stand_in(StandIn::Append).is_some());
+        assert!(b.doc().text.trim_end().ends_with("😀。"));
+        let mut empty = Bridge::new("# 只有标题\n", Mode::Normal, N);
+        assert!(empty.stand_in(StandIn::RewriteParagraph(0)).is_none(), "no paragraph, nothing to rewrite");
+        assert_eq!(empty.doc().text, "# 只有标题\n");
     }
 
     #[test]
