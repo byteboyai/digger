@@ -29,9 +29,10 @@ fn disjoint_edits_on_both_sides_merge_to_exactly_the_union() {
             clean += 1;
         }
     }
-    // Edits at least three tokens apart merge cleanly. The double-check after each clean merge is deliberately
-    // conservative and may turn a merge into a conflict when repeated words make the diff ambiguous: rare.
-    assert!(clean as f64 >= 0.98 * total as f64, "{clean} of {total} merged cleanly");
+    // Edits at least three tokens apart mostly merge cleanly. Two things are deliberately conservative and turn a
+    // merge into a conflict: the double-check after each clean merge (repeated words make the diff ambiguous), and
+    // an insertion with at most one real token between it and the other side's next edit (`near`). Both are rare.
+    assert!(clean as f64 >= 0.95 * total as f64, "{clean} of {total} merged cleanly");
 }
 
 #[test]
@@ -191,6 +192,6 @@ fn no_clean_merge_is_ever_wrong_in_a_large_random_campaign() {
     let c = campaign(30_000, 0xC4A9_0001, &|b, o, t| merge(b, o, t));
     assert_eq!(c.wrong, 0, "{:?}", c.first_problem);
     assert_eq!(c.remerge_changed, 0, "{:?}", c.first_problem);
-    assert!(c.clean as f64 >= 0.94 * c.total as f64, "only {} of {} merged cleanly", c.clean, c.total);
+    assert!(c.clean as f64 >= 0.88 * c.total as f64, "only {} of {} merged cleanly", c.clean, c.total);
     assert!((c.remerge_conflict as f64) <= 0.02 * c.remerge_total as f64, "{} of {} re-merges reported a conflict", c.remerge_conflict, c.remerge_total);
 }

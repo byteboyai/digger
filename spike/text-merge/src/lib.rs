@@ -151,6 +151,161 @@ fn units(text: &str) -> Vec<&str> {
     out
 }
 
+/// Token ranges of the sentences of a block: a sentence ends after . 。 ！ ？ ! ? ; and the closing quotes and spaces
+/// that follow. Ranges cover the tokens exactly, so concatenating them gives the block back.
+fn sentence_ranges(toks: &[&str]) -> Vec<std::ops::Range<usize>> {
+    let ends = |t: &str| matches!(t, "." | "。" | "．" | "！" | "？" | "!" | "?" | ";" | "；" | "…");
+    let closing = |t: &str| matches!(t, "”" | "’" | "\"" | "'" | "」" | "』" | "）" | ")" | "]" | "】");
+    let mut out = vec![];
+    let (mut start, mut i) = (0, 0);
+    while i < toks.len() {
+        if ends(toks[i]) {
+            let mut j = i + 1;
+            while j < toks.len() && closing(toks[j]) { j += 1; }
+            // spaces after the sentence belong to it; line breaks (the end of the block) do not
+            while j < toks.len() && toks[j].chars().all(char::is_whitespace) && !toks[j].contains('\n') { j += 1; }
+            out.push(start..j);
+            start = j;
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    if start < toks.len() { out.push(start..toks.len()); }
+    out
+}
+
+/// Sentence-level hunks inside one changed block: a sentence that was replaced by an unrelated one is ONE hunk (and
+/// not a dozen small ones around the words the two sentences happen to share); only sentences that are versions of
+/// each other are compared token by token.
+fn sentence_level(base: &[&str], other: &[&str], offset: usize) -> Vec<Hunk> {
+    let (bs, os) = (sentence_ranges(base), sentence_ranges(other));
+    if bs.len() <= 1 && os.len() <= 1 { return token_hunks(base, other, offset); }
+    let bu: Vec<String> = bs.iter().map(|r| base[r.clone()].concat()).collect();
+    let ou: Vec<String> = os.iter().map(|r| other[r.clone()].concat()).collect();
+    let pos = |at: usize| offset + if at < bs.len() { bs[at].start } else { base.len() };
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    for op in capture_diff_slices(Algorithm::Myers, &bu, &ou) {
+        match op {
+            DiffOp::Equal { old_index, len, .. } => at = old_index + len,
+            DiffOp::Delete { old_index, old_len, .. } => {
+                out.push(Hunk { b: pos(old_index)..pos(old_index + old_len), text: String::new() });
+                at = old_index + old_len;
+            }
+            DiffOp::Insert { new_index, new_len, .. } => out.push(Hunk { b: pos(at)..pos(at), text: ou[new_index..new_index + new_len].concat() }),
+            DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+                let (ob, nb) = (bs[old_index].start..bs[old_index + old_len - 1].end, os[new_index].start..os[new_index + new_len - 1].end);
+                let whole = |out: &mut Vec<Hunk>| out.extend(token_hunks(&base[ob.clone()], &other[nb.clone()], offset + ob.start));
+                if old_len == 1 && new_len == 1 {
+                    // one sentence against one sentence: versions of each other, or a rewrite
+                    let (a, b) = (&base[ob.clone()], &other[nb.clone()]);
+                    if dice(a, b) >= 0.25 { whole(&mut out) } else { out.push(Hunk { b: offset + ob.start..offset + ob.end, text: other[nb.clone()].concat() }) }
+                } else if old_len * new_len > 256 {
+                    whole(&mut out)
+                } else {
+                    let olds: Vec<Vec<&str>> = (old_index..old_index + old_len).map(|k| base[bs[k].clone()].to_vec()).collect();
+                    let news: Vec<Vec<&str>> = (new_index..new_index + new_len).map(|k| other[os[k].clone()].to_vec()).collect();
+                    match align_units(&olds, &news) {
+                        None => whole(&mut out),
+                        Some(steps) => {
+                            let (mut oi, mut nj) = (0, 0);
+                            for step in steps {
+                                match step {
+                                    Align::Pair => {
+                                        let o = &bs[old_index + oi];
+                                        if dice(&olds[oi], &news[nj]) >= 0.25 { out.extend(token_hunks(&olds[oi], &news[nj], offset + o.start)) } else { out.push(Hunk { b: offset + o.start..offset + o.end, text: news[nj].concat() }) }
+                                        oi += 1;
+                                        nj += 1;
+                                    }
+                                    Align::Delete => { out.push(Hunk { b: pos(old_index + oi)..pos(old_index + oi + 1), text: String::new() }); oi += 1; }
+                                    Align::Insert => { out.push(Hunk { b: pos(old_index + oi)..pos(old_index + oi), text: news[nj].concat() }); nj += 1; }
+                                }
+                            }
+                        }
+                    }
+                }
+                at = old_index + old_len;
+            }
+        }
+    }
+    out
+}
+
+fn dice(a: &[&str], b: &[&str]) -> f32 {
+    if a.is_empty() || b.is_empty() { return 0.0; }
+    let mut counts: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
+    for t in a { *counts.entry(t).or_default() += 1; }
+    let mut common = 0;
+    for t in b { if let Some(c) = counts.get_mut(t) { if *c > 0 { *c -= 1; common += 1; } } }
+    2.0 * common as f32 / (a.len() + b.len()) as f32
+}
+
+enum Align { Pair, Delete, Insert }
+
+/// Monotone alignment of two short lists of blocks: pair blocks that are versions of each other (token Dice of at
+/// least 0.4, maximising the total similarity); everything else is a deletion or an insertion.
+fn align_units(olds: &[Vec<&str>], news: &[Vec<&str>]) -> Option<Vec<Align>> {
+    use std::collections::HashMap;
+    let sim = |a: &[&str], b: &[&str]| -> f32 {
+        if a.is_empty() || b.is_empty() { return 0.0; }
+        let mut counts: HashMap<&str, i32> = HashMap::new();
+        for t in a { *counts.entry(t).or_default() += 1; }
+        let mut common = 0;
+        for t in b { if let Some(c) = counts.get_mut(t) { if *c > 0 { *c -= 1; common += 1; } } }
+        2.0 * common as f32 / (a.len() + b.len()) as f32
+    };
+    let (m, n) = (olds.len(), news.len());
+    let mut score = vec![vec![0.0f32; n + 1]; m + 1];
+    let mut sims = vec![vec![0.0f32; n]; m];
+    for i in 0..m { for j in 0..n { sims[i][j] = sim(&olds[i], &news[j]); } }
+    for i in (0..m).rev() {
+        for j in (0..n).rev() {
+            let mut best = score[i + 1][j].max(score[i][j + 1]);
+            if sims[i][j] >= 0.4 { best = best.max(score[i + 1][j + 1] + sims[i][j]); }
+            score[i][j] = best;
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, vec![]);
+    while i < m || j < n {
+        if i < m && j < n && sims[i][j] >= 0.4 && (score[i][j] - (score[i + 1][j + 1] + sims[i][j])).abs() < 1e-6 { out.push(Align::Pair); i += 1; j += 1; }
+        else if i < m && (j >= n || (score[i][j] - score[i + 1][j]).abs() < 1e-6) { out.push(Align::Delete); i += 1; }
+        else { out.push(Align::Insert); j += 1; }
+    }
+    // between two pairs, as many blocks deleted as inserted: they are rewrites of each other, pair them in order
+    let mut fixed = Vec::with_capacity(out.len());
+    let mut k = 0;
+    while k < out.len() {
+        if matches!(out[k], Align::Pair) { fixed.push(Align::Pair); k += 1; continue; }
+        let end = (k..out.len()).find(|&e| matches!(out[e], Align::Pair)).unwrap_or(out.len());
+        let dels = out[k..end].iter().filter(|a| matches!(a, Align::Delete)).count();
+        let ins = (end - k) - dels;
+        if dels == ins { fixed.extend((0..dels).map(|_| Align::Pair)); }
+        else { fixed.extend(out[k..end].iter().map(|a| match a { Align::Delete => Align::Delete, _ => Align::Insert })); }
+        k = end;
+    }
+    // A block that is only deleted but whose text is largely present in the other side's blocks was merged into them;
+    // one that is only inserted but largely present in the old blocks was split off from them. Those are not
+    // independent deletions and insertions: leave them to the diff over the concatenated blocks.
+    // measured on pairs of neighbouring tokens: single CJK characters are shared by unrelated sentences all the time
+    let contained = |unit: &[&str], others: &[Vec<&str>]| -> f32 {
+        let mut counts: HashMap<(&str, &str), i32> = HashMap::new();
+        for o in others { for w in o.windows(2) { *counts.entry((w[0], w[1])).or_default() += 1; } }
+        let (mut hit, mut total) = (0, 0);
+        for w in unit.windows(2) { total += 1; if let Some(c) = counts.get_mut(&(w[0], w[1])) { if *c > 0 { *c -= 1; hit += 1; } } }
+        hit as f32 / total.max(1) as f32
+    };
+    let (mut oi, mut nj) = (0, 0);
+    for a in &fixed {
+        match a {
+            Align::Pair => { oi += 1; nj += 1; }
+            Align::Delete => { if contained(&olds[oi], news) >= 0.6 { return None; } oi += 1; }
+            Align::Insert => { if contained(&news[nj], olds) >= 0.6 { return None; } nj += 1; }
+        }
+    }
+    Some(fixed)
+}
+
 /// Block-aware hunks: first compare the sequences of blocks, so a block that is inserted, deleted or moved is one hunk
 /// and can never be "matched" against similar-looking characters elsewhere in the document; only blocks that were
 /// changed in place (or replaced) are compared token by token, and only against each other.
@@ -176,16 +331,62 @@ fn hunks(base_text: &str, other_text: &str, base_tokens: &[&str]) -> Vec<Hunk> {
             }
             DiffOp::Insert { new_index, new_len, .. } => out.push(Hunk { b: tok_at[at]..tok_at[at], text: ou[new_index..new_index + new_len].concat() }),
             DiffOp::Replace { old_index, old_len, new_index, new_len } => {
-                let old_tokens = &base_tokens[tok_at[old_index]..tok_at[old_index + old_len]];
-                let new_text = ou[new_index..new_index + new_len].concat();
-                let new_tokens = tokens(&new_text);
-                out.extend(token_hunks(old_tokens, &new_tokens, tok_at[old_index]));
+                let olds: Vec<Vec<&str>> = if old_len == 1 && new_len == 1 || old_len * new_len > 256 { vec![] } else { (old_index..old_index + old_len).map(|k| tokens(bu[k])).collect() };
+                let news: Vec<Vec<&str>> = if olds.is_empty() { vec![] } else { (new_index..new_index + new_len).map(|k| tokens(ou[k])).collect() };
+                let aligned = if olds.is_empty() { None } else { align_units(&olds, &news) };
+                if aligned.is_none() {
+                    let old_tokens = &base_tokens[tok_at[old_index]..tok_at[old_index + old_len]];
+                    let new_text = ou[new_index..new_index + new_len].concat();
+                    let new_tokens = tokens(&new_text);
+                    out.extend(sentence_level(old_tokens, &new_tokens, tok_at[old_index]));
+                } else {
+                    // several blocks on each side (a block changed and its neighbour was deleted, ...): pair up the
+                    // ones that are versions of each other and treat the rest as deleted or inserted, so each block
+                    // is diffed against its own counterpart and not against the concatenation of its neighbours
+                    let mut oi = 0;
+                    let mut nj = 0;
+                    for step in aligned.unwrap() {
+                        match step {
+                            Align::Pair => {
+                                out.extend(sentence_level(&olds[oi], &news[nj], tok_at[old_index + oi]));
+                                oi += 1;
+                                nj += 1;
+                            }
+                            Align::Delete => {
+                                out.push(Hunk { b: tok_at[old_index + oi]..tok_at[old_index + oi + 1], text: String::new() });
+                                oi += 1;
+                            }
+                            Align::Insert => {
+                                out.push(Hunk { b: tok_at[old_index + oi]..tok_at[old_index + oi], text: ou[new_index + nj].to_string() });
+                                nj += 1;
+                            }
+                        }
+                    }
+                }
                 at = old_index + old_len;
             }
         }
     }
+    coalesce(&mut out);
     canonicalize(&mut out, base_tokens);
+    coalesce(&mut out);
     out
+}
+
+/// Hunks that touch in the base are one change. A diff can report them separately (two insertions at the same
+/// place), and then the same change looks different depending on what else changed nearby.
+fn coalesce(hunks: &mut Vec<Hunk>) {
+    let mut out: Vec<Hunk> = Vec::with_capacity(hunks.len());
+    for h in hunks.drain(..) {
+        match out.last_mut() {
+            Some(last) if last.b.end == h.b.start => {
+                last.b.end = h.b.end;
+                last.text.push_str(&h.text);
+            }
+            _ => out.push(h),
+        }
+    }
+    *hunks = out;
 }
 
 /// A diff may cut the same edit into different hunks on the two sides (one big insertion against an insertion, a few
@@ -261,6 +462,34 @@ pub fn merge_for_test(base: &str, ours: &str, theirs: &str) -> Merge {
     merge_unchecked(base, ours, theirs)
 }
 
+/// Hunks that touch, or have at most one real (non-blank) token between them, are compared together. A diff may cut
+/// one change into pieces with a stray matched token between them (a comma that also occurs inside an inserted
+/// sentence), and the same change then sits at slightly different places depending on what else changed.
+fn near(bt: &[&str], end: usize, start: usize) -> bool {
+    if start <= end { return true; }
+    if start - end > 8 { return false; }
+    bt[end..start.min(bt.len())].iter().filter(|t| !t.trim().is_empty()).count() <= 1
+}
+
+/// `ins` is a pure insertion that can be written, sliding right over equal tokens, at the exact place where `del`
+/// (a pure deletion starting with blank lines) begins, and no later hunk of its own side is in the way.
+fn insertion_before_deletion(ins: &Hunk, del: &Hunk, next_same_side: Option<&Hunk>, bt: &[&str]) -> Option<(usize, String)> {
+    if !ins.b.is_empty() || ins.text.is_empty() || !is_pure_deletion_after_blank(del, bt) || ins.b.start > del.b.start { return None; }
+    let mut toks: Vec<String> = tokens(&ins.text).into_iter().map(String::from).collect();
+    let mut pos = ins.b.start;
+    while pos < del.b.start && pos < bt.len() && toks.first().is_some_and(|f| f == bt[pos]) {
+        let first = toks.remove(0);
+        toks.push(first);
+        pos += 1;
+    }
+    if pos != del.b.start || next_same_side.is_some_and(|n| n.b.start < pos) { return None; }
+    Some((pos, toks.concat()))
+}
+
+fn is_pure_deletion_after_blank(h: &Hunk, bt: &[&str]) -> bool {
+    h.text.is_empty() && !h.b.is_empty() && bt.get(h.b.start).is_some_and(|t| t.matches('\n').count() >= 2 && t.chars().all(char::is_whitespace))
+}
+
 fn merge_unchecked(base: &str, ours: &str, theirs: &str) -> Merge {
     if ours == theirs {
         return Merge { segments: vec![Segment::Clean(ours.to_string())] };
@@ -271,10 +500,10 @@ fn merge_unchecked(base: &str, ours: &str, theirs: &str) -> Merge {
     if base == theirs {
         return Merge { segments: vec![Segment::Clean(ours.to_string())] };
     }
-    let (bt, ot, tt) = (tokens(base), tokens(ours), tokens(theirs));
+    let bt = tokens(base);
     let (ho, ht) = (hunks(base, ours, &bt), hunks(base, theirs, &bt));
     let mut segments: Vec<Segment> = Vec::new();
-    let mut push_clean = |segments: &mut Vec<Segment>, s: String| {
+    let push_clean = |segments: &mut Vec<Segment>, s: String| {
         if s.is_empty() {
             return;
         }
@@ -293,19 +522,43 @@ fn merge_unchecked(base: &str, ours: &str, theirs: &str) -> Merge {
             (None, Some(b)) => b.b.start,
             (None, None) => unreachable!(),
         };
+        // An insertion at the end of a block's text (as far right as it can be written) and the other side deleting
+        // the NEXT block (its hunk starts with the blank lines in between) do not touch: nothing the insertion could
+        // belong to is deleted. The insertion goes first and the deletion is handled in the next round.
+        if let (Some(a), Some(b)) = (ho.get(i), ht.get(j)) {
+            if let Some((pos, text)) = insertion_before_deletion(a, b, ho.get(i + 1), &bt) {
+                push_clean(&mut segments, bt[at..pos].concat());
+                push_clean(&mut segments, text);
+                at = pos;
+                i += 1;
+                continue;
+            }
+            if let Some((pos, text)) = insertion_before_deletion(b, a, ht.get(j + 1), &bt) {
+                push_clean(&mut segments, bt[at..pos].concat());
+                push_clean(&mut segments, text);
+                at = pos;
+                j += 1;
+                continue;
+            }
+        }
         let mut end = start;
+        let mut by_insertion = false; // the hunk that last set `end` is a pure insertion
         let (i0, j0) = (i, j);
         loop {
             let mut grew = false;
+            // touching hunks always belong together; a pure insertion also pulls in a hunk one real token away
+            let joins = |h: &Hunk, end: usize, by_insertion: bool| h.b.start <= end || ((h.b.is_empty() || by_insertion) && near(&bt, end, h.b.start));
             if let Some(a) = ho.get(i) {
-                if a.b.start <= end {
+                if joins(a, end, by_insertion) {
+                    if a.b.end >= end { by_insertion = a.b.is_empty(); }
                     end = end.max(a.b.end);
                     i += 1;
                     grew = true;
                 }
             }
             if let Some(b) = ht.get(j) {
-                if b.b.start <= end {
+                if joins(b, end, by_insertion) {
+                    if b.b.end >= end { by_insertion = b.b.is_empty(); }
                     end = end.max(b.b.end);
                     j += 1;
                     grew = true;
@@ -438,5 +691,30 @@ mod tests {
         let m = merge(base, ours, theirs).text().unwrap();
         assert_eq!(merge(base, ours, &m).text().as_deref(), Some(m.as_str()));
         assert_eq!(merge(base, theirs, &m).text().as_deref(), Some(m.as_str()));
+    }
+
+    // ---- found by running the merge on real prose (Dream of the Red Chamber): no synthetic case produced them -----
+
+    #[test]
+    fn an_edit_in_one_paragraph_and_the_deletion_of_the_next_paragraph_do_not_conflict() {
+        let base = "# 回目\n\n宝玉笑道:“起来吃饭去,就开戏了。”\n\n　　吃了饭点戏时,贾母一定先叫宝钗点。\n\n　　末段另有别的话说。\n";
+        let ours = base.replace("就开戏了。”", "就开戏了。”你愛看那一出?我先去点。”");
+        let theirs = base.replace("　　吃了饭点戏时,贾母一定先叫宝钗点。\n\n", "");
+        let want = ours.replace("　　吃了饭点戏时,贾母一定先叫宝钗点。\n\n", "");
+        assert_eq!(merge(base, &ours, &theirs).text().as_deref(), Some(want.as_str()));
+        assert_eq!(merge(base, &theirs, &ours).text().as_deref(), Some(want.as_str()));
+    }
+
+    #[test]
+    fn an_appended_sentence_that_reuses_a_comma_of_the_old_text_still_merges_with_a_far_edit() {
+        // the appended text contains tokens (，) that the diff may match against the following old text, cutting one
+        // insertion into two; the change must look the same whether or not another edit is nearby
+        let base = "你是个明白人,何必作此形像自苦。何况你又多病,还不自己保养。你听我说,这事不必再提。他们都在外头候着。";
+        let ours = base.replace("自苦。", "自苦。今儿偏偏的来了个刘姥姥,我自己多事,为他跑了半日,这会子又被姨太太看见了。");
+        let theirs = base.replace("保养。", "保养。我想府上待下人最宽的,为什么还有这事。");
+        let want = base.replace("自苦。", "自苦。今儿偏偏的来了个刘姥姥,我自己多事,为他跑了半日,这会子又被姨太太看见了。").replace("保养。", "保养。我想府上待下人最宽的,为什么还有这事。");
+        assert_eq!(merge(base, &ours, &theirs).text().as_deref(), Some(want.as_str()));
+        let m = merge(base, &ours, &want).text();
+        assert_eq!(m.as_deref(), Some(want.as_str()), "re-merging the answer with a side gives the answer");
     }
 }
