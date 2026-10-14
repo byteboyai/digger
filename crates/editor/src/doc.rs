@@ -3,7 +3,8 @@
 
 use crate::blocks::parse::{Kind, Parsed, parse_blocks};
 use crate::blocks::reconcile::{Config, Tracked, reconcile};
-use serde_json::{Value, json};
+use crate::protocol::{BlockInfo, Change, EditorOutbound};
+use serde_json::Value;
 
 pub enum AgentOp {
     ReplaceBlock { id: String, text: String },
@@ -315,12 +316,10 @@ impl Doc {
     }
 
     /// The `update` message for the editor after an Agent patch: the patch, and the resulting version and blocks.
-    pub fn update_message(&self, patch: &[(usize, usize, String)], origin: &str) -> Value {
-        let mut m = self.blocks_message();
-        m["t"] = json!("update");
-        m["origin"] = json!(origin);
-        m["changes"] = patch.iter().map(|(f, t, i)| json!({"from": f, "to": t, "insert": i})).collect();
-        m
+    pub fn update_message(&self, patch: &[(usize, usize, String)], origin: &str) -> EditorOutbound {
+        let EditorOutbound::Blocks { version, hash, len16, blocks } = self.blocks_message() else { unreachable!() };
+        let changes = patch.iter().map(|(from, to, insert)| Change { from: *from, to: *to, insert: insert.clone() }).collect();
+        EditorOutbound::Update { origin: origin.into(), changes, version, hash, len16, blocks }
     }
 
     /// Re-parse only the blocks around the edit: the edited blocks plus one neighbour on each side, taken as a
@@ -413,21 +412,34 @@ impl Doc {
     }
 
     /// The `blocks` message for the editor: ranges in UTF-16 positions.
-    pub fn blocks_message(&self) -> Value {
+    pub fn blocks_message(&self) -> EditorOutbound {
         let (parsed, hows) = self.last.as_ref().expect("a document was loaded");
         let ranges = self.ranges16();
-        let blocks: Vec<Value> = parsed
+        let blocks: Vec<BlockInfo> = parsed
             .iter()
             .zip(hows)
             .zip(&ranges)
             .map(|((p, (id, how)), (from, to))| {
                 let (kind, level) = kind_name(&p.kind);
-                let title: Option<String> = level.map(|_| heading_title(&p.text));
-                json!({"id": id.to_string(), "kind": kind, "level": level, "title": title, "how": how,
-                       "from": from, "to": to, "head": p.text.chars().take(16).collect::<String>()})
+                BlockInfo {
+                    id: id.to_string(),
+                    kind,
+                    level,
+                    title: level.map(|_| heading_title(&p.text)),
+                    how,
+                    from: *from,
+                    to: *to,
+                    head: p.text.chars().take(16).collect::<String>(),
+                }
             })
             .collect();
-        json!({"t": "blocks", "version": self.version, "hash": fnv(&self.text), "len16": self.text.encode_utf16().count(), "blocks": blocks})
+        EditorOutbound::Blocks { version: self.version, hash: fnv(&self.text), len16: self.text.encode_utf16().count(), blocks }
+    }
+
+    /// The `open` message: the whole document, for a page that just said `ready`.
+    pub fn open_message(&self) -> EditorOutbound {
+        let EditorOutbound::Blocks { version, hash, len16, blocks } = self.blocks_message() else { unreachable!() };
+        EditorOutbound::Open { text: self.text.clone(), version, hash, len16, blocks }
     }
 }
 
@@ -441,8 +453,10 @@ fn heading_title(src: &str) -> String {
 mod tests {
     use super::*;
 
+    fn val(m: EditorOutbound) -> Value { serde_json::to_value(m).unwrap() }
+
     fn ids(d: &Doc) -> Vec<String> {
-        d.blocks_message()["blocks"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap().to_string()).collect()
+        val(d.blocks_message())["blocks"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap().to_string()).collect()
     }
 
     #[test]
@@ -461,7 +475,7 @@ mod tests {
     fn block_ranges_are_in_utf16_units() {
         let mut d = Doc::new();
         d.load("😀 开头\n\n- 项\n\n第三段\n");
-        let m = d.blocks_message();
+        let m = val(d.blocks_message());
         let b = m["blocks"].as_array().unwrap();
         assert_eq!((b[0]["from"].as_u64(), b[0]["to"].as_u64()), (Some(0), Some(5)), "😀 counts as two units");
         assert_eq!(b[1]["from"].as_u64(), Some(7));
@@ -490,7 +504,7 @@ mod tests {
     fn agent_operations_address_blocks_by_id_and_report_their_patch() {
         let mut d = Doc::new();
         d.load("# 题\n\n甲段落内容在这里。\n\n乙段落内容也在这里。\n");
-        let m = d.blocks_message();
+        let m = val(d.blocks_message());
         let id_a = m["blocks"][1]["id"].as_str().unwrap().to_string();
         let id_b = m["blocks"][2]["id"].as_str().unwrap().to_string();
         let patch = d.agent(&AgentOp::ReplaceBlock { id: id_a.clone(), text: "改写后的甲段落😀。".into() }).unwrap();
@@ -498,9 +512,9 @@ mod tests {
         assert_eq!(patch.len(), 1);
         assert!(d.text.contains("改写后的甲段落😀。") && d.text.contains("乙段落"));
         // ids of the untouched blocks are unchanged
-        let m2 = d.blocks_message();
+        let m2 = val(d.blocks_message());
         assert_eq!(m2["blocks"][2]["id"], id_b.as_str());
-        let up = d.update_message(&patch, "agent");
+        let up = val(d.update_message(&patch, "agent"));
         assert_eq!((up["t"].as_str(), up["version"].as_u64(), up["changes"].as_array().map(|c| c.len())), (Some("update"), Some(2), Some(1)));
         d.agent(&AgentOp::InsertAfter { id: id_b.clone(), text: "新增的一段。".into() }).unwrap();
         d.agent(&AgentOp::Append { text: "结尾。".into() }).unwrap();
@@ -603,7 +617,7 @@ mod tests {
             let mut authored = vec![];
             for k in 0..(r.next() % 4) {
                 let mark = format!("【作者{seed}-{k}】");
-                let blocks = d.blocks_message()["blocks"].as_array().unwrap().clone();
+                let blocks = val(d.blocks_message())["blocks"].as_array().unwrap().clone();
                 let b = &blocks[r.next() % blocks.len()];
                 let (from, to) = (b["from"].as_u64().unwrap() as usize, b["to"].as_u64().unwrap() as usize);
                 match r.next() % 3 {

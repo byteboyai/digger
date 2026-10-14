@@ -5,3 +5,5 @@
 
 pub mod blocks;
 pub mod doc;
+pub mod protocol;
+pub mod bridge;
