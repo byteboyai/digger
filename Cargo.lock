@@ -925,6 +925,7 @@ dependencies = [
  "bytehost-webview",
  "byteui",
  "digger-app-host",
+ "digger-editor",
  "digger-store",
  "directories",
  "dozer-model",

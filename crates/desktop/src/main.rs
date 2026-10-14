@@ -5,6 +5,7 @@
 
 mod adapters;
 mod apps;
+mod markdown;
 mod paths;
 mod product;
 

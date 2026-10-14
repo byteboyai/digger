@@ -38,6 +38,11 @@ fn usage_panel_id() -> PanelId {
     PanelId::new("digger.usage").expect("合法 panel id")
 }
 
+/// Markdown 编辑器面板的稳定 id(ADR-013):第一方 Builtin 面板,单 Surface。
+fn markdown_panel_id() -> PanelId {
+    PanelId::new("digger.markdown").expect("合法 panel id")
+}
+
 /// 产品消息。**不进入**宿主 enum(宿主只认 `HostMessage<M>`)。
 #[derive(Debug, Clone)]
 pub enum Msg {
@@ -48,6 +53,8 @@ pub enum Msg {
     /// 「用量」面板的库消息(Task 20)。
     Usage(dozer_panel_usage::Message),
     NativeUsage(crate::adapters::usage_native::Event),
+    /// 「编辑器」面板的消息(ADR-013)。
+    Markdown(crate::markdown::Message),
     Resized(Size),
     Tick,
     ShutdownFinished(Result<(), String>),
@@ -63,6 +70,7 @@ pub enum ActivePanel {
     Info,
     Apps,
     Usage,
+    Markdown,
 }
 
 /// Digger 产品壳状态。刻意保持最小:不持有任何 Domain/持久化状态,
@@ -80,6 +88,8 @@ pub struct ProductShell {
     apps: crate::apps::AppsState,
     /// 「用量」面板适配(共享 `dozer-panel-usage` 库 + 注入的真实用量服务)。
     usage: crate::adapters::usage::UsagePanel,
+    /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
+    markdown: crate::markdown::MarkdownPanel,
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
     closing: bool,
@@ -116,6 +126,10 @@ impl ProductShell {
             })
             .expect("首次注册 digger.usage");
 
+        catalog
+            .register(PanelMeta::single_surface(markdown_panel_id(), "编辑器"))
+            .expect("首次注册 digger.markdown");
+
         let layout_path = paths::layout_path();
         let (layout, layout_save_blocked) = load_layout(&layout_path, &catalog).layout();
 
@@ -134,6 +148,9 @@ impl ProductShell {
         }
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
 
+        let markdown = crate::markdown::MarkdownPanel::new();
+        let active = if markdown.is_selftest() { ActivePanel::Markdown } else { ActivePanel::Info };
+
         Self {
             window: None,
             size: default_window_size(),
@@ -141,9 +158,10 @@ impl ProductShell {
             layout,
             layout_save_blocked,
             layout_path,
-            active: ActivePanel::Info,
+            active,
             apps,
             usage,
+            markdown,
             boot_note,
             closing: false,
             shutdown_started: false,
@@ -324,12 +342,13 @@ fn default_layout_or_empty() -> Layout {
     })
 }
 
-/// 默认布局:左栏放信息/应用两个面板,右栏空(空栏合法)。
+/// 默认布局:第一栏信息,第二栏应用,第三栏编辑器(ADR-013)。
 fn default_layout() -> Option<Layout> {
     let left = vec![info_panel_id()];
     let rails = vec![
         Rail::new(left, 280.0),
         Rail::new(vec![apps_panel_id()], 280.0),
+        Rail::new(vec![markdown_panel_id()], 280.0),
     ];
     Layout::from_default(rails).ok()
 }
@@ -397,6 +416,7 @@ impl Product<Msg> for ProductShell {
                 self.usage.native.update(event);
                 Task::none()
             }
+            Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
             Msg::ShutdownFinished(result) => match result {
                 Ok(()) => iced::exit(),
                 Err(error) => {
@@ -437,12 +457,14 @@ impl Product<Msg> for ProductShell {
             ActivePanel::Info => self.info_view(),
             ActivePanel::Apps => self.apps_view(),
             ActivePanel::Usage => self.usage_view(),
+            ActivePanel::Markdown => self.markdown.view().map(Msg::Markdown),
         };
 
         let tabs = row![
             button("信息").on_press(Msg::SelectPanel(ActivePanel::Info)),
             button("应用").on_press(Msg::SelectPanel(ActivePanel::Apps)),
             button("用量").on_press(Msg::SelectPanel(ActivePanel::Usage)),
+            button("编辑器").on_press(Msg::SelectPanel(ActivePanel::Markdown)),
         ]
         .spacing(12);
 
@@ -517,6 +539,13 @@ impl ProductShell {
                     rect,
                 )
                 .map(Msg::NativeUsage),
+            // 关闭时销毁 webview 并丢掉文档;否则只在激活时可见,切走则隐藏。
+            if self.closing {
+                self.markdown.close(window)
+            } else {
+                self.markdown.sync_native(window, self.active == ActivePanel::Markdown, rect)
+            }
+            .map(Msg::Markdown),
         ])
     }
 
@@ -605,9 +634,15 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let markdown_task = match shell.markdown.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::Markdown(event), rx))
+        })),
+        None => Task::none(),
+    };
     (
         shell,
-        Task::batch([size_task, reply_task, usage_task, native_usage]),
+        Task::batch([size_task, reply_task, usage_task, native_usage, markdown_task]),
     )
 }
 
@@ -628,14 +663,15 @@ mod tests {
         assert!(shell.catalog.contains(&info_panel_id()));
         assert!(shell.catalog.contains(&apps_panel_id()));
         assert!(shell.catalog.contains(&usage_panel_id()));
-        assert_eq!(shell.catalog.len(), 3);
+        assert!(shell.catalog.contains(&markdown_panel_id()));
+        assert_eq!(shell.catalog.len(), 4);
     }
 
     #[test]
     fn has_default_layout() {
         let shell = ProductShell::new();
         let layout = shell.current_layout();
-        assert_eq!(layout.visible_panel_count(), 2);
+        assert_eq!(layout.visible_panel_count(), 3);
     }
 
     #[test]
@@ -721,8 +757,8 @@ mod tests {
         let loaded = load_layout(&path, &test_catalog());
         let (layout, blocked) = loaded.layout();
         assert!(blocked.is_some(), "高版本应进入不可写状态:{blocked:?}");
-        // 内存显示默认布局(两个面板),但禁止保存。
-        assert_eq!(layout.visible_panel_count(), 2);
+        // 内存显示默认布局(三个面板),但禁止保存。
+        assert_eq!(layout.visible_panel_count(), 3);
         // 模拟退出:按 save_layout 的门禁,blocked 时不落盘。
         if blocked.is_none() {
             atomic_save_layout(&path, &layout).unwrap();

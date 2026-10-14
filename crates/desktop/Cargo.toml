@@ -23,6 +23,8 @@ bytehost-panel.workspace = true
 digger-app-host = { path = "../app-host" }
 # Digger 领域持久化:任务完成用量账本 + `UsageService` 实现(Task 20)。
 digger-store = { path = "../store" }
+# Markdown 编辑器的 Rust 一侧(纯库;本 crate 只做 webview / 几何 / iced 栏的宿主适配)。
+digger-editor = { path = "../editor" }
 
 # 同源 Usage 面板库与领域类型/服务接缝(Dozer/Digger 共用,Task 19/20)。
 dozer-model.workspace = true
