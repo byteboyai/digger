@@ -29,7 +29,9 @@ HOST_ADAPTER_CRATES="digger-desktop digger-app-host"
 # 业务层 crate 前缀:出现即不得依赖任何 bytehost-*。
 BUSINESS_PREFIX="^digger-(domain|store|persistence|runtime|writing|editor|project|agent)(-.*)?$"
 
-bytehost_banned='^bytehost-.*$'
+# 业务层禁用:bytehost-*(宿主层)、iced*(界面框架)、wry(webview)。
+# digger-editor 这类 crate 必须保持纯库,harness 与将来的 markdown-core 才能复用(ADR-013 §2)。
+bytehost_banned='^(bytehost-.*|iced|iced_.*|wry)$'
 
 tree_of() {
   local pkg="$1"
@@ -57,7 +59,7 @@ for pkg in "${packages[@]}"; do
   if [[ "$pkg" =~ $BUSINESS_PREFIX ]]; then
     hits=$(tree_of "$pkg" | grep -E "$bytehost_banned" || true)
     if [ -n "$hits" ]; then
-      echo "业务 crate $pkg 依赖了 bytehost 宿主层(应经适配层注入,不得直连):" >&2
+      echo "业务 crate $pkg 依赖了宿主层 / 界面框架 / webview(bytehost-*、iced*、wry;应经适配层注入,不得直连):" >&2
       echo "$hits" >&2
       exit 1
     fi
@@ -96,25 +98,32 @@ if [ "${1:-}" = "--self-test" ]; then
   }
   trap cleanup EXIT
   mkdir -p "$probe/src"
+  echo "" > "$probe/src/lib.rs"
   abs_core="$(cd ../bytehost/crates/bytehost-core && pwd)"
-  cat > "$probe/Cargo.toml" <<TOMLEOF
+
+  # 每种禁用依赖各注入一次:必须被拦下;恢复后必须通过。
+  inject() {
+    local label="$1" dep="$2"
+    cat > "$probe/Cargo.toml" <<TOMLEOF
 [package]
 name = "digger-domain-probe"
 version = "0.0.0"
 edition = "2024"
 publish = false
 [dependencies]
-bytehost-core = { path = "$abs_core" }
+$dep
 TOMLEOF
-  echo "" > "$probe/src/lib.rs"
-
-  # 门禁按 `crates/*` 通配即可发现探针,无需改根 members。
-  if bash "$0" >/dev/null 2>&1; then
-    echo "变异测试失败:业务包依赖 bytehost-* 后门禁仍然通过" >&2
-    exit 1
-  fi
+    # 门禁按 `crates/*` 通配即可发现探针,无需改根 members。
+    if bash "$0" >/dev/null 2>&1; then
+      echo "变异测试失败:业务包依赖 $label 后门禁仍然通过" >&2
+      exit 1
+    fi
+    echo "  变异通过:业务包→$label 被拦下" >&2
+  }
+  inject "bytehost-*" "bytehost-core = { path = \"$abs_core\" }"
+  inject "iced" 'iced = { workspace = true }'
+  inject "wry" 'wry = { workspace = true }'
   rm -rf "$probe"
-  echo "  变异通过:业务包→bytehost-* 被拦下" >&2
 
   if ! bash "$0" >/dev/null 2>&1; then
     echo "变异测试失败:恢复后门禁未通过" >&2
