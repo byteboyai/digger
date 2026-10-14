@@ -55,6 +55,8 @@ pub enum Msg {
     NativeUsage(crate::adapters::usage_native::Event),
     /// 「编辑器」面板的消息(ADR-013)。
     Markdown(crate::markdown::Message),
+    /// 面板生命周期自检的推进(仅 `DIGGER_LIFECYCLE_SELFTEST` 设置时出现)。
+    Lifecycle(crate::lifecycle_selftest::Phase),
     Resized(Size),
     Tick,
     ShutdownFinished(Result<(), String>),
@@ -90,6 +92,8 @@ pub struct ProductShell {
     usage: crate::adapters::usage::UsagePanel,
     /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
     markdown: crate::markdown::MarkdownPanel,
+    /// 生命周期自检的驱动(只在环境变量设置时有)。
+    lifecycle: Option<crate::lifecycle_selftest::Driver>,
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
     closing: bool,
@@ -149,7 +153,8 @@ impl ProductShell {
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
 
         let markdown = crate::markdown::MarkdownPanel::new();
-        let active = if markdown.is_selftest() { ActivePanel::Markdown } else { ActivePanel::Info };
+        let lifecycle = crate::lifecycle_selftest::Driver::from_env();
+        let active = if markdown.is_selftest() || lifecycle.is_some() { ActivePanel::Markdown } else { ActivePanel::Info };
 
         Self {
             window: None,
@@ -162,6 +167,7 @@ impl ProductShell {
             apps,
             usage,
             markdown,
+            lifecycle,
             boot_note,
             closing: false,
             shutdown_started: false,
@@ -417,7 +423,17 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
+            Msg::Lifecycle(phase) => {
+                let Some(mut driver) = self.lifecycle.take() else {
+                    return Task::none();
+                };
+                let task = driver.advance(self, phase);
+                self.lifecycle = Some(driver);
+                task
+            }
             Msg::ShutdownFinished(result) => match result {
+                // 生命周期自检要在关闭之后读句柄表,检查完自己退出
+                Ok(()) if self.lifecycle.is_some() => Task::none(),
                 Ok(()) => iced::exit(),
                 Err(error) => {
                     self.shutdown_error = Some(error);
@@ -515,6 +531,29 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
             .chain(Task::perform(shell.apps.shutdown(), Msg::ShutdownFinished))
     } else {
         Task::batch([task, native])
+    }
+}
+
+/// 生命周期自检要读的东西。
+impl ProductShell {
+    pub fn window_id(&self) -> Option<window::Id> {
+        self.window
+    }
+
+    pub fn window_size(&self) -> Size {
+        self.size
+    }
+
+    pub fn markdown_ready(&self) -> bool {
+        self.markdown.is_ready()
+    }
+
+    pub fn markdown_last_probe(&self) -> Option<crate::markdown::Probe> {
+        self.markdown.last_probe()
+    }
+
+    pub fn markdown_probe(&self, id: window::Id) -> Task<Msg> {
+        self.markdown.probe(id).map(Msg::Markdown)
     }
 }
 
@@ -640,9 +679,10 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let lifecycle_task = if shell.lifecycle.is_some() { crate::lifecycle_selftest::Driver::first() } else { Task::none() };
     (
         shell,
-        Task::batch([size_task, reply_task, usage_task, native_usage, markdown_task]),
+        Task::batch([size_task, reply_task, usage_task, native_usage, markdown_task, lifecycle_task]),
     )
 }
 

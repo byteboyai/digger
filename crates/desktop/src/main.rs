@@ -5,6 +5,7 @@
 
 mod adapters;
 mod apps;
+mod lifecycle_selftest;
 mod markdown;
 mod paths;
 mod product;

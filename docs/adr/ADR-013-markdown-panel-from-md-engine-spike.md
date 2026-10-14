@@ -1,6 +1,6 @@
 # ADR-013: A First-Party Markdown Panel from the `md-engine` Spike
 
-- Status: Proposed
+- Status: Accepted (2026-10-14; all eight validation items closed, see Implementation status)
 - Date: 2026-10-13
 - Decision owners: Digger Architecture
 - Applies to: desktop shell, panel catalog, editor host, crate layout, web bundle
@@ -329,9 +329,11 @@ Validation status:
 | 2 | Rust tests move green | Done: 34 unit + 11 property tests in `digger-editor` (more than the 10 + 13 + 11 counted above, because `Doc` gained incremental re-parse and persistence tests) |
 | 3 | Pinned settings | Done: tests read `host.rs`'s production source; relaxing any pin, or pinning the clipboard off, fails |
 | 4 | Harness on the product path | Done: `scripts/run-editor-selftest.sh`, 24 of 24 on the shipped binary (the 23 checks plus T17b for the nonce) |
-| 5 | Surface lifecycle | Partial: stale-generation and hide/close state are unit-tested; no automated test drives a real webview through switch/resize/close |
+| 5 | Surface lifecycle | Done: `scripts/run-editor-selftest.sh lifecycle` drives the real shell (switch tabs, resize while shown and while hidden, close) and reads the real NSView after each step: 8 of 8. Mutation-checked: not hiding, not resizing, not destroying each fail the matching checks |
 | 6 | Generation routing | Done: `a_message_from_an_old_generation_is_dropped` |
 | 7 | Conformance after the move | Done: `run-all.sh` passes with `footnote.ts` from `crates/desktop/web`; `make-fixtures.mjs --check` is byte-identical to the committed `fixtures.ts` |
 | 8 | Manual (IME, Agent button, Cmd-Z) | Done 2026-10-14: input-method composition checked by hand in the product window and reported fine |
 
-Status stays **Proposed** until item 5 is closed.
+All eight items are closed, so the status is **Accepted**.
+
+Found while writing item 5: wry 0.55.1's `WebView::bounds()` getter does not handle a flipped parent view (its setter does), so it reports a wrong y. The lifecycle probe reads the NSView frame itself.

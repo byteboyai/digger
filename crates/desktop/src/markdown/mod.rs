@@ -11,6 +11,8 @@
 
 mod host;
 
+pub use host::Probe;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,6 +34,8 @@ pub enum Message {
     /// 页面发来的原始消息,带它所属 webview 的 generation。
     Page(u64, String),
     Built(u64, Result<(), String>),
+    /// 生命周期自检的探针结果。
+    Probed(Probe),
     /// 顶栏按钮:替身 Agent。
     StandIn(StandIn),
     Done,
@@ -54,6 +58,7 @@ pub struct MarkdownPanel {
     rejects: u32,
     last_reject: Option<String>,
     stand_in_runs: usize,
+    last_probe: Option<Probe>,
     selftest: SelfTestTally,
     tx: tokio::sync::mpsc::UnboundedSender<Message>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<Message>>,
@@ -96,6 +101,7 @@ impl MarkdownPanel {
             rejects: 0,
             last_reject: None,
             stand_in_runs: 0,
+            last_probe: None,
             selftest: SelfTestTally::default(),
             tx,
             rx: Some(rx),
@@ -162,8 +168,27 @@ impl MarkdownPanel {
                     None => Task::none(),
                 }
             }
+            Message::Probed(probe) => {
+                self.last_probe = Some(probe);
+                Task::none()
+            }
             Message::Done => Task::none(),
         }
+    }
+
+    /// 页面已说过 ready、Rust 已回 open。
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    /// 读真实 webview 的状态(生命周期自检用),结果经 [`Message::Probed`] 回来。
+    pub fn probe(&self, id: window::Id) -> Task<Message> {
+        let generation = self.generation();
+        window::run(id, move |_| Message::Probed(host::probe(generation)))
+    }
+
+    pub fn last_probe(&self) -> Option<Probe> {
+        self.last_probe
     }
 
     /// 把回复送回页面(窗口线程上执行)。

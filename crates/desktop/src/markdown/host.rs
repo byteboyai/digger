@@ -84,6 +84,39 @@ pub fn set_visible(generation: u64, visible: bool) {
     });
 }
 
+/// 真实 webview 此刻的样子(生命周期自检读它:读的是 NSView 本身,不是我们自己的记账)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Probe {
+    /// 该 generation 的 webview 还在句柄表里
+    pub exists: bool,
+    /// NSView 未被隐藏
+    pub visible: bool,
+    /// NSView 的实际位置与大小(逻辑像素:x, y, 宽, 高;y 从顶部算)
+    pub bounds: Option<(f64, f64, f64, f64)>,
+    /// 句柄表里的 webview 总数
+    pub handles: usize,
+}
+
+pub fn probe(generation: u64) -> Probe {
+    use wry::WebViewExtMacOS;
+    let handles = VIEW.with(|v| usize::from(v.borrow().is_some()));
+    VIEW.with(|v| match v.borrow().as_ref() {
+        Some((g, view)) if *g == generation => {
+            // wry 的 `bounds()` 读取时不处理翻转坐标系的父视图(`set_bounds` 处理了),读出来的 y 是错的:
+            // 这里直接读 NSView 的 frame,按父视图是否翻转自己换算成「从顶部算」的 y。
+            let ns = view.webview();
+            let frame = ns.frame();
+            // SAFETY: 在窗口线程上读一个仍在句柄表里的、存活的 NSView 及其父视图的几何,只读。
+            let bounds = unsafe { ns.superview() }.map(|parent| {
+                let y = if parent.isFlipped() { frame.origin.y } else { parent.frame().size.height - frame.origin.y - frame.size.height };
+                (frame.origin.x, y, frame.size.width, frame.size.height)
+            });
+            Probe { exists: true, visible: !view.webview().isHidden(), bounds, handles }
+        }
+        _ => Probe { exists: false, visible: false, bounds: None, handles },
+    })
+}
+
 /// 销毁该 generation 的 webview(其他 generation 的不动)。
 pub fn destroy(generation: u64) {
     VIEW.with(|v| {
