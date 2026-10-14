@@ -2,6 +2,7 @@
 //!   ENGINE=cm|pm  选择引擎(默认 cm)
 //!   MODE=test     自动执行页面里的测试,打印结果并退出(默认手动:打开一份示例章节供人工试用)
 
+mod persist;
 mod sync;
 
 use iced::futures::SinkExt;

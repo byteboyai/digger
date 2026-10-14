@@ -50,6 +50,24 @@ pub struct Doc {
     /// re-parse only the blocks around an edit (falls back to the whole document whenever it cannot prove the result equal)
     pub incremental: bool,
     pub stats: ReparseStats,
+    /// (block id, run, version) of every block an Agent step wrote, not yet saved (block_agent_history)
+    history: Vec<(u64, u64, u64)>,
+}
+
+/// Everything about block identity that cannot be recovered from the text (ADR-012): saved with the text in one
+/// transaction so the two never disagree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct State {
+    pub version: u64,
+    pub text: String,
+    /// block ids in document order, for the blocks of `text`
+    pub ids: Vec<u64>,
+    pub next_id: u64,
+    pub runs: u64,
+    /// (old id, new id, run)
+    pub aliases: Vec<(u64, u64, u64)>,
+    /// rows for block_agent_history that were not saved yet
+    pub history: Vec<(u64, u64, u64)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -114,7 +132,7 @@ fn kind_name(k: &Kind) -> (&'static str, Option<u8>) {
 
 impl Doc {
     pub fn new() -> Doc {
-        Doc { text: String::new(), version: 0, tracked: vec![], next_id: 1, last: None, aliases: Default::default(), runs: 0, incremental: true, stats: ReparseStats::default() }
+        Doc { text: String::new(), version: 0, tracked: vec![], next_id: 1, last: None, aliases: Default::default(), runs: 0, incremental: true, stats: ReparseStats::default(), history: vec![] }
     }
 
     /// A new document: every block gets a fresh id.
@@ -152,6 +170,57 @@ impl Doc {
             self.reparse();
         }
         Ok(())
+    }
+
+    /// The state to persist together with the text. Forwarding whose target is gone is dropped: it could only ever
+    /// have answered "no such block".
+    pub fn export_state(&mut self) -> State {
+        let ids: Vec<u64> = self.last.as_ref().map(|l| l.1.iter().map(|(i, _)| *i).collect()).unwrap_or_default();
+        let live: std::collections::HashSet<u64> = ids.iter().copied().collect();
+        let mut keep: Vec<u64> = vec![];
+        for &old in self.aliases.keys() {
+            let mut cur = old;
+            for _ in 0..64 {
+                if live.contains(&cur) { keep.push(old); break; }
+                match self.aliases.get(&cur) { Some((n, _)) => cur = *n, None => break }
+            }
+        }
+        self.aliases.retain(|k, _| keep.contains(k));
+        let mut aliases: Vec<(u64, u64, u64)> = self.aliases.iter().map(|(o, (n, r))| (*o, *n, *r)).collect();
+        aliases.sort_unstable();
+        State { version: self.version, text: self.text.clone(), ids, next_id: self.next_id, runs: self.runs, aliases, history: std::mem::take(&mut self.history) }
+    }
+
+    /// Put history rows back after a save that did not happen.
+    pub fn restore_history(&mut self, mut rows: Vec<(u64, u64, u64)>) {
+        rows.append(&mut self.history);
+        self.history = rows;
+    }
+
+    /// Rebuild a Doc from saved state and the text as it is now. If the text is what was saved, every id is
+    /// restored verbatim; if it changed while nothing was running (an external edit), the saved text and ids are the
+    /// reconciler's "old" side, so unchanged blocks keep their ids.
+    pub fn import_state(st: &State, text: &str) -> Doc {
+        let mut d = Doc::new();
+        d.next_id = st.next_id;
+        d.runs = st.runs;
+        d.version = st.version;
+        d.aliases = st.aliases.iter().map(|(o, n, r)| (*o, (*n, *r))).collect();
+        let saved = parse_blocks(&st.text);
+        if saved.len() != st.ids.len() {
+            d.load(text); // inconsistent state: nothing to carry over except the counters
+            return d;
+        }
+        d.tracked = saved.iter().zip(&st.ids).map(|(p, id)| Tracked { id: *id, kind: p.kind.clone(), text: p.text.clone() }).collect();
+        d.text = st.text.clone();
+        if text == st.text {
+            d.last = Some((saved, st.ids.iter().map(|i| (*i, "Exact")).collect()));
+        } else {
+            d.text = text.to_string();
+            d.version += 1;
+            d.reparse();
+        }
+        d
     }
 
     /// Resolve a block id the Agent holds to a block of the CURRENT version: the id itself, or the block that replaced
@@ -209,7 +278,15 @@ impl Doc {
             }
             AgentOp::Append { text } => vec![(end16, end16, format!("{}{text}\n", if self.text.ends_with("\n\n") { "" } else if self.text.ends_with('\n') { "\n" } else { "\n\n" }))],
         };
+        let written: Vec<(usize, usize)> = patch.iter().filter(|(_, _, ins)| !ins.is_empty()).filter_map(|(f, _, ins)| byte_offset(&self.text, *f).map(|b| (b, b + ins.len()))).collect();
         self.edit(self.version, &patch).map_err(|e| AgentError::Edit(format!("{e:?}")))?;
+        for (a, b) in written {
+            // the blocks that start inside the text the Agent wrote
+            let (parsed, ids) = self.last.as_ref().unwrap();
+            let v = self.version;
+            let new: Vec<(u64, u64, u64)> = parsed.iter().zip(ids).filter(|(p, _)| p.start >= a && p.start < b).map(|(_, (id, _))| (*id, run, v)).collect();
+            self.history.extend(new);
+        }
         if let Some((old, start)) = alias_from {
             // the text before the block is unchanged, so the rewrite begins at the same byte offset
             let (parsed, ids) = self.last.as_ref().unwrap();

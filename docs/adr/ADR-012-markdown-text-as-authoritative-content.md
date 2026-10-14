@@ -361,6 +361,18 @@ The guard (file hash is the mirror hash) and the replace are not atomic: an edit
 - **Remaining O(n) work per edit:** the text `replace_range`, UTF-16 to byte conversion, and shifting offsets of later blocks (cheap integer adds). Fine at this size; a rope or per-chapter documents would remove them.
 - Mid-document structure that changes how distant blocks parse is covered by the neighbour check only for the adjacent blocks. The unproven case is a link reference definition or footnote definition added far from where it is used; block boundaries do not depend on them, so the differential test has not shown a difference, but inline rendering of the user is the editor's parser's job anyway.
 
+### Persisted forwarding, run counter and Agent history (`spike/md-engine`, `persist.rs`)
+
+Forwarding (old block id to the block that replaced it) only means something if block ids themselves survive a restart, so the identity state is saved with the text in one transaction, in the tables ADR-012 §2 names, all inside the project database: `doc_state(version, text, next_id, runs)`, `block(ord, block_id)`, `block_forward(old_id, new_id, run_id)` and `block_agent_history(block_id, run_id, at_version)`. On load, if the text is what was saved, every id comes back verbatim; if the file changed while nothing was running, the saved text and ids are the reconciler's old side, so unchanged blocks keep their ids.
+
+- **The run counter must persist.** A forwarding entry is exempt from the stale-text precondition only inside the run that made it. If the counter restarted at 0, the first plan after a restart would equal an older run's number and skip the check on someone else's rewrite. A test pins this; resetting the counter fails it.
+- **Dead forwarding is not stored.** Entries whose chain ends at a deleted block can only answer "no such block", so they are dropped on save; a test shows the answers are identical.
+- **History.** Every block an Agent step wrote (the blocks that start inside the written text) gets a row (block id, run, version), so "which paragraph did the Agent change in run N" is a query. Rows not saved because a save failed stay in memory and are written on the retry.
+- **Atomicity.** A failed save (a trigger raising on the forwarding insert) leaves exactly the previous state; the retry succeeds.
+- **Equivalence.** 300 random sessions of 25 steps (Agent plans on ids read at the start, author typing, saves, restarts): 3,005 plans compared across 1,483 restarts against a session that never restarted gave identical outcomes (applied, stale, no such block) and identical block ids at every step. Dropping the forwarding table or resetting the counter fails tests.
+- **Not done:** the md-mirror spike's own tables and these are separate databases in the spikes; in the product they are one `project.db`, and the save belongs in the same transaction as the Commit. Semantic ids and block attributes are not modelled.
+- **Test harness note:** the in-window editor suite (`MODE=test`, debug build) has a wall-clock limit that it hit several times when the machine was busy with builds and test runs right before it; on an idle machine it passes (23/23, repeated). It is not a regression of this change (the committed version passes too), but the limit is tight for the 1,000-chapter case.
+
 ## Consequences
 
 Positive:
