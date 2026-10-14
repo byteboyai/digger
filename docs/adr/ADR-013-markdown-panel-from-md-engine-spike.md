@@ -332,6 +332,6 @@ Validation status:
 | 5 | Surface lifecycle | Partial: stale-generation and hide/close state are unit-tested; no automated test drives a real webview through switch/resize/close |
 | 6 | Generation routing | Done: `a_message_from_an_old_generation_is_dropped` |
 | 7 | Conformance after the move | Done: `run-all.sh` passes with `footnote.ts` from `crates/desktop/web`; `make-fixtures.mjs --check` is byte-identical to the committed `fixtures.ts` |
-| 8 | Manual (IME, Agent button, Cmd-Z) | **Not done**: needs a person at the keyboard |
+| 8 | Manual (IME, Agent button, Cmd-Z) | Done 2026-10-14: input-method composition checked by hand in the product window and reported fine |
 
-Status stays **Proposed** until items 5 and 8 are closed.
+Status stays **Proposed** until item 5 is closed.
