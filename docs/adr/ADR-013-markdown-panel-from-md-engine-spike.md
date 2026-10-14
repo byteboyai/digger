@@ -290,15 +290,48 @@ Negative / costs:
    sync attached, the Agent-stand-in button rewrites a block and Cmd-Z takes exactly that back —
    the same observations ADR-012 recorded for the spike, repeated in the product window.
 
-## Open questions
+## Open questions — resolved
 
-- Whether the harness ships inside the production bundle (inert unless the selftest flag is set)
-  or is built into a separate artifact. Shipping it costs bytes and keeps the tested page
-  identical to the shipped page; separating them risks testing something the product does not run.
-- Whether opening an arbitrary `.md` file belongs in this slice or must wait for ADR-012 §5's
-  mirror. Currently excluded: without the mirror, an opened file has no import path and no
-  honest save.
-- The panel's place in the default layout (a third rail, or replacing the info panel in rail 0)
-  and whether it opens on launch.
-- When `markdown-core` is extracted, whether `digger-editor::blocks` is deleted in favour of it
-  in the same change, or kept as a re-export for one release.
+- **The harness ships inside the production bundle**, inert unless `DIGGER_EDITOR_SELFTEST` is set
+  (the page reads `window.__DIGGER__.mode`, which only the host's initialization script sets). The
+  page that is tested is the page that ships. Decided 2026-10-14.
+- **Opening an arbitrary `.md` file stays out of this slice**: without the ADR-012 §5 mirror it has no
+  import path and no honest save. Decided 2026-10-14.
+- **Default layout: a third rail** (`digger.markdown` after `digger.info` and `digger.apps`), plus an
+  "编辑器" tab; the panel does not open on launch. Decided 2026-10-14.
+- **`markdown-core` extraction** (whether `digger-editor::blocks` is deleted or re-exported) is still
+  open and does not block anything here.
+
+## Implementation status (2026-10-14)
+
+Landed in `crates/editor` (`digger-editor`), `crates/desktop/src/markdown/` and `crates/desktop/web/`.
+
+Deviations from the text above, all small:
+
+- **`allow_link_preview(false)` cannot be pinned**: wry 0.55.1's `WebViewBuilder` has no such option.
+  Every other pin in §3 is in place. Clipboard is `with_clipboard(true)`; on macOS wry has no switch at
+  all (always on), so the call only records the intent. Revisit when wry exposes the option.
+- **The product shell has no `on_activated` / `on_closed` Surface routing yet** (`apps` and `usage`
+  already work the same way): the panel follows the shell's existing pattern, a tab plus a per-panel
+  `sync_native`, instead of `SurfaceExecutor`. Generation routing is done inside the panel (§4): every
+  upstream message carries the webview's generation and a stale one is dropped. Moving all panels onto
+  `SurfaceExecutor` is a shell-wide change and is not part of this slice.
+- **The Agent stand-in is driven by a button in the iced bar** through `Bridge::stand_in`, as §5
+  intends; the page cannot trigger it.
+- **`digger-editor` also holds `Bridge`**, the window-free "raw page message in, reply out" state machine
+  (handshake, nonce, selftest gating), so those rules are tested without a window.
+
+Validation status:
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | Gate | Done: `check-host-deps.sh` bans `bytehost-*`, `iced*`, `wry`; `--self-test` injects each |
+| 2 | Rust tests move green | Done: 34 unit + 11 property tests in `digger-editor` (more than the 10 + 13 + 11 counted above, because `Doc` gained incremental re-parse and persistence tests) |
+| 3 | Pinned settings | Done: tests read `host.rs`'s production source; relaxing any pin, or pinning the clipboard off, fails |
+| 4 | Harness on the product path | Done: `scripts/run-editor-selftest.sh`, 24 of 24 on the shipped binary (the 23 checks plus T17b for the nonce) |
+| 5 | Surface lifecycle | Partial: stale-generation and hide/close state are unit-tested; no automated test drives a real webview through switch/resize/close |
+| 6 | Generation routing | Done: `a_message_from_an_old_generation_is_dropped` |
+| 7 | Conformance after the move | Done: `run-all.sh` passes with `footnote.ts` from `crates/desktop/web`; `make-fixtures.mjs --check` is byte-identical to the committed `fixtures.ts` |
+| 8 | Manual (IME, Agent button, Cmd-Z) | **Not done**: needs a person at the keyboard |
+
+Status stays **Proposed** until items 5 and 8 are closed.

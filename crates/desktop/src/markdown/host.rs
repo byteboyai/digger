@@ -94,12 +94,6 @@ pub fn destroy(generation: u64) {
     });
 }
 
-/// 当前登记的句柄数(测试用:销毁后回到原值)。
-#[cfg(test)]
-pub fn handle_count() -> usize {
-    VIEW.with(|v| usize::from(v.borrow().is_some()))
-}
-
 fn with(generation: u64, f: impl FnOnce(&wry::WebView)) {
     VIEW.with(|v| {
         if let Some((g, view)) = v.borrow().as_ref()
