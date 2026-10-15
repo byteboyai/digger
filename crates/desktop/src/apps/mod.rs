@@ -1003,6 +1003,11 @@ impl AppsState {
         &self.flow
     }
 
+    /// 服务是否已被「应用」面板的首次可见触发启动。
+    pub(crate) fn opened(&self) -> bool {
+        self.opened
+    }
+
     pub(crate) fn startup(&self) -> &Startup {
         &self.startup
     }

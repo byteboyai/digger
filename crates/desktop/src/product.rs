@@ -67,8 +67,8 @@ pub struct ProductShell {
     markdown: crate::markdown::MarkdownPanel,
     /// 生命周期自检的驱动(只在环境变量设置时有)。
     lifecycle: Option<crate::lifecycle_selftest::Driver>,
-    /// 应用面板上一次是否可见;从可见变为不可见时关掉正在显示的应用。
-    apps_was_visible: bool,
+    /// [应用, 用量] 面板上一次是否可见:变为可见时触发各自的切入动作;应用面板变为不可见时关掉正在显示的应用。
+    visible_before: [bool; 2],
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
     closing: bool,
@@ -138,7 +138,7 @@ impl ProductShell {
             usage,
             markdown,
             lifecycle,
-            apps_was_visible: false,
+            visible_before: [false; 2],
             boot_note,
             closing: false,
             shutdown_started: false,
@@ -189,15 +189,23 @@ impl ProductShell {
             self.save_shell();
         }
         let mut tasks = Vec::new();
-        if let Some(panel) = out.switched_in {
+        // "切入时动作"挂在"从看不见变成看得见"上,而不只是"被切入":展开收起的区、退出放大态、跨栏搬走对侧面板后
+        // 本栏退回的面板,都没有 `switched_in`,但用户眼前出现了这个面板。动作本身幂等,与 `switched_in` 重叠无害。
+        let visible_now = [shell::apps_id(), shell::usage_id()].map(|p| self.panel_visible(&p));
+        let mut entered: Vec<PanelId> = out.switched_in.into_iter().collect();
+        for (panel, (now, was)) in [shell::apps_id(), shell::usage_id()].into_iter().zip(visible_now.into_iter().zip(self.visible_before)) {
+            if now && !was && !entered.contains(&panel) {
+                entered.push(panel);
+            }
+        }
+        for panel in entered {
             tasks.push(self.on_visible(&panel));
         }
         // 应用面板从可见变成不可见(切走 / 收起 / 被放大盖住):关掉正在显示的应用,别留一个看不见的 webview 盖在别处。
-        let apps_visible = self.panel_visible(&shell::apps_id());
-        if self.apps_was_visible && !apps_visible {
+        if self.visible_before[0] && !visible_now[0] {
             self.apps.close_selected();
         }
-        self.apps_was_visible = apps_visible;
+        self.visible_before = visible_now;
         if resized {
             tasks.push(self.restyle_window());
         }
@@ -583,7 +591,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             initial.push(shell.on_visible(&panel));
         }
     }
-    shell.apps_was_visible = shell.panel_visible(&shell::apps_id());
+    shell.visible_before = [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
     (shell, Task::batch([size_task, reply_task, usage_task, native_usage, markdown_task, lifecycle_task, Task::batch(initial)]))
 }
 
@@ -681,6 +689,21 @@ mod tests {
         let r = below_header(Rect::new(10.0, 100.0, 300.0, 400.0), 96.0);
         assert_eq!((r.x, r.y, r.w, r.h), (10.0, 196.0, 300.0, 304.0));
         assert_eq!(below_header(Rect::new(0.0, 0.0, 50.0, 40.0), 96.0).h, 1.0);
+    }
+
+    /// 评审 Important 3:应用面板只要从"看不见"变成"看得见"就要触发探测 + 拉列表,不能只在"被切入"时。
+    /// 上次退出时应用面板被选中但右区收起;重启后点它的图标只是展开(没有 `switched_in`),服务必须随之启动。
+    #[tokio::test]
+    async fn the_apps_panel_starts_when_expanding_its_zone_makes_it_visible() {
+        let dir = test_temp_dir("apps-visible");
+        let path = dir.join("shell.json");
+        std::fs::write(&path, r#"{ "selected_right": "digger.apps", "right_collapsed": true }"#).unwrap();
+        let mut shell = ProductShell::with_shell_path(path);
+        assert!(!shell.panel_visible(&shell::apps_id()), "selected but its zone is collapsed");
+        assert!(!shell.apps.opened());
+        press(&mut shell, &shell::apps_id()); // expands the zone: no panel switch happens
+        assert!(shell.panel_visible(&shell::apps_id()));
+        assert!(shell.apps.opened(), "becoming visible by expanding still starts the service");
     }
 
     /// 点到「应用」面板会触发探测任务(`tokio::spawn`),所以需要运行时。
