@@ -42,6 +42,11 @@ pub fn shell_path() -> PathBuf {
     config_dir().join("shell.json")
 }
 
+/// 项目注册表与共享记忆所在的 SQLite 文件名(ADR-014)。属于 Digger 自己的数据根,与 Dozer 的数据库无关。
+pub const PROJECTS_DB_FILE: &str = "projects.db";
+/// 已打开的项目页签与当前页签的落盘文件名。
+pub const PROJECT_TABS_FILE: &str = "project_tabs.json";
+
 /// 应用宿主平台数据根:`<config>/digger/bytehost/`(ADR-011)。
 pub fn bytehost_root() -> PathBuf {
     config_dir().join("bytehost")
@@ -86,6 +91,14 @@ mod tests {
         let r = bytehost_root();
         assert_eq!(r.file_name().unwrap(), "bytehost");
         assert!(r.starts_with(config_dir()));
+    }
+
+    #[test]
+    fn project_data_is_under_digger_config_and_never_dozers() {
+        let db = config_dir().join(PROJECTS_DB_FILE);
+        assert_eq!(db.file_name().unwrap(), PROJECTS_DB_FILE);
+        assert!(db.starts_with(config_dir()));
+        assert!(!db.to_string_lossy().contains("dozer"));
     }
 
     #[test]
