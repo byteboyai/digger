@@ -5,8 +5,9 @@
 
 use std::path::Path;
 
-use bytehost_chrome::{Ctx, Defaults, Loaded, Outcome, PanelMeta, PanelRules, ShellModel, ShellMsg, metrics_from_theme, persist};
+use bytehost_chrome::{Ctx, Defaults, Loaded, Outcome, PaneRules, PairRects, PanelMeta, PanelRules, ShellModel, ShellMsg, Side, metrics_from_theme, persist};
 use bytehost_core::id::PanelId;
+use bytehost_desktop::PaneSpec;
 use byteui::interaction::icons::IconKind;
 
 fn id(s: &str) -> PanelId {
@@ -47,9 +48,31 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
     Some(PanelMeta { title: title.to_owned(), icon })
 }
 
-/// 面板的配对规则。S1 里 Digger 还没有"列表 | 内容"配对的面板(那要等 S2 起的共享面板),所以都是 `None`。
-pub fn rules(_panel: &PanelId) -> Option<PanelRules> {
-    None
+/// 配对里"列表"那一块的最小宽度:再窄就收起,免得底部按钮行被挤爆。
+/// 与 Dozer `extensions/project/view.rs` 的 `footer_min_width()` 同一公式(两颗按钮 + 间距)。
+pub fn list_min_width() -> f32 {
+    let icon = byteui::theme::icon_size::row();
+    let label_px = byteui::theme::font::label() as f32;
+    let button_w = icon + 6.0 + label_px * 4.0 + 16.0;
+    button_w * 2.0 + 6.0 + 16.0
+}
+
+/// 面板的配对规则。S2 起用量是"内容 | agent 列表"配对,与 Dozer 的用量一致:列表是第一块,默认渲染在内容之后
+/// (所以在右栏时是"内容 | 列表",拖到左栏镜像成"列表 | 内容"),可拖窄收起。其余面板仍是单栏。
+pub fn rules(panel: &PanelId) -> Option<PanelRules> {
+    match panel.as_str() {
+        "digger.usage" => Some(PanelRules {
+            default_side: Side::Right,
+            pane: Some(PaneRules { spec: PaneSpec::new(false, true), default_split: byteui::theme::geometry::default_split_ratio(), min_first_px: list_min_width() }),
+        }),
+        _ => None,
+    }
+}
+
+/// 某侧当前面板的配对矩形(度量与规则取产品的);该侧面板不是配对面板时为 `None`。
+pub fn pair_rects(model: &ShellModel, side: Side) -> Option<PairRects> {
+    let metrics = metrics_from_theme();
+    model.pair_rects(side, &Ctx { metrics: &metrics, rules: &rules })
 }
 
 /// 默认布局:沿用 Dozer 的分工,左区放内容型面板、右区放辅助型面板。左宽 640 与 Dozer 一致。
@@ -79,7 +102,6 @@ pub fn update(model: &mut ShellModel, msg: ShellMsg) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytehost_chrome::Side;
 
     #[test]
     fn panel_ids_are_the_persisted_wire_names_and_must_not_change() {
@@ -148,5 +170,40 @@ mod tests {
         assert_eq!(model.rail(Side::Right), [apps_id(), usage_id()], "the new panel lands on its default side");
         assert_eq!(model.left_width(), 500.0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_the_usage_panel_is_a_pair_and_it_matches_dozers_usage_pane() {
+        let r = rules(&usage_id()).expect("usage has rules");
+        assert_eq!(r.default_side, Side::Right, "usage lives on the right by default, like Dozer");
+        let pane = r.pane.expect("usage is a pair");
+        // 列表是第一块(默认渲染在内容之后),且可拖窄收起
+        assert_eq!(pane.spec, bytehost_desktop::PaneSpec::new(false, true));
+        assert_eq!(pane.default_split, byteui::theme::geometry::default_split_ratio());
+        assert_eq!(pane.min_first_px, list_min_width());
+        for p in [markdown_id(), info_id(), apps_id()] {
+            assert!(rules(&p).is_none(), "{p} stays a single-column panel in S2");
+        }
+    }
+
+    #[test]
+    fn the_list_min_width_is_dozers_footer_formula_at_the_default_theme() {
+        // 默认主题(缩放 1.0):行图标 14、标签字号 13。
+        // 按钮宽 = 14 + 6 + 13*4 + 16 = 88;最小宽 = 88*2 + 6 + 16 = 198。
+        assert_eq!(list_min_width(), 198.0);
+    }
+
+    #[test]
+    fn pair_rects_for_usage_split_the_right_zone_with_the_list_second_and_the_content_first() {
+        let d = defaults();
+        let model = ShellModel::new(d.rails.clone(), d.selected.clone(), d.left_width, (1200.0, 800.0)).unwrap();
+        let p = pair_rects(&model, Side::Right).expect("the right side shows usage");
+        // zones = 1200-88-8 = 1104,左区 640 ⇒ 右区 464;右区内容:x 44+640+8+1=693,宽 464-6-2=456;
+        // 配对宽 456-8=448,列表占 0.35 ⇒ 156.8,内容 291.2
+        assert!((p.second.x - 693.0).abs() < 1e-3, "content first, on the left");
+        assert!((p.second.w - 291.2).abs() < 1e-3);
+        assert!((p.first.w - 156.8).abs() < 1e-3);
+        assert!(p.first.x > p.second.x, "the list is to the right of the content");
+        assert!(pair_rects(&model, Side::Left).is_none(), "the editor is not a pair");
     }
 }
