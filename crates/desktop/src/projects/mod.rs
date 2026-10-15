@@ -27,16 +27,59 @@ pub enum Message {
     FolderPicked(Option<PathBuf>),
     /// `open_project` 的结果:`Ok(None)` = 所选路径不是目录。
     Opened(Result<Option<ProjectInfo>, String>),
-    /// `list_projects` 的结果。
-    Listed(Result<Vec<ProjectInfo>, String>),
+    /// `list_projects` 的结果,连同每个项目的目录是否还在。
+    Listed(Result<Listing, String>),
     Activate(i64),
     Close(i64),
+}
+
+/// 一次注册表读取的结果:项目列表(最近优先)与"目录已不存在"的项目 id。
+#[derive(Debug, Clone)]
+pub struct Listing {
+    pub projects: Vec<ProjectInfo>,
+    pub missing: HashSet<i64>,
+}
+
+impl Listing {
+    /// 对每个项目的路径做一次 `is_dir()`。这是阻塞的磁盘访问(项目在断开的网络盘上时可能很久),
+    /// 所以只在后台阻塞线程池里调用,不进 `update`。
+    pub fn scan(projects: Vec<ProjectInfo>) -> Self {
+        let missing = projects.iter().filter(|p| !Path::new(&p.path).is_dir()).map(|p| p.id).collect();
+        Self { projects, missing }
+    }
+}
+
+/// 提示按来源分类:同一来源的下一次成功才清掉它,别的来源的事件不会误清。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoticeKind {
+    /// 注册表打不开:项目功能整体不可用,永不被清掉。
+    Unavailable,
+    /// 打开项目失败 / 所选不是文件夹:下一次开始选择时清掉。
+    Open,
+    /// 读取项目列表失败:下一次成功读取时清掉。
+    List,
+    /// 页签文件没保存:下一次保存成功时清掉。
+    Save,
+}
+
+/// 顶栏上提示文字的最大字数;全文放在悬停提示里。
+const NOTICE_MAX_CHARS: usize = 48;
+
+fn shorten(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 pub struct ProjectsState {
     /// `None`:数据库打不开,项目功能不可用(原因在 `notice`),**不**退回临时库。
     host: Option<ProjectHost>,
     tabs: ProjectTabs,
+    /// 上一次成功落盘(或读盘)的页签状态:没变化就不写盘。
+    saved: ProjectTabs,
     tabs_path: PathBuf,
     /// 磁盘上是不支持的高版本页签文件:内存里用空状态显示,**禁止回写**。
     tabs_blocked: bool,
@@ -44,7 +87,7 @@ pub struct ProjectsState {
     registry: Vec<ProjectInfo>,
     /// 目录已不存在的项目:页签标灰,不自动删除。
     missing: HashSet<i64>,
-    notice: Option<String>,
+    notice: Option<(NoticeKind, String)>,
 }
 
 impl ProjectsState {
@@ -53,10 +96,11 @@ impl ProjectsState {
         let loaded = ProjectTabs::load(&dir.join(paths::PROJECT_TABS_FILE));
         let (host, notice) = match ProjectHost::open(&dir.join(paths::PROJECTS_DB_FILE)) {
             Ok(host) => (Some(host), None),
-            Err(e) => (None, Some(format!("项目功能不可用: {e}"))),
+            Err(e) => (None, Some((NoticeKind::Unavailable, format!("项目功能不可用: {e}")))),
         };
         Self {
             host,
+            saved: loaded.tabs.clone(),
             tabs: loaded.tabs,
             tabs_path: dir.join(paths::PROJECT_TABS_FILE),
             tabs_blocked: loaded.save_blocked,
@@ -80,7 +124,21 @@ impl ProjectsState {
 
     #[cfg(test)]
     pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+        self.notice.as_ref().map(|(_, text)| text.as_str())
+    }
+
+    fn set_notice(&mut self, kind: NoticeKind, text: String) {
+        // "项目功能不可用"是根因,别的提示不盖掉它。
+        if matches!(self.notice, Some((NoticeKind::Unavailable, _))) {
+            return;
+        }
+        self.notice = Some((kind, text));
+    }
+
+    fn clear_notice(&mut self, kind: NoticeKind) {
+        if self.notice.as_ref().is_some_and(|(k, _)| *k == kind) {
+            self.notice = None;
+        }
     }
 
     /// 向注册表取最新列表(启动时与每次打开后调用)。
@@ -89,17 +147,27 @@ impl ProjectsState {
             return Task::none();
         };
         let service = host.projects.clone();
-        Task::perform(async move { service.list_projects().await.map_err(|e| e.to_string()) }, Message::Listed)
+        Task::perform(
+            async move {
+                let projects = service.list_projects().await.map_err(|e| e.to_string())?;
+                // 目录是否还在要 stat 磁盘,放到阻塞线程池里做,不占界面线程。
+                tokio::task::spawn_blocking(move || Listing::scan(projects)).await.map_err(|e| e.to_string())
+            },
+            Message::Listed,
+        )
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
         match msg {
-            Message::PickFolder => Task::perform(
-                async {
-                    rfd::AsyncFileDialog::new().set_title("选择项目文件夹").pick_folder().await.map(|h| h.path().to_path_buf())
-                },
-                Message::FolderPicked,
-            ),
+            Message::PickFolder => {
+                self.clear_notice(NoticeKind::Open);
+                Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new().set_title("选择项目文件夹").pick_folder().await.map(|h| h.path().to_path_buf())
+                    },
+                    Message::FolderPicked,
+                )
+            }
             Message::FolderPicked(None) => Task::none(),
             Message::FolderPicked(Some(path)) => {
                 let Some(host) = &self.host else {
@@ -110,8 +178,10 @@ impl ProjectsState {
                 Task::perform(async move { service.open_project(path).await.map_err(|e| e.to_string()) }, Message::Opened)
             }
             Message::Opened(Ok(Some(info))) => {
-                self.notice = None;
+                self.clear_notice(NoticeKind::Open);
                 self.tabs.open_tab(info.id);
+                // `open_project` 刚确认过它是目录:之前标灰的,现在不灰,不必等后面的 `Listed`。
+                self.missing.remove(&info.id);
                 // 立刻进快照:页签一出现就有名字,不等后面的 `Listed`。
                 self.registry.retain(|p| p.id != info.id);
                 self.registry.insert(0, info);
@@ -119,24 +189,25 @@ impl ProjectsState {
                 self.refresh()
             }
             Message::Opened(Ok(None)) => {
-                self.notice = Some("所选路径不是可打开的文件夹".into());
+                self.set_notice(NoticeKind::Open, "所选路径不是可打开的文件夹".into());
                 Task::none()
             }
             Message::Opened(Err(e)) => {
-                self.notice = Some(format!("打开项目失败: {e}"));
+                self.set_notice(NoticeKind::Open, format!("打开项目失败: {e}"));
                 Task::none()
             }
-            Message::Listed(Ok(list)) => {
-                let registered: HashSet<i64> = list.iter().map(|p| p.id).collect();
+            Message::Listed(Ok(listing)) => {
+                let registered: HashSet<i64> = listing.projects.iter().map(|p| p.id).collect();
                 self.tabs.prune(&registered);
-                self.missing = list.iter().filter(|p| !Path::new(&p.path).is_dir()).map(|p| p.id).collect();
-                self.registry = list;
+                self.missing = listing.missing;
+                self.registry = listing.projects;
+                self.clear_notice(NoticeKind::List);
                 self.save_tabs();
                 Task::none()
             }
             Message::Listed(Err(e)) => {
                 // 读失败不等于"没有项目":保留现有页签与快照,只提示。
-                self.notice = Some(format!("读取项目列表失败: {e}"));
+                self.set_notice(NoticeKind::List, format!("读取项目列表失败: {e}"));
                 Task::none()
             }
             Message::Activate(id) => {
@@ -154,11 +225,16 @@ impl ProjectsState {
     }
 
     fn save_tabs(&mut self) {
-        if self.tabs_blocked {
+        // 没变化就不写盘:每次注册表刷新都会走到这里。
+        if self.tabs_blocked || self.tabs == self.saved {
             return;
         }
-        if let Err(e) = self.tabs.save(&self.tabs_path) {
-            self.notice = Some(format!("项目页签未保存: {e}"));
+        match self.tabs.save(&self.tabs_path) {
+            Ok(()) => {
+                self.saved = self.tabs.clone();
+                self.clear_notice(NoticeKind::Save);
+            }
+            Err(e) => self.set_notice(NoticeKind::Save, format!("项目页签未保存: {e}")),
         }
     }
 
@@ -184,8 +260,11 @@ impl ProjectsState {
         let plus = button(icons::view(IconKind::Plus, icon_size::rail(), dim)).style(button::text).on_press_maybe(self.host.as_ref().map(|_| Message::PickFolder));
         let hint = if self.host.is_some() { "打开项目文件夹" } else { "项目功能不可用" };
         tabs = tabs.push(tooltip(plus, iced::widget::container(text(hint).size(font::body())).padding(6).style(iced::widget::container::rounded_box), tooltip::Position::Bottom));
-        if let Some(notice) = &self.notice {
-            tabs = tabs.push(text(notice.clone()).size(font::body()).color(tokens.gold));
+        if let Some((_, full)) = &self.notice {
+            // 顶栏只放截短的一行,全文在悬停提示里,免得长错误把"＋"和页签挤出顶栏。
+            let short = text(shorten(full, NOTICE_MAX_CHARS)).size(font::body()).color(tokens.gold);
+            let tip = iced::widget::container(text(full.clone()).size(font::body())).padding(6).style(iced::widget::container::rounded_box);
+            tabs = tabs.push(tooltip(short, tip, tooltip::Position::Bottom));
         }
         tabs.into()
     }

@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(shell.projects.current_project_id(), Some(1));
 
         let mut again = ProductShell::with_shell_path(dir.join("shell.json"));
-        send(&mut again, Msg::Projects(P::Listed(Ok(vec![info]))));
+        send(&mut again, Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![info])))));
         assert_eq!(again.projects.current_project_id(), Some(1));
     }
 

@@ -9,6 +9,11 @@ fn dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+/// 一次成功的注册表读取(含目录是否还在的检查,与生产里后台任务用同一个 `Listing::scan`)。
+fn listed(projects: Vec<ProjectInfo>) -> Message {
+    Message::Listed(Ok(Listing::scan(projects)))
+}
+
 fn opened(state: &mut ProjectsState, info: ProjectInfo) {
     let _ = state.update(Message::Opened(Ok(Some(info))));
 }
@@ -33,7 +38,7 @@ fn opening_a_project_adds_and_activates_its_tab_and_survives_a_restart() {
 
     let mut again = ProjectsState::open_in(d.path());
     assert_eq!(again.current_project_id(), None, "快照还没读回来,页签先不画");
-    let _ = again.update(Message::Listed(Ok(vec![info(1, &proj, "book")])));
+    let _ = again.update(listed(vec![info(1, &proj, "book")]));
     assert_eq!(again.current_project_id(), Some(1), "页签与当前项目随重启恢复");
 }
 
@@ -44,7 +49,7 @@ fn a_registry_read_returning_without_a_tabbed_project_drops_that_tab() {
     std::fs::create_dir(&proj).unwrap();
     let mut state = ProjectsState::open_in(d.path());
     opened(&mut state, info(1, &proj, "gone"));
-    let _ = state.update(Message::Listed(Ok(vec![])));
+    let _ = state.update(listed(vec![]));
     assert_eq!(state.current_project_id(), None);
     let reloaded = ProjectsState::open_in(d.path());
     assert!(reloaded.tabs.open().is_empty(), "取消登记后的页签也从落盘里消失");
@@ -68,7 +73,7 @@ fn a_project_whose_directory_is_gone_stays_as_a_greyed_tab() {
     let proj = d.path().join("vanished");
     let mut state = ProjectsState::open_in(d.path());
     opened(&mut state, info(1, &proj, "vanished"));
-    let _ = state.update(Message::Listed(Ok(vec![info(1, &proj, "vanished")])));
+    let _ = state.update(listed(vec![info(1, &proj, "vanished")]));
     assert_eq!(state.current_project_id(), Some(1), "不自动删除");
     assert!(state.missing.contains(&1));
 }
@@ -126,4 +131,85 @@ fn cancelling_the_folder_picker_changes_nothing() {
     let _ = state.update(Message::FolderPicked(None));
     assert_eq!(state.current_project_id(), None);
     assert!(state.notice().is_none());
+}
+
+#[test]
+fn scan_marks_exactly_the_projects_whose_directory_is_gone() {
+    let d = dir();
+    let here = d.path().join("here");
+    std::fs::create_dir(&here).unwrap();
+    let gone = d.path().join("gone");
+    let listing = Listing::scan(vec![info(1, &here, "here"), info(2, &gone, "gone")]);
+    assert_eq!(listing.missing, HashSet::from([2]));
+    assert_eq!(listing.projects.len(), 2);
+}
+
+#[test]
+fn reopening_a_project_whose_directory_came_back_clears_its_grey_state_at_once() {
+    let d = dir();
+    let proj = d.path().join("back");
+    let mut state = ProjectsState::open_in(d.path());
+    opened(&mut state, info(1, &proj, "back"));
+    let _ = state.update(listed(vec![info(1, &proj, "back")]));
+    assert!(state.missing.contains(&1));
+
+    std::fs::create_dir(&proj).unwrap();
+    opened(&mut state, info(1, &proj, "back"));
+    assert!(!state.missing.contains(&1), "不必等后面的 Listed");
+}
+
+#[test]
+fn a_list_failure_notice_clears_on_the_next_successful_read() {
+    let d = dir();
+    let mut state = ProjectsState::open_in(d.path());
+    let _ = state.update(Message::Listed(Err("boom".into())));
+    assert!(state.notice().unwrap().contains("boom"));
+    let _ = state.update(listed(vec![]));
+    assert!(state.notice().is_none());
+}
+
+#[test]
+fn a_read_success_does_not_clear_an_unrelated_open_notice_but_a_new_pick_does() {
+    let d = dir();
+    let mut state = ProjectsState::open_in(d.path());
+    let _ = state.update(Message::Opened(Ok(None)));
+    let _ = state.update(listed(vec![]));
+    assert!(state.notice().unwrap().contains("文件夹"));
+    let _ = state.update(Message::PickFolder);
+    assert!(state.notice().is_none(), "开始新一次选择就清掉上一次的打开提示");
+}
+
+#[test]
+fn an_unavailable_registry_notice_is_never_cleared_by_other_events() {
+    let d = dir();
+    std::fs::create_dir(d.path().join(paths::PROJECTS_DB_FILE)).unwrap();
+    let mut state = ProjectsState::open_in(d.path());
+    let _ = state.update(listed(vec![]));
+    let _ = state.update(Message::PickFolder);
+    assert!(state.notice().unwrap().contains("不可用"));
+}
+
+#[test]
+fn a_read_that_changes_nothing_does_not_rewrite_the_tabs_file() {
+    let d = dir();
+    let proj = d.path().join("same");
+    std::fs::create_dir(&proj).unwrap();
+    let mut state = ProjectsState::open_in(d.path());
+    opened(&mut state, info(1, &proj, "same"));
+    let file = d.path().join(paths::PROJECT_TABS_FILE);
+    assert!(file.exists());
+    std::fs::remove_file(&file).unwrap();
+    let _ = state.update(listed(vec![info(1, &proj, "same")]));
+    assert!(!file.exists(), "状态没变就不该写盘");
+    let _ = state.update(Message::Close(1));
+    assert!(file.exists(), "状态变了才写");
+}
+
+#[test]
+fn a_long_notice_is_shortened_for_the_top_bar_on_a_char_boundary() {
+    assert_eq!(shorten("short", 10), "short");
+    let long = "错".repeat(100);
+    let cut = shorten(&long, 20);
+    assert_eq!(cut.chars().count(), 20);
+    assert!(cut.ends_with('…'));
 }
