@@ -10,6 +10,8 @@ description = "Digger 领域持久化:任务完成用量的幂等落盘账本与
 # 领域类型(纯 serde)与服务 trait 接缝(无 bytehost),业务层可安全依赖。
 dozer-model.workspace = true
 dozer-services.workspace = true
+# Project 注册表与共享记忆的存储与进程内服务(Dozer 与 Digger 共用)。
+dozer-store-project.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true
@@ -17,3 +19,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = "3"
