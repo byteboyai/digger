@@ -1004,6 +1004,7 @@ impl AppsState {
     }
 
     /// 服务是否已被「应用」面板的首次可见触发启动。
+    #[cfg(test)]
     pub(crate) fn opened(&self) -> bool {
         self.opened
     }

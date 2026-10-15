@@ -26,6 +26,26 @@ pub enum Phase {
     Check,
 }
 
+/// 自检场景:`Shell` 是 S1 的编辑器场景;`Usage` 是 S2 的用量配对场景(`DIGGER_LIFECYCLE_SELFTEST=usage`)。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scenario {
+    Shell,
+    Usage,
+}
+
+/// 期望用量图表 webview 在哪(窗口 1200×800、左区偏好 640 的前提下)。`list` 是列表占配对宽度的比例。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum UsageWhere {
+    /// 右区,整个内容区(无数据 / 收起)
+    RightFull,
+    /// 右区,内容在左、列表在右
+    RightPaired { list: f64 },
+    /// 左区(用量被拖到左栏),无数据:整个内容区
+    LeftFull,
+    /// 左区(用量被拖到左栏,镜像):列表在左、内容在右
+    LeftPaired { list: f64 },
+}
+
 /// 期望编辑器 webview 在哪。`pref` 是持久化的左宽偏好(夹取在算期望时独立做)。
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Area {
@@ -39,12 +59,15 @@ enum Expect {
     Visible(Area),
     Hidden,
     Destroyed,
+    UsageAt(UsageWhere),
 }
 
 enum Action {
     Msg(ShellMsg),
     Resize(f32, f32),
     Close,
+    /// 给用量面板注入一行样例数据,让它进入"有数据"态。
+    InjectUsage,
 }
 
 struct Step {
@@ -61,7 +84,7 @@ fn release() -> Action {
     Action::Msg(ShellMsg::PointerReleased)
 }
 
-fn steps() -> Vec<Step> {
+fn shell_steps() -> Vec<Step> {
     let editor = shell::markdown_id;
     let info = shell::info_id;
     vec![
@@ -91,8 +114,39 @@ fn steps() -> Vec<Step> {
     ]
 }
 
+fn steps(scenario: Scenario) -> Vec<Step> {
+    match scenario {
+        Scenario::Shell => shell_steps(),
+        Scenario::Usage => usage_steps(),
+    }
+}
+
+fn usage_steps() -> Vec<Step> {
+    let usage = shell::usage_id;
+    let apps = shell::apps_id;
+    // 配对宽 448,右区内容 x 693:光标放在 693 + 0.5·448 = 917,内容占一半 ⇒ 列表占 0.5
+    let drag_to_half = vec![Action::Msg(ShellMsg::DividerPress(Divider::Pair(Side::Right))), Action::Msg(ShellMsg::CursorMoved { x: 917.0, y: 300.0 }), release()];
+    vec![
+        Step { name: "U1 with no data the chart fills the whole usage content area", actions: vec![Action::Resize(1200.0, 800.0)], expect: Expect::UsageAt(UsageWhere::RightFull) },
+        Step { name: "U2 once there is data the zone becomes content | list and the chart takes the content pane", actions: vec![Action::InjectUsage], expect: Expect::UsageAt(UsageWhere::RightPaired { list: 0.35 }) },
+        Step { name: "U3 collapsing the list gives the chart the whole width", actions: vec![Action::Msg(ShellMsg::TogglePane(usage()))], expect: Expect::UsageAt(UsageWhere::RightFull) },
+        Step { name: "U4 expanding it again brings back the same split", actions: vec![Action::Msg(ShellMsg::TogglePane(usage()))], expect: Expect::UsageAt(UsageWhere::RightPaired { list: 0.35 }) },
+        Step { name: "U5 dragging the pair divider resizes the chart", actions: drag_to_half, expect: Expect::UsageAt(UsageWhere::RightPaired { list: 0.5 }) },
+        Step {
+            // 先选中应用再选中用量(点已激活的图标会收起该区),再拖到左栏。落地会重新取数,结果(空)稍后才到,
+            // 会盖掉同一瞬间注入的数据:所以这一步只验证位置(无数据时占满左区内容),数据留到下一步注入。
+            name: "U6 dragging usage to the left rail moves the chart into the left zone",
+            actions: vec![press(apps()), release(), press(usage()), Action::Msg(ShellMsg::RailDragMove { side: Side::Left, index: 0 }), release()],
+            expect: Expect::UsageAt(UsageWhere::LeftFull),
+        },
+        Step { name: "U7 with data on the left rail the pair is mirrored: list left, chart on the right", actions: vec![Action::InjectUsage], expect: Expect::UsageAt(UsageWhere::LeftPaired { list: 0.5 }) },
+        Step { name: "U8 closing destroys the chart view", actions: vec![Action::Close], expect: Expect::Destroyed },
+    ]
+}
+
 /// 状态机:每一步 Act(做动作)→ 等 → Probe(读真实 view)→ 等 → Check(比较)。
 pub struct Driver {
+    scenario: Scenario,
     step: usize,
     steps: Vec<Step>,
     started: Instant,
@@ -135,7 +189,9 @@ fn want(area: Area, window: (f32, f32)) -> (f64, f64, f64, f64) {
 
 impl Driver {
     pub fn from_env() -> Option<Self> {
-        std::env::var_os(ENV).map(|_| Self { step: 0, steps: steps(), started: Instant::now(), passes: 0, fails: 0 })
+        let value = std::env::var(ENV).ok()?;
+        let scenario = if value == "usage" { Scenario::Usage } else { Scenario::Shell };
+        Some(Self { scenario, step: 0, steps: steps(scenario), started: Instant::now(), passes: 0, fails: 0 })
     }
 
     pub fn first() -> Task<Msg> {
@@ -147,7 +203,11 @@ impl Driver {
             Phase::Pause => Task::none(),
             Phase::Act => self.act(shell),
             Phase::Probe => match shell.window_id() {
-                Some(id) => shell.markdown_probe(id).chain(after(SETTLE / 2, Phase::Check)),
+                Some(id) => match self.scenario {
+                    Scenario::Shell => shell.markdown_probe(id),
+                    Scenario::Usage => shell.usage_probe(id),
+                }
+                .chain(after(SETTLE / 2, Phase::Check)),
                 None => self.fail_now("no window"),
             },
             Phase::Check => self.check(shell),
@@ -159,8 +219,12 @@ impl Driver {
             return self.wait_or_die("the window never became ready");
         };
         // 第一步先等页面说过 ready:之后才有「正常显示」可言
-        if self.step == 0 && !shell.markdown_ready() {
-            return self.wait_or_die("the editor page never became ready");
+        let ready = match self.scenario {
+            Scenario::Shell => shell.markdown_ready(),
+            Scenario::Usage => shell.usage_ready(),
+        };
+        if self.step == 0 && !ready {
+            return self.wait_or_die("the page never became ready");
         }
         // 动作逐个排队,每个之间留一点时间让界面处理完;最后统一等 SETTLE 再读真实 view
         let mut chain: Task<Msg> = Task::none();
@@ -169,6 +233,7 @@ impl Driver {
                 Action::Msg(m) => Task::done(Msg::Shell(m.clone())),
                 Action::Resize(w, h) => iced::window::resize(id, Size::new(*w, *h)),
                 Action::Close => Task::done(Msg::Exit),
+                Action::InjectUsage => Task::done(Msg::Usage(crate::adapters::usage::sample_loaded_message())),
             };
             chain = chain.chain(t).chain(after(Duration::from_millis(250), Phase::Pause));
         }
@@ -189,7 +254,11 @@ impl Driver {
 
     fn check(&mut self, shell: &mut ProductShell) -> Task<Msg> {
         let step = &self.steps[self.step];
-        let (ok, detail) = judge(step.expect, shell.markdown_last_probe(), shell.window_size());
+        let seen = match self.scenario {
+            Scenario::Shell => shell.markdown_last_probe().map(Seen::from),
+            Scenario::Usage => shell.usage_last_probe().map(Seen::from),
+        };
+                let (ok, detail) = judge(step.expect, seen, shell.window_size());
         println!("{}: {}{}", if ok { "PASS" } else { "FAIL" }, step.name, if detail.is_empty() { String::new() } else { format!("\n      {detail}") }); // cli-output
         if ok {
             self.passes += 1
@@ -205,6 +274,52 @@ impl Driver {
     }
 }
 
+/// 两个面板的探针统一成这一种,`judge` 不关心是哪个面板。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Seen {
+    exists: bool,
+    visible: bool,
+    bounds: Option<(f64, f64, f64, f64)>,
+    handles: usize,
+}
+
+impl From<Probe> for Seen {
+    fn from(p: Probe) -> Self {
+        Self { exists: p.exists, visible: p.visible, bounds: p.bounds, handles: p.handles }
+    }
+}
+
+impl From<crate::adapters::usage_native::Probe> for Seen {
+    fn from(p: crate::adapters::usage_native::Probe) -> Self {
+        Self { exists: p.exists, visible: p.visible, bounds: p.bounds, handles: p.handles }
+    }
+}
+
+/// 用量原生头部的高度(`product.rs` 的 `USAGE_HEADER_HEIGHT` 的字面量副本:那个值是估值,校准它时这里要一起改)。
+const USAGE_HEADER: f64 = 80.0;
+
+/// 用量图表 webview 的期望矩形 (x, y, w, h)。只用字面量和算术。
+fn want_usage(place: UsageWhere, window: (f32, f32)) -> (f64, f64, f64, f64) {
+    let (w, h) = (window.0 as f64, window.1 as f64);
+    let zones = (w - 2.0 * RAIL - DIVIDER).max(0.0);
+    let left_w = 640f64.clamp(MIN_ZONE, (zones - MIN_ZONE).max(MIN_ZONE));
+    let body_h = h - TOP_BAR - FOOTBAR;
+    let y = TOP_BAR + 6.0 + 1.0 + USAGE_HEADER;
+    let ch = body_h - 6.0 - 2.0 - USAGE_HEADER;
+    // 右区内容:外边距 上6 右6,内边距 1;左区内容:外边距 上6 左6,内边距 1
+    let (rx, rw) = (RAIL + left_w + DIVIDER + 1.0, (zones - left_w) - 6.0 - 2.0);
+    let (lx, lw) = (RAIL + 6.0 + 1.0, left_w - 6.0 - 2.0);
+    match place {
+        UsageWhere::RightFull => (rx, y, rw, ch),
+        UsageWhere::LeftFull => (lx, y, lw, ch),
+        UsageWhere::RightPaired { list } => (rx, y, (rw - DIVIDER) * (1.0 - list), ch),
+        UsageWhere::LeftPaired { list } => {
+            let pair_w = lw - DIVIDER;
+            (lx + pair_w * list + DIVIDER, y, pair_w * (1.0 - list), ch)
+        }
+    }
+}
+
 /// 原生 view 的大小是取整的,所以容差取半个像素:够吸收取整,又抓得住 1 像素的几何漂移。
 fn near(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
     const TOLERANCE: f64 = 0.51;
@@ -212,13 +327,17 @@ fn near(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
 }
 
 /// 把真实 view 的状态与期望比较。纯函数,可单测。
-fn judge(expect: Expect, probe: Option<Probe>, window: (f32, f32)) -> (bool, String) {
+fn judge(expect: Expect, probe: Option<Seen>, window: (f32, f32)) -> (bool, String) {
     let Some(p) = probe else {
         return (false, "no probe result arrived".into());
     };
     let (ok, want_detail) = match expect {
         Expect::Visible(area) => {
             let want = want(area, window);
+            (p.exists && p.visible && p.handles == 1 && p.bounds.is_some_and(|b| near(b, want)), format!("want bounds {want:?}"))
+        }
+        Expect::UsageAt(place) => {
+            let want = want_usage(place, window);
             (p.exists && p.visible && p.handles == 1 && p.bounds.is_some_and(|b| near(b, want)), format!("want bounds {want:?}"))
         }
         Expect::Hidden => (p.exists && !p.visible && p.handles == 1, "want hidden but alive".to_owned()),
@@ -231,8 +350,8 @@ fn judge(expect: Expect, probe: Option<Probe>, window: (f32, f32)) -> (bool, Str
 mod tests {
     use super::*;
 
-    fn probe(exists: bool, visible: bool, bounds: Option<(f64, f64, f64, f64)>, handles: usize) -> Option<Probe> {
-        Some(Probe { exists, visible, bounds, handles })
+    fn probe(exists: bool, visible: bool, bounds: Option<(f64, f64, f64, f64)>, handles: usize) -> Option<Seen> {
+        Some(Seen { exists, visible, bounds, handles })
     }
 
     const WINDOW: (f32, f32) = (1440.0, 900.0);
@@ -272,9 +391,33 @@ mod tests {
 
     #[test]
     fn every_step_has_a_name_and_the_last_one_closes_the_window() {
-        let steps = steps();
+        let steps = steps(Scenario::Shell);
         assert_eq!(steps.len(), 11);
         assert!(steps.iter().all(|s| !s.name.is_empty()));
         assert!(matches!(steps.last().unwrap().actions.as_slice(), [Action::Close]));
+    }
+
+    #[test]
+    fn the_usage_expectations_are_the_hand_computed_ones() {
+        let w = (1200.0, 800.0);
+        // 右区内容 x 693 y 47 w 456;图表在 80 的头部之下:y 127 h 650
+        assert_eq!(want_usage(UsageWhere::RightFull, w), (693.0, 127.0, 456.0, 650.0));
+        // 配对宽 448,默认列表占 0.35 ⇒ 内容 291.2
+        let (x, y, cw, h) = want_usage(UsageWhere::RightPaired { list: 0.35 }, w);
+        assert_eq!((x, y, h), (693.0, 127.0, 650.0));
+        assert!((cw - 291.2).abs() < 1e-9);
+        // 镜像:左区内容 x 51 w 632,配对宽 624,列表 0.5 ⇒ 312;内容 x = 51 + 312 + 8
+        assert_eq!(want_usage(UsageWhere::LeftPaired { list: 0.5 }, w), (371.0, 127.0, 312.0, 650.0));
+        // 左区无数据:整个内容区 x 51 w 632
+        assert_eq!(want_usage(UsageWhere::LeftFull, w), (51.0, 127.0, 632.0, 650.0));
+    }
+
+    #[test]
+    fn the_usage_scenario_has_eight_steps_and_the_last_one_closes_the_window() {
+        let steps = steps(Scenario::Usage);
+        assert_eq!(steps.len(), 8);
+        assert!(steps.iter().all(|s| !s.name.is_empty()));
+        assert!(matches!(steps.last().unwrap().actions.as_slice(), [Action::Close]));
+        assert_eq!(super::steps(Scenario::Shell).len(), 11, "the S1 scenario is untouched");
     }
 }

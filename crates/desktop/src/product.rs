@@ -368,6 +368,18 @@ impl ProductShell {
     pub fn markdown_probe(&self, id: window::Id) -> Task<Msg> {
         self.markdown.probe(id).map(Msg::Markdown)
     }
+
+    pub fn usage_ready(&self) -> bool {
+        self.usage.native.is_ready()
+    }
+
+    pub fn usage_last_probe(&self) -> Option<crate::adapters::usage_native::Probe> {
+        self.usage.native.last_probe()
+    }
+
+    pub fn usage_probe(&self, id: window::Id) -> Task<Msg> {
+        self.usage.native.probe(id).map(Msg::NativeUsage)
+    }
 }
 
 /// 顶栏三个槽位。S1 没有 Project:标题只是展示,页签行显示"无项目","＋"置灰并提示。

@@ -2,6 +2,8 @@
 #   scripts/run-editor-selftest.sh              harness:T1–T23 + T17b(验证项 4)
 #   scripts/run-editor-selftest.sh lifecycle    窗口骨架 + 面板生命周期:点图标 / 收起 / 拖分隔线 / 缩放 / 放大 /
 #                                               跨栏移动 / 关闭,读真实 NSView(ADR-013 验证项 5;S1 骨架版)
+#   scripts/run-editor-selftest.sh usage        用量配对(S2):无数据 / 拼分栏 / 收起 / 拖分隔线 / 镜像 / 关闭,
+#                                               读用量图表 webview 的真实 NSView
 #
 # 在产品二进制上跑编辑器自检(ADR-013 验证项 4):用 harness 页面启动真实的 digger,
 # 走生产的 webview 构建器与生产的桥,自动跑 T1–T23,任何一项失败(或没跑完)都以非零退出。
@@ -16,7 +18,8 @@ export DIGGER_DATA_DIR="$data"
 case "${1:-harness}" in
   harness) export DIGGER_EDITOR_SELFTEST=1 ;;
   lifecycle) export DIGGER_LIFECYCLE_SELFTEST=1 ;;
-  *) echo "用法: $0 [harness|lifecycle]" >&2; exit 2 ;;
+  usage) export DIGGER_LIFECYCLE_SELFTEST=usage ;;
+  *) echo "用法: $0 [harness|lifecycle|usage]" >&2; exit 2 ;;
 esac
 cargo build -q -p digger-desktop --bin digger
 bin="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"

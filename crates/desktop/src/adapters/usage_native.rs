@@ -18,6 +18,37 @@ pub enum Event {
     Ready(u64),
     Built(u64, Result<(), String>),
     Done,
+    /// 生命周期自检读到的真实 view 状态。
+    Probed(Probe),
+}
+
+/// 真实用量 webview 此刻的样子(生命周期自检读它:读的是 NSView 本身,不是我们自己的记账)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Probe {
+    pub exists: bool,
+    pub visible: bool,
+    /// NSView 的实际位置与大小(逻辑像素:x, y, 宽, 高;y 从顶部算)
+    pub bounds: Option<(f64, f64, f64, f64)>,
+    pub handles: usize,
+}
+
+fn probe_view(generation: u64) -> Probe {
+    use wry::WebViewExtMacOS;
+    let handles = VIEW.with(|v| usize::from(v.borrow().is_some()));
+    VIEW.with(|v| match v.borrow().as_ref() {
+        Some((g, view)) if *g == generation => {
+            // wry 的 `bounds()` 读取时不处理翻转坐标系的父视图,读出来的 y 是错的:直接读 NSView 的 frame 自己换算。
+            let ns = view.webview();
+            let frame = ns.frame();
+            // SAFETY: 在窗口线程上读一个仍在句柄表里的、存活的 NSView 及其父视图的几何,只读。
+            let bounds = unsafe { ns.superview() }.map(|parent| {
+                let y = if parent.isFlipped() { frame.origin.y } else { parent.frame().size.height - frame.origin.y - frame.size.height };
+                (frame.origin.x, y, frame.size.width, frame.size.height)
+            });
+            Probe { exists: true, visible: !ns.isHidden(), bounds, handles }
+        }
+        _ => Probe { exists: false, visible: false, bounds: None, handles },
+    })
 }
 
 pub struct Native {
@@ -25,6 +56,7 @@ pub struct Native {
     epoch: Arc<AtomicU64>,
     live: bool,
     ready: bool,
+    last_probe: Option<Probe>,
     bounds: Option<LogicalRect>,
     pub error: Option<String>,
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
@@ -46,12 +78,27 @@ impl Native {
             epoch: Arc::new(AtomicU64::new(0)),
             live: false,
             ready: false,
+            last_probe: None,
             bounds: None,
             error: None,
             tx,
             rx: Some(rx),
         }
     }
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    pub fn last_probe(&self) -> Option<Probe> {
+        self.last_probe
+    }
+
+    /// 读真实 webview 的状态(生命周期自检用),结果经 [`Event::Probed`] 回来。
+    pub fn probe(&self, id: window::Id) -> Task<Event> {
+        let generation = self.epoch.load(Ordering::SeqCst);
+        window::run(id, move |_| Event::Probed(probe_view(generation)))
+    }
+
     pub fn take_receiver(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Event>> {
         self.rx.take()
     }
@@ -65,6 +112,7 @@ impl Native {
                 self.error = Some(error);
                 self.surface.observe_instance(false, false);
             }
+            Event::Probed(probe) => self.last_probe = Some(probe),
             _ => {}
         }
     }
