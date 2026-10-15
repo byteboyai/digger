@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 bytehost-core.workspace = true
+# 共享窗口骨架:顶栏 / 图标栏 / 面板区 / 分隔线 / 放大态 / 布局持久化。
+bytehost-chrome.workspace = true
 bytehost-desktop.workspace = true
 # 应用 webview 的纯安全策略:存储标识与数据存储清除排队(StoreRemovals)。
 bytehost-webview.workspace = true

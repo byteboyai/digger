@@ -37,9 +37,9 @@ pub fn state_dir() -> PathBuf {
         .unwrap_or_else(|| dirs().data_local_dir().to_path_buf())
 }
 
-/// 布局与偏好文件:全局 `layout.json`。
-pub fn layout_path() -> PathBuf {
-    config_dir().join("layout.json")
+/// 窗口骨架的布局与偏好文件:全局 `shell.json`(取代旧的 `layout.json`)。
+pub fn shell_path() -> PathBuf {
+    config_dir().join("shell.json")
 }
 
 /// 应用宿主平台数据根:`<config>/digger/bytehost/`(ADR-011)。
@@ -89,9 +89,9 @@ mod tests {
     }
 
     #[test]
-    fn layout_path_is_under_config() {
-        let p = layout_path();
-        assert_eq!(p.file_name().unwrap(), "layout.json");
+    fn shell_path_is_under_config() {
+        let p = shell_path();
+        assert_eq!(p.file_name().unwrap(), "shell.json");
         assert!(p.starts_with(config_dir()));
     }
 
