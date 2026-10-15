@@ -1151,15 +1151,14 @@ git log --oneline main..HEAD  # 应是 Task 2/3/4 的三个提交
 
 **Files:** `Cargo.toml`(Digger 仓库根)
 
-**前置条件(开工前先核对,不满足就停下来问用户):** 分支必须已经包含 S1(`bytehost-chrome` 窗口骨架)和 S2(用量配对),并且 `product.rs` 里有 `top_bar_slots` 与 `TopBarSlots`。计划写成时,这在 `feat/usage-pair`(tip `e6956dd`);如果另有一条分支在它之上已经执行了 `docs/superpowers/plans/2026-10-15-digger-i18n-adoption.md`(把 bytehost 换成 `v0.4.0`、byteui 换成 `v0.4.3`),从那条分支切,并以那条分支的 `Cargo.toml` 为准。**本计划的 Task 7-11 所有补丁都是对 `feat/usage-pair` 上的文件做的;若 i18n 适配改动了同一处,按补丁的意图手工合并。**
+**前置条件(开工前先核对,不满足就停下来问用户):** `main` 必须已经包含 S1(`bytehost-chrome` 窗口骨架)和 S2(用量配对),即 `git log` 里有合并提交 `1a3b66d`("Merge branch 'feat/usage-pair'"),并且 `product.rs` 里有 `top_bar_slots` 与 `TopBarSlots`。`feat/usage-pair` 与 `feat/window-shell` 已合并并删除,本计划的 Task 7-11 补丁对应的就是合并后 `main` 上的这些文件。如果在本计划开工前,`docs/superpowers/plans/2026-10-15-digger-i18n-adoption.md` 已被执行(bytehost 换成 `v0.4.0`、byteui 换成 `v0.4.3`、去掉对 `../bytehost-chrome`、`../byteui-shell` 的 `[patch]`),以那之后的 `Cargo.toml` 为准;补丁若因此上下文对不上,按补丁意图手工合并。
 
 - [ ] **Step 1: 记录状态,切分支**
 
 ```bash
 cd $ROOT/digger
 git status --short                     # 记录一次
-git branch --list 'feat/*'             # 确认基底分支
-git switch -c feat/project-host feat/usage-pair      # 或 i18n 适配之后的那条
+git switch -c feat/project-host main
 git log --oneline -3
 ```
 
@@ -1169,7 +1168,7 @@ git log --oneline -3
 cargo test -p digger-desktop -p digger-store 2>&1 | grep "test result"
 ```
 
-Expected(计划写成时在 `feat/usage-pair` 上的实测):`digger-desktop` 90 条、`digger-store` 16 条。已知偶发:`apps::tests::closing_during_startup_waits_and_releases_the_root` 在整套并行时有时失败、单独跑不会,遇到就单独重跑那一条。
+Expected(计划写成时在合并前的 `feat/usage-pair` 上的实测,内容与合并后的 `main` 相同):`digger-desktop` 90 条、`digger-store` 16 条。已知偶发:`apps::tests::closing_during_startup_waits_and_releases_the_root` 在整套并行时有时失败、单独跑不会,遇到就单独重跑那一条。
 
 - [ ] **Step 3: 加依赖和开发期 `[patch]`**
 
@@ -2361,7 +2360,7 @@ cargo build --workspace 2>&1 | grep -E "^(warning|error)" | grep -v "future vers
 cargo test --workspace 2>&1 | grep -E "test result|FAILED|failed"
 cargo tree -d --prefix none 2>/dev/null | grep -E "^(dozer-model|dozer-services|byteui|bytehost-core) " || echo "no duplicates"
 git status --short
-git log --oneline feat/usage-pair..HEAD
+git log --oneline main..HEAD
 ```
 
 Expected: 无 error、无新警告;全绿(已知偶发见 Task 6);`no duplicates`;工作树干净;提交列表是 Task 6/7/8/9/10/11 的六个提交。
