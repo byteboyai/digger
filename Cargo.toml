@@ -27,6 +27,8 @@ similar = "2"
 
 # 共享桌面宿主契约:窗口壳、面板、Surface、布局、焦点(bytehost-desktop)。
 bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+# 共享窗口骨架(S1)。开发期靠文件末尾的 [patch] 指向本地 worktree;打 tag 后改成新 tag 并删掉 [patch]。
+bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
 # 应用 webview 的纯安全策略(origin/nonce/存储标识/数据存储清除排队);桌面宿主唯一真相。
 bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
@@ -60,6 +62,7 @@ objc2-foundation = "0.3"
 # 两份会让 `PanelId` 类型不兼容,也会让 byteui 的全局主题状态分裂(用量面板的主题会错)。
 [patch."https://github.com/byteboyai/bytehost"]
 bytehost-core = { path = "../bytehost-chrome/crates/bytehost-core" }
+bytehost-chrome = { path = "../bytehost-chrome/crates/bytehost-chrome" }
 bytehost-desktop = { path = "../bytehost-chrome/crates/bytehost-desktop" }
 bytehost-webview = { path = "../bytehost-chrome/crates/bytehost-webview" }
 bytehost-apps = { path = "../bytehost-chrome/crates/bytehost-apps" }

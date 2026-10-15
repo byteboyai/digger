@@ -9,6 +9,7 @@ mod lifecycle_selftest;
 mod markdown;
 mod paths;
 mod product;
+mod shell;
 
 use bytehost_desktop::HostMessage;
 use iced::{Element, Task};
