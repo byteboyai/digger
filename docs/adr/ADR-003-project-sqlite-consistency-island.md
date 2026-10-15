@@ -1,6 +1,6 @@
 # ADR-003: Project SQLite Consistency Island and Transaction API
 
-- Status: Accepted
+- Status: Accepted; partially superseded by ADR-014 (Project identity, registry and storage). The transactional design for Creator Domain state is unchanged and is re-evaluated when the first Creator Domain state is introduced.
 - Date: 2026-10-01
 - Decision owners: Digger Architecture
 - Applies to: Project persistence, governed mutations, Phase 1 consistency island

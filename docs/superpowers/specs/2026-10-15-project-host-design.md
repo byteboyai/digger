@@ -1,7 +1,7 @@
 # Project 实体、注册表与共享记忆:提成共享库,Digger 接入
 
 - 日期:2026-10-15
-- 状态:设计已与用户逐段确认,待用户审阅本文件;尚无实施计划
+- 状态:已实现(待用户目测验收:文件夹选择器与页签行);实施计划 `docs/superpowers/plans/2026-10-15-project-host.md`
 - 路径:架构级(新增共享存储 crate,拆分共享服务 trait,Digger 首次引入 SQLite,新增 ADR)
 - 编号:S3b 之前的前置子项目(暂记 S3p)。S3b(todo 面板接入 Digger)排在本项目之后
 - 相关:`2026-10-14-window-shell-design.md`(S1)、`2026-10-15-usage-pair-design.md`(S2)、`docs/adr/ADR-003-project-sqlite-consistency-island.md`;Dozer 侧 `../dozer-panel-todo/docs/superpowers/specs/2026-10-15-panel-todo-lib-design.md`(S3a)
@@ -42,7 +42,7 @@
 
 - 内容:`ProjectStore`(登记、列表、改名、取消登记、`path_of`)与 `MemoryStore`(list、get、write、delete、history)。表结构与现在逐字一致,只换位置。
 - 依赖:`rusqlite`、`bytegit`、`dozer-model`、`dozer-services`、`anyhow`。**依赖闭包不含** `dozer-app`、`dozer-client`、`dozer-core`、`dozerd`。`dozerd` 现在从 `dozer_core::protocol` 取类型,新库直接用 `dozer-model`(`protocol` 本来就是重导出,同一份类型)。
-- 提供**进程内服务实现**:`LocalProjectService`、`LocalMemoryService`,分别包住两个 Store、实现对应 trait。Digger 直接使用;`dozerd` 仍走它现有的服务路径,只把 Store 的来源改成新库。
+- 提供**进程内服务实现**:`LocalProjectService`、`LocalMemoryService`,分别包住两个 Store、实现对应 trait。Digger 直接使用;`dozerd` 仍走它现有的服务路径,只把 Store 的来源改成新库。`open_project` 先规整路径(去掉末尾分隔符与 `.` 段),避免同一目录因写法不同登记成两个项目;`rename_project` 去首尾空白、拒绝空名字(与 `dozerd` 的 `RenameProject` 同规则)。
 - 被否决:塞进 `dozer-services`(它是纯 trait 接缝,塞入 SQLite 会让所有面板库背上 `rusqlite`);两个 Store 各开一个 crate(它们总一起用,拆开无收益)。
 
 ### 4.2 拆分 `ProjectService`
@@ -53,7 +53,7 @@
 
 ## 5. 设计:Digger 一侧
 
-1. **存储位置**:`paths.rs` 新增 `projects_db_path()`、`memory_db_path()`,位于 `<config>/ai.byteboy.digger/` 下,与 Dozer 目录不重叠。两个库用各自路径调用 `ProjectStore::new(path)`、`MemoryStore::new(path)`,与 `dozerd` 的用法一致,表结构逐字相同。`digger-store` 构造 `LocalProjectService`、`LocalMemoryService`,`digger-desktop` 持有。Digger 新增依赖 `dozer-store-project`(带来 `rusqlite`、`bytegit`),这是 Digger 第一次引入 SQLite。
+1. **存储位置**:`paths.rs` 新增文件名常量 `PROJECTS_DB_FILE`(`projects.db`)与 `PROJECT_TABS_FILE`(`project_tabs.json`),位于 `<config>/ai.byteboy.digger/` 下,与 Dozer 目录不重叠。两个存储用**同一个** SQLite 文件(各持一个连接,表互不相交),与 `dozerd` 把所有 store 放进 `dozer.db` 同型,表结构逐字相同。`digger-store` 构造 `LocalProjectService`、`LocalMemoryService`,`digger-desktop` 持有。Digger 新增依赖 `dozer-store-project`(带来 `rusqlite`、`bytegit`),这是 Digger 第一次引入 SQLite。
 2. **打开项目与页签**:顶栏"＋"(S1 里置灰)改为可用,弹原生文件夹选择器,选中目录后 `open_project(path)`,页签行出现该项目。"已打开页签列表 + 当前页签"是 `digger-desktop` 里的一小块状态,与 `ProjectInfo` 一起驱动页签渲染。关闭页签只关页签、不取消登记;`remove_project` 本子项目只提供服务方法与测试,入口在面板(S5)。启动时恢复上次打开的页签与选中项,存在 Digger 自己的小文件里(同 `layout.json`,字段全部 `#[serde(default)]`)。目录已不存在的项目页签标灰,不自动删除。
 3. **与已有面板的关系**:信息、应用、用量、编辑器四个面板暂不按项目取数据。当前选中的 `project_id` 以只读值暴露给面板层,S3b 的 todo 面板第一个使用它。
 4. **共享记忆**:只提供服务与存储,Digger 暂无界面使用;用测试覆盖 write、get、list、delete 与历史。
