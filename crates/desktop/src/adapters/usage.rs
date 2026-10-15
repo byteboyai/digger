@@ -23,6 +23,7 @@ use dozer_panel_usage::{Message as UsageMessage, WorkspaceState, activation, on_
 use dozer_services::UsageService;
 use iced::{Element, Length};
 use iced_widget::core::{Border, Color};
+use bytehost_chrome::ShellMsg;
 
 use crate::product::Msg;
 
@@ -123,19 +124,38 @@ impl UsagePanel {
         self.native.sync(window, visible, rect, &self.state)
     }
 
-    /// 原生标题与加载态；图表由同源 UsageSurface 和嵌入资源驱动。
-    pub fn view(&self) -> Element<'_, Msg> {
+    /// 库的 agent 筛选栏只在有数据时才拼:加载中 / 还没数据时调用方只显示内容栏(同 Dozer)。
+    pub fn has_agent_filter(&self) -> bool {
+        self.state.has_agent_filter()
+    }
+
+    /// 内容栏:标题 + 加载态;图表由同源 UsageSurface 和嵌入资源驱动的原生 webview 盖在它下面。
+    /// `collapsed` 只决定标题行末尾那颗按钮显示"展开"还是"收起"(列表是否收起由骨架的 `PaneStore` 记账)。
+    pub fn content_view(&self, collapsed: bool) -> Element<'_, Msg> {
         if let Some(error) = &self.native.error {
             return iced::widget::text(format!("用量视图创建失败：{error}；切换页签可重试")).into();
         }
-        dozer_panel_usage::view::content_pane(
-            self,
-            false,
-            &self.state,
-            Length::Fill,
-            Border::default(),
-        )
+        // 区域外框已由骨架画,这里不再加边框。
+        dozer_panel_usage::view::content_pane(self, collapsed, &self.state, Length::Fill, Border::default())
     }
+
+    /// agent 筛选列表。
+    pub fn list_view(&self) -> Element<'_, Msg> {
+        dozer_panel_usage::view::list_pane(self, &self.state, Length::Fill, Border::default())
+    }
+}
+
+/// 一条带一行样例数据的 `Loaded`:让面板进入"有数据"态(真实窗口自检与单元测试用)。
+/// 代数取 `u64::MAX`,保证不被库当成"被更新的刷新取代"而丢弃。
+pub fn sample_loaded_message() -> UsageMessage {
+    let meta = dozer_model::ConversationMeta {
+        path: PathBuf::from("/selftest/session.jsonl"),
+        title: "selftest".to_owned(),
+        modified_ms: 1,
+        agent: AgentKind::Claude,
+    };
+    let usage = dozer_panel_usage::aggregate::ConversationUsage { turns: 1, tokens_in: 100, tokens_out: 50, ..Default::default() };
+    UsageMessage::Loaded(1, u64::MAX, vec![(meta, usage)], 0, std::collections::BTreeMap::new())
 }
 
 /// 把用量面板的后台结果接收端接成一条持续到进程结束的 iced 流(与 [`crate::apps`] 同型)。
@@ -197,28 +217,67 @@ impl PanelDisplay<Msg> for UsagePanel {
 
     fn list_collapse_button<'a>(
         &self,
-        _collapsed: bool,
-        _tooltip_collapse: &'a str,
-        _tooltip_expand: &'a str,
+        collapsed: bool,
+        tooltip_collapse: &'a str,
+        tooltip_expand: &'a str,
         on_select: Msg,
         _on_hover: impl Fn(bool) -> Msg + 'a,
     ) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-        // 一期无分栏折叠 UI:给一个触发 `ToggleListCollapse` 的普通按钮,功能可见即可。
-        iced::widget::button(byteui::interaction::icons::view(
-            byteui::interaction::icons::IconKind::BarChart3,
-            byteui::theme::icon_size::row(),
-            byteui::theme::color::current().dim,
-        ))
-        .on_press(on_select)
+        use byteui::interaction::icons::{self, IconKind};
+        use iced::widget::{button, container, text, tooltip};
+        // 列表在右侧(默认位置):收起 = 把右边的列表收进去。
+        let (icon, tip) = if collapsed { (IconKind::PanelRightOpen, tooltip_expand) } else { (IconKind::PanelRightClose, tooltip_collapse) };
+        tooltip(
+            button(icons::view(icon, byteui::theme::icon_size::row(), byteui::theme::color::current().dim)).on_press(on_select),
+            container(text(tip).size(byteui::theme::font::body())).padding(6).style(container::rounded_box),
+            tooltip::Position::Bottom,
+        )
         .into()
     }
 
     fn collapse_hover(&self, _hovered: bool) -> Msg {
-        // 库内 `CollapseHover` 在产品 update 里是 no-op(match 穷尽用);Digger 无悬停键。
-        Msg::Usage(UsageMessage::CollapseHover(false))
+        // 悬停只是库为按钮高亮预留的接缝;Digger 的按钮自带悬停样式,这里什么都不做。
+        Msg::Shell(ShellMsg::Noop)
     }
 
     fn toggle_list_collapse(&self) -> Msg {
-        Msg::Usage(UsageMessage::ToggleListCollapse)
+        // 收起状态只存在骨架的 `PaneStore` 里(落盘、可拖拽收起),不在用量自己的状态里重复一份。
+        Msg::Shell(ShellMsg::TogglePane(crate::shell::usage_id()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytehost_chrome::ShellMsg;
+
+    fn panel() -> UsagePanel {
+        let svc: Arc<dyn UsageService> = Arc::new(digger_store::UnavailableUsageService::new("test".to_string()));
+        UsagePanel::new(svc, PathBuf::from("/tmp/digger-usage-test"))
+    }
+
+    #[test]
+    fn the_list_collapse_button_talks_to_the_shell_not_to_the_library() {
+        let p = panel();
+        assert!(matches!(p.toggle_list_collapse(), Msg::Shell(ShellMsg::TogglePane(id)) if id == crate::shell::usage_id()));
+        assert!(matches!(p.collapse_hover(true), Msg::Shell(ShellMsg::Noop)));
+        assert!(matches!(p.collapse_hover(false), Msg::Shell(ShellMsg::Noop)));
+    }
+
+    #[test]
+    fn the_agent_filter_exists_only_once_there_is_data() {
+        let mut p = panel();
+        assert!(!p.has_agent_filter(), "nothing loaded yet");
+        p.update(sample_loaded_message());
+        assert!(p.has_agent_filter());
+    }
+
+    #[test]
+    fn both_panes_build_in_both_collapse_states() {
+        let mut p = panel();
+        p.update(sample_loaded_message());
+        let _ = p.content_view(false);
+        let _ = p.content_view(true);
+        let _ = p.list_view();
     }
 }

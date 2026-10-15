@@ -287,7 +287,7 @@ impl ProductShell {
     }
 
     fn usage_view(&self) -> Element<'_, Msg> {
-        container(self.usage.view()).padding(0).width(Length::Fill).height(Length::Fill).into()
+        container(self.usage.content_view(false)).padding(0).width(Length::Fill).height(Length::Fill).into()
     }
 
     fn markdown_view(&self) -> Element<'_, Msg> {
@@ -433,7 +433,12 @@ impl Product<Msg> for ProductShell {
             Msg::ZoomToggle => self.window.map(window::toggle_maximize).unwrap_or_else(Task::none),
             Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
             Msg::Usage(m) => {
-                self.usage.update(m);
+                // 库的 `update` 对这两条是 `unreachable!`(它们必须由宿主拦截):折叠转给骨架,悬停无事可做。
+                match m {
+                    dozer_panel_usage::Message::ToggleListCollapse => return self.on_shell(ShellMsg::TogglePane(shell::usage_id())),
+                    dozer_panel_usage::Message::CollapseHover(_) => return Task::none(),
+                    m => self.usage.update(m),
+                }
                 // Digger 一期无 Toast:把库的 outbox 提示落地到 stderr,不静默吞掉。
                 for (level, text) in self.usage.take_notices() {
                     eprintln!("digger: usage 面板/{level}: {text}"); // cli-output
@@ -704,6 +709,17 @@ mod tests {
         press(&mut shell, &shell::apps_id()); // expands the zone: no panel switch happens
         assert!(shell.panel_visible(&shell::apps_id()));
         assert!(shell.apps.opened(), "becoming visible by expanding still starts the service");
+    }
+
+    /// 评审关注点 4:库的 `update` 对 `ToggleListCollapse` / `CollapseHover` 是 `unreachable!`(它们必须由宿主拦截)。
+    /// 任何一条漏进去都会让进程崩溃,所以产品在 `Msg::Usage` 入口先拦截。
+    #[test]
+    fn library_messages_that_the_kernel_must_intercept_never_reach_the_library() {
+        let mut shell = fresh("intercept");
+        let _ = Product::update(&mut shell, HostMessage::Product(Msg::Usage(dozer_panel_usage::Message::CollapseHover(true))));
+        assert!(shell.shell.panes().get(&shell::usage_id()).is_none(), "hover changes nothing");
+        let _ = Product::update(&mut shell, HostMessage::Product(Msg::Usage(dozer_panel_usage::Message::ToggleListCollapse)));
+        assert_eq!(shell.shell.panes().get(&shell::usage_id()).map(|d| d.collapsed), Some(true), "the library's toggle is routed to the shell");
     }
 
     /// 点到「应用」面板会触发探测任务(`tokio::spawn`),所以需要运行时。
