@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #   scripts/run-editor-selftest.sh              harness:T1–T23 + T17b(验证项 4)
-#   scripts/run-editor-selftest.sh lifecycle    面板生命周期:切页签 / 改大小 / 关闭,读真实 NSView(验证项 5)
+#   scripts/run-editor-selftest.sh lifecycle    窗口骨架 + 面板生命周期:点图标 / 收起 / 拖分隔线 / 缩放 / 放大 /
+#                                               跨栏移动 / 关闭,读真实 NSView(ADR-013 验证项 5;S1 骨架版)
 #
 # 在产品二进制上跑编辑器自检(ADR-013 验证项 4):用 harness 页面启动真实的 digger,
 # 走生产的 webview 构建器与生产的桥,自动跑 T1–T23,任何一项失败(或没跑完)都以非零退出。
-# 需要图形会话(开一个真实窗口)。
+# 需要图形会话(开一个真实窗口)。harness 模式还要求屏幕亮着且未锁:屏幕息屏 / 锁屏时页面的动画帧会被暂停,
+# harness 会卡在 T6;lifecycle 模式只读 NSView 状态,不依赖动画帧。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -35,6 +37,7 @@ cat "$out"
 # 进程正常退出但没打出 SUMMARY = 自检没跑完(例如提前被关掉),同样算失败
 if ! grep -q '^SUMMARY' "$out"; then
   echo "editor selftest: 失败(没有 SUMMARY 行:自检没有跑完)" >&2
+  echo "  harness 卡在 T6 多半是屏幕息屏或锁屏(页面的动画帧被暂停):唤醒并解锁屏幕后重试" >&2
   exit 1
 fi
 if [ "$code" -ne 0 ]; then
