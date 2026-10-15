@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use bytehost_chrome::persist::SCHEMA_VERSION;
-use bytehost_chrome::{BodyArea, El, Loaded, PanelMeta, PanelRules, Rect, ShellHost, ShellModel, ShellMsg, TopBarSlots, metrics_from_theme};
+use bytehost_chrome::{BodyArea, Divider, El, Loaded, PairRects, PanelMeta, PanelRules, Rect, ShellHost, ShellModel, ShellMsg, TopBarSlots, metrics_from_theme, pair_view};
 use bytehost_core::registry::PanelCatalog;
 use bytehost_core::{LogicalRect, PanelId, PanelMeta as CatalogEntry};
 use bytehost_desktop::{HostMessage, Product, route_lifecycle};
@@ -88,6 +88,26 @@ fn below_header(r: Rect, top: f32) -> Rect {
     Rect::new(r.x, r.y + top, r.w, (r.h - top).max(1.0))
 }
 
+/// 用量面板此刻怎么摆(Dozer `PanelKind::Usage` 分支的三态)。**`body()` 与 `sync_native()` 共用这一个判断**,
+/// 谁也不自己再算一遍,免得 body 已经是单栏、图表还停在分栏的位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UsageLayout {
+    /// 加载中 / 还没数据:没有列表可拼,内容栏独占全宽。
+    ContentOnly,
+    /// 有数据、列表被收起:内容栏独占全宽,标题行里留"展开"按钮。
+    Collapsed,
+    /// 有数据且列表展开:内容 | 列表。
+    Paired,
+}
+
+/// 用量的原生图表只放在内容栏里:拼分栏时是配对的第二块(镜像与否由骨架几何给出),其余两种状态是整个面板内容区。
+fn usage_native_rect(layout: UsageLayout, content: Rect, pair: Option<PairRects>) -> Rect {
+    match (layout, pair) {
+        (UsageLayout::Paired, Some(p)) => p.second,
+        _ => content,
+    }
+}
+
 impl ProductShell {
     /// 构造:注册产品面板目录、读布局(缺省用默认布局),不打开任何 Project。
     pub fn new() -> Self {
@@ -128,7 +148,7 @@ impl ProductShell {
             shell::update(&mut model, ShellMsg::ShowPanel(shell::markdown_id()));
         }
 
-        Self {
+        let mut shell = Self {
             window: None,
             catalog,
             shell: model,
@@ -145,7 +165,11 @@ impl ProductShell {
             shutdown_error: None,
             #[cfg(test)]
             surface_callbacks: Vec::new(),
-        }
+        };
+        // 构造时就记下此刻谁可见:否则第一条消息会把本来就看得见的面板当成"刚变可见",重复触发切入动作
+        // (启动时本来就可见的面板由 `boot` 显式触发一次,不靠这里)。
+        shell.visible_before = [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
+        shell
     }
 
     /// 落盘当前骨架状态(退出 / 布局变化时调用)。失败不 panic,记入 boot_note。
@@ -164,6 +188,23 @@ impl ProductShell {
     pub(crate) fn panel_visible(&self, panel: &PanelId) -> bool {
         let Some(side) = self.shell.side_of(panel) else { return false };
         self.shell.selected(side) == panel && !self.shell.collapsed(side) && self.shell.maximized().is_none_or(|m| m == side)
+    }
+
+    /// 用量面板此刻的三态(唯一判断,见 [`UsageLayout`])。
+    pub(crate) fn usage_layout(&self) -> UsageLayout {
+        if !self.usage.has_agent_filter() {
+            return UsageLayout::ContentOnly;
+        }
+        if self.pane_collapsed(&shell::usage_id()) {
+            UsageLayout::Collapsed
+        } else {
+            UsageLayout::Paired
+        }
+    }
+
+    /// 配对面板的第一块此刻是否被收起(骨架的 `PaneStore` 记账)。
+    fn pane_collapsed(&self, panel: &PanelId) -> bool {
+        self.shell.panes().get(panel).is_some_and(|d| d.collapsed)
     }
 
     /// 面板刚被切入(或启动时本来就可见):触发各自的"切入时动作"。
@@ -237,7 +278,10 @@ impl ProductShell {
             rects.content(side)
         };
         let apps_rect = content_of(&shell::apps_id());
-        let usage_rect = content_of(&shell::usage_id());
+        let usage_rect = content_of(&shell::usage_id()).map(|content| {
+            let pair = self.shell.side_of(&shell::usage_id()).and_then(|side| shell::pair_rects(&self.shell, side));
+            usage_native_rect(self.usage_layout(), content, pair)
+        });
         let markdown_rect = content_of(&shell::markdown_id());
         let hidden = LogicalRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
         let closing = self.closing;
@@ -286,8 +330,15 @@ impl ProductShell {
         container(self.apps.view().map(Msg::Apps)).padding(0).width(Length::Fill).height(Length::Fill).into()
     }
 
-    fn usage_view(&self) -> Element<'_, Msg> {
-        container(self.usage.content_view(false)).padding(0).width(Length::Fill).height(Length::Fill).into()
+    fn usage_view(&self, area: &BodyArea) -> Element<'_, Msg> {
+        let tokens = color::current();
+        let body: Element<'_, Msg> = match self.usage_layout() {
+            UsageLayout::ContentOnly => self.usage.content_view(self.pane_collapsed(&shell::usage_id())),
+            UsageLayout::Collapsed => self.usage.content_view(true),
+            // 列表是配对的第一块;"内容在前还是列表在前"由骨架按镜像算好,`pair_view` 直接读。
+            UsageLayout::Paired => pair_view(area, self.usage.list_view(), self.usage.content_view(false), Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))), tokens.bg, tokens.panel),
+        };
+        container(body).padding(0).width(Length::Fill).height(Length::Fill).into()
     }
 
     fn markdown_view(&self) -> Element<'_, Msg> {
@@ -351,11 +402,11 @@ impl ShellHost<Msg> for ProductShell {
         shell::rules(panel)
     }
 
-    fn body<'a>(&'a self, panel: &PanelId, _area: &BodyArea) -> El<'a, Msg> {
+    fn body<'a>(&'a self, panel: &PanelId, area: &BodyArea) -> El<'a, Msg> {
         match panel.as_str() {
             "digger.info" => self.info_view(),
             "digger.apps" => self.apps_view(),
-            "digger.usage" => self.usage_view(),
+            "digger.usage" => self.usage_view(area),
             "digger.markdown" => self.markdown_view(),
             _ => column![].into(),
         }
@@ -720,6 +771,78 @@ mod tests {
         assert!(shell.shell.panes().get(&shell::usage_id()).is_none(), "hover changes nothing");
         let _ = Product::update(&mut shell, HostMessage::Product(Msg::Usage(dozer_panel_usage::Message::ToggleListCollapse)));
         assert_eq!(shell.shell.panes().get(&shell::usage_id()).map(|d| d.collapsed), Some(true), "the library's toggle is routed to the shell");
+    }
+
+    fn send(shell: &mut ProductShell, m: Msg) {
+        let _ = Product::update(shell, HostMessage::Product(m));
+    }
+
+    fn load_sample_rows(shell: &mut ProductShell) {
+        send(shell, Msg::Usage(crate::adapters::usage::sample_loaded_message()));
+    }
+
+    #[test]
+    fn usage_layout_has_three_states() {
+        let mut shell = fresh("layout3");
+        assert_eq!(shell.usage_layout(), UsageLayout::ContentOnly, "no data yet: nothing to pair");
+        load_sample_rows(&mut shell);
+        assert_eq!(shell.usage_layout(), UsageLayout::Paired);
+        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        assert_eq!(shell.usage_layout(), UsageLayout::Collapsed);
+        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        assert_eq!(shell.usage_layout(), UsageLayout::Paired);
+    }
+
+    /// 评审关注点 3:文件里写着 collapsed 但此刻没有数据 —— 不能显示成一个空列表占位。
+    #[test]
+    fn collapsed_without_data_is_content_only() {
+        let dir = test_temp_dir("collapsed-nodata");
+        let path = dir.join("shell.json");
+        std::fs::write(&path, r#"{ "panes": { "digger.usage": { "split": 0.35, "collapsed": true } } }"#).unwrap();
+        let mut shell = ProductShell::with_shell_path(path);
+        assert_eq!(shell.shell.panes().get(&shell::usage_id()).map(|d| d.collapsed), Some(true));
+        assert_eq!(shell.usage_layout(), UsageLayout::ContentOnly);
+        load_sample_rows(&mut shell);
+        assert_eq!(shell.usage_layout(), UsageLayout::Collapsed, "the stored state shows up as soon as there is data");
+    }
+
+    /// 评审关注点 1、2、5:原生图表只占内容栏,且和 body 读同一个 `usage_layout()`。
+    #[test]
+    fn native_rect_follows_the_layout() {
+        use bytehost_chrome::PairRects;
+        let content = Rect::new(693.0, 47.0, 448.0, 700.0);
+        // 右区默认:内容在左、列表在右
+        let paired = PairRects { first: Rect::new(939.0, 47.0, 154.0, 700.0), second: Rect::new(693.0, 47.0, 286.0, 700.0), divider: Rect::new(979.0, 47.0, 8.0, 700.0) };
+        assert_eq!(usage_native_rect(UsageLayout::Paired, content, Some(paired)), paired.second, "only the content pane carries the chart");
+        // 无数据 / 收起:整个内容区,即便此刻还拿得到一份旧的配对矩形
+        assert_eq!(usage_native_rect(UsageLayout::ContentOnly, content, Some(paired)), content);
+        assert_eq!(usage_native_rect(UsageLayout::Collapsed, content, Some(paired)), content);
+        // 镜像(拖到左栏):列表在左、内容在右 —— 取的仍是 `second`,位置由骨架几何给出
+        let mirrored = PairRects { first: Rect::new(693.0, 47.0, 154.0, 700.0), second: Rect::new(855.0, 47.0, 286.0, 700.0), divider: Rect::new(847.0, 47.0, 8.0, 700.0) };
+        assert_eq!(usage_native_rect(UsageLayout::Paired, content, Some(mirrored)), mirrored.second);
+        // 没有配对矩形(该侧不是用量)时回落到内容区,不 panic
+        assert_eq!(usage_native_rect(UsageLayout::Paired, content, None), content);
+    }
+
+    #[tokio::test]
+    async fn the_usage_view_builds_in_every_layout_and_side() {
+        let mut shell = fresh("usage-views");
+        let _ = Product::view(&shell); // ContentOnly
+        load_sample_rows(&mut shell);
+        let _ = Product::view(&shell); // Paired
+        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        let _ = Product::view(&shell); // Collapsed
+        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        // 拖到左栏(镜像)与放大态
+        send(&mut shell, Msg::Shell(ShellMsg::PanelPress { panel: shell::apps_id() }));
+        send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
+        send(&mut shell, Msg::Shell(ShellMsg::PanelPress { panel: shell::usage_id() }));
+        send(&mut shell, Msg::Shell(ShellMsg::RailDragMove { side: Side::Left, index: 0 }));
+        send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
+        assert_eq!(shell.shell.side_of(&shell::usage_id()), Some(Side::Left));
+        let _ = Product::view(&shell);
+        send(&mut shell, Msg::Shell(ShellMsg::Maximize(Side::Left)));
+        let _ = Product::view(&shell);
     }
 
     /// 点到「应用」面板会触发探测任务(`tokio::spawn`),所以需要运行时。
