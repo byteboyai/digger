@@ -337,3 +337,10 @@ Validation status:
 All eight items are closed, so the status is **Accepted**.
 
 Found while writing item 5: wry 0.55.1's `WebView::bounds()` getter does not handle a flipped parent view (its setter does), so it reports a wrong y. The lifecycle probe reads the NSView frame itself.
+
+**Update (2026-10-14, S1 window shell).** The product shell is now driven by the shared window shell
+(`bytehost-chrome`; spec `docs/superpowers/specs/2026-10-14-window-shell-design.md`). The tab strip and the
+per-panel `sync_native` rectangles described in the deviations above are replaced: the editor's native rectangle
+and visibility come from the shell's panel content rectangle, minus the editor's own 56 px bar. `digger.markdown`
+sits in the left rail by default. The lifecycle selftest (validation 5) became the shell version
+(`scripts/run-editor-selftest.sh lifecycle`, eleven steps against hand-computed rectangles).

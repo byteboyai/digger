@@ -1,7 +1,7 @@
 # S1 窗口骨架:参照 Dozer 的窗口结构,抽成 bytehost 共享 crate
 
 - 日期:2026-10-14
-- 状态:已通过评审;2026-10-14 读完 Dozer 实现后修订(见 §8)
+- 状态:已实现(待真机验收,见计划 Task 15);2026-10-14 读完 Dozer 实现后修订(见 §8)
 - 路径:架构级(新增共享 crate,重组 Digger 外壳里面板的组织方式)
 - 相关:ADR-001(外壳与编辑器宿主边界)、ADR-011(bytehost 应用宿主)、ADR-013(Markdown 面板)、
   Dozer 的 `docs/dozer-v2/dozer-v2-面板独立性与服务化要求.md` 与 `docs/dozer-v2/digger-bytehost-integration/ownership.md`
