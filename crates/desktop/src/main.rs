@@ -34,7 +34,9 @@ fn main() -> iced::Result {
         .title("Digger")
         .window(iced::window::Settings {
             exit_on_close_request: false,
-            min_size: Some(iced::Size::new(640.0, 480.0)),
+            min_size: Some(iced::Size::new(byteui::theme::geometry::min_window_width(), byteui::theme::geometry::min_window_height())),
+            // 与 Dozer 一致:透明标题栏 + 全尺寸内容视图,顶栏取代系统标题栏(红绿灯由 `bytehost-chrome` 摆进顶栏里)。
+            platform_specific: iced::window::settings::PlatformSpecific { title_hidden: true, titlebar_transparent: true, fullsize_content_view: true },
             ..Default::default()
         })
         .subscription(product::subscription)
