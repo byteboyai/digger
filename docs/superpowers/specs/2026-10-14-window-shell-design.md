@@ -8,7 +8,7 @@
 
 ## 1. 用户意图(原话归纳)
 
-Digger 的窗口结构要和 Dozer **一模一样**。Dozer 里已有的 todo、agent、群聊、会话、用量面板要**重用**,并且 Dozer 里修改这些面板时要**同步**到 Digger。Digger 自己要有 project 和 files 面板,起步可以和 Dozer 一致,之后按自己的项目情况演化。
+Digger 的窗口结构要和 Dozer **一模一样**。Dozer 里已有的 todo、agent、群聊、会话、用量面板要**重用**,并且 Dozer 里修改这些面板时要**同步**到 Digger。project 和 files 面板同样与 Dozer 共享(2026-10-15 更正:原先是 Digger 自有)。
 
 ### 假设(请纠正)
 
@@ -25,7 +25,7 @@ Digger 的窗口结构要和 Dozer **一模一样**。Dozer 里已有的 todo、
 | S2 | 共享面板:用量 | 已是共享库 `dozer-panel-usage`;接进 S1 的“列表 \| 内容”配对 |
 | S3 | 共享面板:todo | Dozer 先抽成库(约 4.3k 行),两边引用 |
 | S4 | 共享面板:对话、群聊、agent | 同上;agent 与外壳纠缠最深 |
-| S5 | Digger 自有:project + files | 从 Dozer 复制起步,之后自行演化;Digger 目前没有 Project(ADR-003) |
+| S5 | 共享:project + files(2026-10-15 更正,原为 Digger 自有) | 与 Dozer 共用同一份面板代码;Digger 目前没有 Project(ADR-003),接入时需先解决这点 |
 
 S1 是其余所有子项目的前提:S2–S4 的面板要挂在它的配对视图里,S5 要把它的持久化拆成按项目一份。
 
