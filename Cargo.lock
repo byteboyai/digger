@@ -1077,7 +1077,6 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dozer-model"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?rev=67ab0e657d75135b882ace2f3aa7a56617776c60#67ab0e657d75135b882ace2f3aa7a56617776c60"
 dependencies = [
  "serde",
 ]
@@ -1102,7 +1101,6 @@ dependencies = [
 [[package]]
 name = "dozer-services"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?rev=67ab0e657d75135b882ace2f3aa7a56617776c60#67ab0e657d75135b882ace2f3aa7a56617776c60"
 dependencies = [
  "dozer-model",
 ]
@@ -6222,3 +6220,7 @@ dependencies = [
  "syn 3.0.8",
  "winnow 1.0.4",
 ]
+
+[[patch.unused]]
+name = "dozer-store-project"
+version = "0.1.0"

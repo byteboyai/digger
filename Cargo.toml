@@ -49,6 +49,8 @@ byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
 dozer-model = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
 dozer-services = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
 dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
+# Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。
+dozer-store-project = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
 
 iced = { version = "0.14", default-features = false, features = ["tokio", "wgpu"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。
@@ -71,3 +73,11 @@ bytehost-panel = { path = "../bytehost-chrome/crates/bytehost-panel" }
 
 [patch."https://github.com/byteboyai/byteui"]
 byteui = { path = "../byteui-shell" }
+
+# ---- 开发期临时配置(S3p 的 Task 13 移除)----
+# 新 crate 还没推送:把 dozer 的三个 crate 指向本地 worktree。三个必须一起指,
+# 否则依赖图里会有两份 dozer-model,`ProjectInfo` 类型互不兼容。
+[patch."https://github.com/byteboyai/dozer"]
+dozer-model = { path = "../dozer-store-project/crates/dozer-model" }
+dozer-services = { path = "../dozer-store-project/crates/dozer-services" }
+dozer-store-project = { path = "../dozer-store-project/crates/dozer-store-project" }
