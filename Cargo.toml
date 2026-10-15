@@ -54,3 +54,17 @@ iced_core = { version = "0.14", default-features = false }
 wry = "0.55.1"
 # 取 macOS 主版本号判数据存储清除是否受支持(纯策略 crate 不碰 objc2,宿主层来问)。
 objc2-foundation = "0.3"
+
+# ---- 开发期临时配置(S1 最后一个任务移除)----
+# 把 bytehost 与 byteui 的 git 来源指向本地 worktree,使依赖图里只有一份 bytehost-core / byteui:
+# 两份会让 `PanelId` 类型不兼容,也会让 byteui 的全局主题状态分裂(用量面板的主题会错)。
+[patch."https://github.com/byteboyai/bytehost"]
+bytehost-core = { path = "../bytehost-chrome/crates/bytehost-core" }
+bytehost-desktop = { path = "../bytehost-chrome/crates/bytehost-desktop" }
+bytehost-webview = { path = "../bytehost-chrome/crates/bytehost-webview" }
+bytehost-apps = { path = "../bytehost-chrome/crates/bytehost-apps" }
+bytehost-client = { path = "../bytehost-chrome/crates/bytehost-client" }
+bytehost-panel = { path = "../bytehost-chrome/crates/bytehost-panel" }
+
+[patch."https://github.com/byteboyai/byteui"]
+byteui = { path = "../byteui-shell" }

@@ -396,7 +396,6 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytes",
  "flate2",
@@ -418,7 +417,6 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-apps",
  "tokio",
@@ -428,7 +426,6 @@ dependencies = [
 [[package]]
 name = "bytehost-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "serde",
  "serde_json",
@@ -437,7 +434,6 @@ dependencies = [
 [[package]]
 name = "bytehost-desktop"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-core",
  "bytehost-webview",
@@ -455,7 +451,6 @@ dependencies = [
 [[package]]
 name = "bytehost-panel"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -464,7 +459,6 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.2.0#7f25d71f4118ce5660efc4bdab92f5d65f70c6d9"
 dependencies = [
  "bytehost-apps",
  "url",
@@ -505,8 +499,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "byteui"
-version = "0.4.1"
-source = "git+https://github.com/byteboyai/byteui?tag=v0.4.1#8ef64af21fd2a84ef0ad341a254cfcea4bb011dc"
+version = "0.4.2"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -991,7 +984,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1162,7 +1155,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2821,7 +2814,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 3.5.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -3863,7 +3856,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4410,10 +4403,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5364,7 +5357,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
