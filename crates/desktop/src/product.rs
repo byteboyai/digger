@@ -16,7 +16,7 @@ use bytehost_desktop::{HostMessage, Product, route_lifecycle};
 use byteui::interaction::icons::{self, IconKind};
 use byteui::theme::{color, font, icon_size};
 
-use iced::widget::{column, container, row, text, tooltip};
+use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Size, Subscription, Task, window};
 
 use crate::{paths, shell};
@@ -39,6 +39,8 @@ pub enum Msg {
     NativeUsage(crate::adapters::usage_native::Event),
     /// 「编辑器」面板的消息(ADR-013)。
     Markdown(crate::markdown::Message),
+    /// 项目页签与注册表(顶栏页签行)。
+    Projects(crate::projects::Message),
     /// 面板生命周期自检的推进(仅 `DIGGER_LIFECYCLE_SELFTEST` 设置时出现)。
     Lifecycle(crate::lifecycle_selftest::Phase),
     Tick,
@@ -65,6 +67,8 @@ pub struct ProductShell {
     usage: crate::adapters::usage::UsagePanel,
     /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
     markdown: crate::markdown::MarkdownPanel,
+    /// 项目注册表与已开页签(Project 是 host 层共享业务,ADR-014)。
+    projects: crate::projects::ProjectsState,
     /// 生命周期自检的驱动(只在环境变量设置时有)。
     lifecycle: Option<crate::lifecycle_selftest::Driver>,
     /// [应用, 用量] 面板上一次是否可见:变为可见时触发各自的切入动作;应用面板变为不可见时关掉正在显示的应用。
@@ -142,6 +146,9 @@ impl ProductShell {
         }
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
         let markdown = crate::markdown::MarkdownPanel::new();
+        // 项目数据与布局同在一个数据目录里:生产是产品数据根,测试是各自的临时目录。
+        let data_dir = shell_path.parent().map(std::path::Path::to_path_buf).unwrap_or_else(paths::config_dir);
+        let projects = crate::projects::ProjectsState::open_in(&data_dir);
         let lifecycle = crate::lifecycle_selftest::Driver::from_env();
         // 自检模式需要编辑器一开始就看得见。
         if markdown.is_selftest() || lifecycle.is_some() {
@@ -157,6 +164,7 @@ impl ProductShell {
             apps,
             usage,
             markdown,
+            projects,
             lifecycle,
             visible_before: [false; 2],
             boot_note,
@@ -313,7 +321,11 @@ impl ProductShell {
                 text(format!("面板目录已注册 {} 个(产品组合根)", self.catalog.len())).color(tokens.body),
                 text(format!("数据根:{}", paths::config_dir().display())).color(dim),
                 text(format!("应用宿主根:{}", paths::bytehost_root().display())).color(dim),
-                text("当前 Project:无").color(tokens.body),
+                text(match self.projects.current_project() {
+                    Some(p) => format!("当前 Project:{}({})", p.name, p.path),
+                    None => "当前 Project:无".to_string(),
+                })
+                .color(tokens.body),
                 text(&self.boot_note).color(tokens.gold),
                 iced::widget::button("退出 Digger").on_press(Msg::Exit),
             ]
@@ -382,8 +394,8 @@ impl ProductShell {
     }
 }
 
-/// 顶栏三个槽位。S1 没有 Project:标题只是展示,页签行显示"无项目","＋"置灰并提示。
-fn top_bar_slots<'a>() -> TopBarSlots<'a, Msg> {
+/// 顶栏三个槽位:标题只是展示;页签行与"＋"由项目注册表状态(`projects`)画。
+fn top_bar_slots<'a>(projects: &'a crate::projects::ProjectsState) -> TopBarSlots<'a, Msg> {
     let tokens = color::current();
     let dim = tokens.dim;
     let title = row![
@@ -392,12 +404,7 @@ fn top_bar_slots<'a>() -> TopBarSlots<'a, Msg> {
     ]
     .spacing(6)
     .align_y(iced::Alignment::Center);
-    let plus = tooltip(
-        container(icons::view(IconKind::Plus, icon_size::rail(), dim)).padding(6),
-        container(text("Project 尚未接入").size(font::body())).padding(6).style(container::rounded_box),
-        tooltip::Position::Bottom,
-    );
-    let tabs = row![text("无项目").size(font::body()).color(dim), plus].spacing(10).align_y(iced::Alignment::Center);
+    let tabs = projects.tabs_view().map(Msg::Projects);
     TopBarSlots { title: title.into(), tabs: tabs.into(), right: iced::widget::Space::new().into() }
 }
 
@@ -425,7 +432,7 @@ impl ShellHost<Msg> for ProductShell {
     }
 
     fn top_bar<'a>(&'a self) -> TopBarSlots<'a, Msg> {
-        top_bar_slots()
+        top_bar_slots(&self.projects)
     }
 
     fn footbar<'a>(&'a self) -> El<'a, Msg> {
@@ -514,6 +521,7 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
+            Msg::Projects(m) => self.projects.update(m).map(Msg::Projects),
             Msg::Lifecycle(phase) => {
                 let Some(mut driver) = self.lifecycle.take() else {
                     return Task::none();
@@ -660,7 +668,8 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         }
     }
     shell.visible_before = [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
-    (shell, Task::batch([size_task, reply_task, usage_task, native_usage, markdown_task, lifecycle_task, Task::batch(initial)]))
+    let projects_task = shell.projects.refresh().map(Msg::Projects);
+    (shell, Task::batch([projects_task, size_task, reply_task, usage_task, native_usage, markdown_task, lifecycle_task, Task::batch(initial)]))
 }
 
 
@@ -690,6 +699,22 @@ mod tests {
     fn starts_without_project() {
         let shell = ProductShell::new();
         assert!(shell.boot_note.contains("尚未打开 Project"));
+    }
+
+    #[test]
+    fn a_project_opened_in_the_shell_is_current_and_comes_back_after_a_restart() {
+        use crate::projects::Message as P;
+        let dir = test_temp_dir("project-restore");
+        let proj = dir.join("book");
+        std::fs::create_dir(&proj).unwrap();
+        let info = dozer_model::ProjectInfo { id: 1, path: proj.to_string_lossy().into_owned(), name: "book".into(), last_active_ms: 1, created_ms: 1, updated_ms: 1 };
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        send(&mut shell, Msg::Projects(P::Opened(Ok(Some(info.clone())))));
+        assert_eq!(shell.projects.current_project_id(), Some(1));
+
+        let mut again = ProductShell::with_shell_path(dir.join("shell.json"));
+        send(&mut again, Msg::Projects(P::Listed(Ok(vec![info]))));
+        assert_eq!(again.projects.current_project_id(), Some(1));
     }
 
     #[test]
