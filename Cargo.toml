@@ -26,31 +26,31 @@ pulldown-cmark = { version = "0.13", default-features = false }
 similar = "2"
 
 # 共享桌面宿主契约:窗口壳、面板、Surface、布局、焦点(bytehost-desktop)。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
-# 共享窗口骨架(S1)。开发期靠文件末尾的 [patch] 指向本地 worktree;打 tag 后改成新 tag 并删掉 [patch]。
-bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
+# 共享窗口骨架(S1)。
+bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
 # 应用 webview 的纯安全策略(origin/nonce/存储标识/数据存储清除排队);桌面宿主唯一真相。
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
 
 # 应用宿主平台:注册表/生命周期、与传输无关的客户端 API、与界面框架无关的面板状态机。
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.2.0" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.1" }
 
 # 组件库(Dozer 与 Digger 共用);iced 版本必须与 byteui 一致,一起升。
-byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.1" }
+byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.4" }
 
 # Dozer 与 Digger 共用的 Usage 面板库 + 领域类型/服务接缝(Task 19/20)。
 # 领域 `dozer-model`(纯 serde)与 `dozer-services`(trait 接缝)供业务层 `digger-store`
 # 实现 `UsageService`;`dozer-panel-usage` 含公共 UI 与 bytehost Surface,只许宿主适配层
-# (`digger-desktop`)依赖。Task 22:dozer main 已推远端(含 `dozer-panel-usage`),
-# 固定到该 revision(dozer 无对应发布 tag,用 rev 钉死)。
-dozer-model = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
-dozer-services = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
-dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
+# (`digger-desktop`)依赖。dozer 现有的 `v0.5.x` tag 是 App 发布 tag;库 crate 快照用
+# `libs-2026-10-16` tag(ADR:升级 bytehost/byteui 时 dozer 与 digger 同日一起升)。
+dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-16b" }
+dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-16b" }
+dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-16b" }
 # Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。
-dozer-store-project = { git = "https://github.com/byteboyai/dozer", rev = "67ab0e657d75135b882ace2f3aa7a56617776c60" }
+dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-16b" }
 
 iced = { version = "0.14", default-features = false, features = ["tokio", "wgpu"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。
@@ -59,25 +59,3 @@ wry = "0.55.1"
 # 取 macOS 主版本号判数据存储清除是否受支持(纯策略 crate 不碰 objc2,宿主层来问)。
 objc2-foundation = "0.3"
 
-# ---- 开发期临时配置(S1 最后一个任务移除)----
-# 把 bytehost 与 byteui 的 git 来源指向本地 worktree,使依赖图里只有一份 bytehost-core / byteui:
-# 两份会让 `PanelId` 类型不兼容,也会让 byteui 的全局主题状态分裂(用量面板的主题会错)。
-[patch."https://github.com/byteboyai/bytehost"]
-bytehost-core = { path = "../bytehost-chrome/crates/bytehost-core" }
-bytehost-chrome = { path = "../bytehost-chrome/crates/bytehost-chrome" }
-bytehost-desktop = { path = "../bytehost-chrome/crates/bytehost-desktop" }
-bytehost-webview = { path = "../bytehost-chrome/crates/bytehost-webview" }
-bytehost-apps = { path = "../bytehost-chrome/crates/bytehost-apps" }
-bytehost-client = { path = "../bytehost-chrome/crates/bytehost-client" }
-bytehost-panel = { path = "../bytehost-chrome/crates/bytehost-panel" }
-
-[patch."https://github.com/byteboyai/byteui"]
-byteui = { path = "../byteui-shell" }
-
-# ---- 开发期临时配置(S3p 的 Task 13 移除)----
-# 新 crate 还没推送:把 dozer 的三个 crate 指向本地 worktree。三个必须一起指,
-# 否则依赖图里会有两份 dozer-model,`ProjectInfo` 类型互不兼容。
-[patch."https://github.com/byteboyai/dozer"]
-dozer-model = { path = "../dozer-store-project/crates/dozer-model" }
-dozer-services = { path = "../dozer-store-project/crates/dozer-services" }
-dozer-store-project = { path = "../dozer-store-project/crates/dozer-store-project" }
