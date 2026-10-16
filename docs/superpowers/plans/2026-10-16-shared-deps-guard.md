@@ -1626,9 +1626,9 @@ pre-push 对每个被推送的引用检查它的提交:推 `main` 或 tag 时阻
 ```bash
 TAG=v0.4.2; SRC=../bytehost
 for f in check_shared_deps.py check-shared-deps.sh dev-patch.example.toml; do
-  git -C $SRC show "$TAG:tools/shared-deps-guard/$f" > "scripts/$f"
+  git -C $SRC show "${TAG}:tools/shared-deps-guard/$f" > "scripts/$f"
 done
-mkdir -p .githooks && git -C $SRC show "$TAG:tools/shared-deps-guard/pre-push" > .githooks/pre-push
+mkdir -p .githooks && git -C $SRC show "${TAG}:tools/shared-deps-guard/pre-push" > .githooks/pre-push
 perl -pi -e "s/^SOURCE_TAG = \"unreleased\"/SOURCE_TAG = \"$TAG\"/" scripts/check_shared_deps.py
 chmod +x scripts/check-shared-deps.sh .githooks/pre-push
 ```
@@ -1715,9 +1715,9 @@ cd /Users/chrischiang/Projects/CoralProjects/byteboy/digger-shared-deps-guard
 TAG=v0.4.2   # 与 Task 7 一致
 SRC=../bytehost
 for f in check_shared_deps.py check-shared-deps.sh dev-patch.example.toml; do
-  git -C $SRC show "$TAG:tools/shared-deps-guard/$f" > "scripts/$f"
+  git -C $SRC show "${TAG}:tools/shared-deps-guard/$f" > "scripts/$f"
 done
-mkdir -p .githooks && git -C $SRC show "$TAG:tools/shared-deps-guard/pre-push" > .githooks/pre-push
+mkdir -p .githooks && git -C $SRC show "${TAG}:tools/shared-deps-guard/pre-push" > .githooks/pre-push
 perl -pi -e "s/^SOURCE_TAG = \"unreleased\"/SOURCE_TAG = \"$TAG\"/" scripts/check_shared_deps.py
 chmod +x scripts/check-shared-deps.sh .githooks/pre-push
 grep -n '^SOURCE_TAG' scripts/check_shared_deps.py
@@ -1804,9 +1804,9 @@ Expected: 分支 `feat/shared-deps-guard`,干净,`check-shared-pins.sh` 存在�
 TAG=v0.4.2   # 与 Task 7 一致
 SRC=../bytehost
 for f in check_shared_deps.py check-shared-deps.sh dev-patch.example.toml; do
-  git -C $SRC show "$TAG:tools/shared-deps-guard/$f" > "scripts/$f"
+  git -C $SRC show "${TAG}:tools/shared-deps-guard/$f" > "scripts/$f"
 done
-mkdir -p .githooks && git -C $SRC show "$TAG:tools/shared-deps-guard/pre-push" > .githooks/pre-push
+mkdir -p .githooks && git -C $SRC show "${TAG}:tools/shared-deps-guard/pre-push" > .githooks/pre-push
 perl -pi -e "s/^SOURCE_TAG = \"unreleased\"/SOURCE_TAG = \"$TAG\"/" scripts/check_shared_deps.py
 chmod +x scripts/check-shared-deps.sh .githooks/pre-push
 ```
