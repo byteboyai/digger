@@ -122,3 +122,12 @@ WARN   pin-expired    dozer 的 pin 已过 review_by(2026-11-15)
 - rev 固定的依赖没有可比较的版本号,只能检查其存在,无法报告落后。
 - 钩子需要每个克隆手动启用一次。
 - vendor 的副本只能提示正本有新版,不会自动更新。
+
+## 12. 实现阶段修订(2026-10-16)
+
+实现前拿真实仓库验证,发现需要澄清四点。它们细化第 3、4、5 节,不改变整体方案。
+
+1. **按工作区分组(细化第 3、4 节)。** 每个 `Cargo.toml` 归属向上最近一个声明了 `[workspace]` 的目录(cargo 的规则);向上没有工作区的包自成一组。`ref-mismatch`、`lock-not-git`、`lock-duplicate` 都只在同一工作区内部判断,因为只有同一份 `Cargo.lock` 里的版本冲突才会拉进两份同名 crate。Dozer 的 `spike/v2-excalidraw` 自带 `[workspace]` 且用 bytehost `v0.2.0`,不应和主工作区冲突。
+2. **新增规则 `lock-duplicate`(block,细化第 4 节)。** 同一个共享 crate 在 `Cargo.lock` 里有多个 git 来源。典型成因是传递依赖:Digger 用 bytehost `v0.4.1`,而它依赖的 `dozer-panel-*` 自己用 `v0.4.0`,于是解析出两份 `bytehost-core`,`PanelId` 之类类型互不兼容、byteui 的全局主题状态分裂。只看 `Cargo.toml` 发现不了。Dozer 的 `scripts/check-shared-pins.sh`(提交 `0ad8a334`)是它的早期、只覆盖 `crates/*/Cargo.toml` 的版本,新脚本落地后取代它。
+3. **pre-push 检查被推送的提交,不是工作区(细化第 5 节)。** 开发时 `.cargo/config.toml` 里的本地 `[patch]` 会让工作区的 `Cargo.lock` 带本地路径,这是正常的开发状态。脚本新增 `--rev <提交>`:用 `git archive` 取出该提交里的 `Cargo.toml` / `Cargo.lock` / `shared-deps.toml` 再检查。钩子对每个被推送的引用分别检查(删除引用跳过)。
+4. **补充规则与限制(细化第 4 节、第 11 节)。** 新增两条 `info` 级提示,不影响退出码:`ahead-of-remote`(本地 `main` 领先 `origin/main` N 个提交,用本地引用,不联网)与 `guard-source`(bytehost 有比 vendor 来源更新的语义化 tag,正本可能有更新)。非语义化 tag(如 `libs-2026-10-16`)只检查存在性,不比较落后。rev 固定的依赖先按"是否为某个远端引用的末端"判断,否则用 `git fetch --depth=1 --filter=tree:0 <完整 sha>` 兜底;短 rev 无法确认,只警告。
