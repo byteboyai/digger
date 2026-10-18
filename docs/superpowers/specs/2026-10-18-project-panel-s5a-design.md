@@ -1,7 +1,7 @@
 # S5a Project 面板:从 Dozer 抽成共享库,Digger 接入
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:已实现(S5a 完成,真机回归通过;S5b 待做)
 - 路径:架构级(Dozer 新增共享 crate;Digger 新增一个面板、一个左栏图标、按项目拆分布局持久化)
 - 相关:`2026-10-14-window-shell-design.md`(S1,S5 一行)、`2026-10-15-project-host-design.md`(S3p)、`docs/adr/ADR-014-project-as-host-business.md`;Dozer 侧 `2026-10-15-panel-todo-lib-design.md`(S3a,抽库的模板)、`2026-10-10-project-services-design.md`(Project 面板已服务化)
 
@@ -133,3 +133,15 @@ Digger 没有对话转录。面板里依赖它的动作(打开项目时的转录
 3. **拖窗保护的落点是 `bytehost-chrome`**(`platform_macos.rs`,它的文件头注释明确写着等顶栏有项目页签时再移植),不是 Digger 自己。这需要 bytehost 发新 tag,Digger 再升级。产品侧每帧要告诉它"鼠标是否悬停在顶栏的可交互控件上"。
 4. **脚手架比设计里写的更动磁盘**:`scaffold_steps()` 是四步——建 `.dozer/`、写 README、`git init`、写项目文档。设计 Q1/Q2 把它说成"只建 `.dozer/`"是不准确的。**计划里的默认改为:Digger 打开项目时不做任何静默脚手架**,只有用户在面板里点"修复项目"才执行这四步(行为与 Dozer 一致,但由用户触发)。项目描述仍写 `<项目>/.dozer/description.md`,那是用户在面板里主动编辑才写。
 5. **Dozer 一侧还要登记新 crate 的门禁**:`scripts/i18n/*.py` 的扫描路径、`scripts/audit/check_panel_boundary.py`(`extensions/` 下不得出现 `crate::app::App`,所以 `PanelDisplay` 的 `App` 实现要放 `host_adapters/`,同 todo)、`dozer-app/src/i18n.rs` 的 owner 注册。
+
+## 12. 实现结果(2026-10-18)
+
+- **共享库**:Dozer 新增 `dozer-panel-project`,Dozer 的 `extensions/project*` 改为薄适配(用户可见行为不变);Digger 依赖同一个库,Project 面板单栏渲染,左栏第一个图标。
+- **宿主件**:复用 `dozer-panel-host`(`ActivationCtx` / `RequestTrackers` / outbox),拖窗保护与悬停标记落在 `bytehost-chrome`(`v0.4.11`)。
+- **布局**:`shell.json` 拆成全局(窗口大小)+ 每项目一份(`shell-projects/<id>.json`);无当前项目时仍用全局布局;旧全局文件作为首个项目的初始布局(D4/D6)。
+- **删除分级**:面板底部「删除项目」走库的三选一确认卡,Digger 传 `transcript: None`。
+- **真机回归(2026-10-18)修的三个宿主侧缺陷**(提交 `b82e10b`):
+  1. 改名成功只刷新了面板、没更新注册表快照 → 顶栏页签一直显示旧名。现在宿主把库回的 `ProjectInfo` 替换进快照;补了单元测试 `a_successful_rename_updates_the_tab_title`。
+  2. 「修复项目」进度卡在 Digger 里没有宿主(Dozer 用独立原生窗口 `project_scaffold_overlay`)。现在用同一窗口里的整窗覆盖层承载库的 `project_scaffold_card`,整窗居中,关闭语义仍由库的 `all_done()` 把关。
+  3. 页签拖拽排序此前未实现。现在按住页签拖动即换序并落盘(`project_tabs.json`);落点按页签宽度估算(iced 不暴露页签实测坐标)。
+- **验证**:`cargo test --workspace` 全绿(39/17/12/7/134/35/0/11/18/0/0/0,含 `results_are_deterministic`);`cargo clippy --workspace --all-targets` 仅有既有的 `block v0.1.6` future-incompat 提示;`cargo fmt --check` OK;`check-shared-deps.sh`、`check-host-deps.sh`(含 `--self-test`)、`check-shell-regions.sh` 全 ok。

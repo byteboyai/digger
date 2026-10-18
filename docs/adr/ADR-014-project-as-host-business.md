@@ -24,3 +24,4 @@ Dozer and Digger both need Projects, and the shared panels (todo, memory, conver
 - Shared panels can use a real `project_id` in Digger. The first consumer is the todo panel (S3b).
 - Unregistering a Project does not delete its memory rows (same as Dozer); ids are never reused, so orphaned rows cannot attach to a different Project.
 - Dozer keeps working unchanged: `dozerd` re-exports the stores under their old paths and serves the same protocol.
+- The Project panel interface is now shared code too (S5a, 2026-10-18): `dozer-panel-project` holds the panel state, update and view, and both products render it. Dozer keeps a paired preview half; Digger is single-column until S5b (files) lands. Each product still decides what the host does (opening links, folder picking, delete confirmation), so the library owns presentation and state, not product actions.

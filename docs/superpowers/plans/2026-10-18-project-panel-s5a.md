@@ -213,10 +213,10 @@
 
 ### Task 11: 全量验证、文档与收尾
 
-- [ ] **Step 1:** `cargo build --workspace && cargo test --workspace`(记录通过数)、`cargo clippy --workspace --all-targets`(零告警)、`cargo fmt --check`、`bash scripts/check-shared-deps.sh && bash scripts/check-host-deps.sh && bash scripts/check-host-deps.sh --self-test && bash scripts/check-shell-regions.sh`、`Cargo.lock` 重复检查。
-- [ ] **Step 2: 真机回归(用户配合点击)。** 左栏第一个图标是 Project 且面板显示;改名、写/删记忆、编辑描述、"修复项目"(四步脚手架只在点击后发生)、移除项目都可用;两个项目的布局互不影响;从旧的全局 `shell.json` 启动布局不丢;转录相关动作不显示。截图留证,逐项写进报告。
-- [ ] **Step 3: 文档。** `docs/superpowers/specs/2026-10-14-window-shell-design.md` 的 S5 行改为"S5a 已完成、S5b files 待做";`2026-10-18-project-panel-s5a-design.md` 状态改"已实现",补"实现结果"一节;更新 `docs/adr/ADR-014` 的 Consequences 里"Project 面板界面"一句。
-- [ ] **Step 4: 合并到 `main`(快进)、清理 worktree 与分支,** 不碰主工作区未提交的改动。
+- [x] **Step 1:** `cargo build --workspace && cargo test --workspace`(记录通过数)、`cargo clippy --workspace --all-targets`(零告警)、`cargo fmt --check`、`bash scripts/check-shared-deps.sh && bash scripts/check-host-deps.sh && bash scripts/check-host-deps.sh --self-test && bash scripts/check-shell-regions.sh`、`Cargo.lock` 重复检查。
+- [x] **Step 2: 真机回归(用户配合点击)。** 左栏第一个图标是 Project 且面板显示;改名、写/删记忆、编辑描述、"修复项目"(四步脚手架只在点击后发生)、移除项目都可用;两个项目的布局互不影响;从旧的全局 `shell.json` 启动布局不丢;转录相关动作不显示。截图留证,逐项写进报告。
+- [x] **Step 3: 文档。** `docs/superpowers/specs/2026-10-14-window-shell-design.md` 的 S5 行改为"S5a 已完成、S5b files 待做";`2026-10-18-project-panel-s5a-design.md` 状态改"已实现",补"实现结果"一节;更新 `docs/adr/ADR-014` 的 Consequences 里"Project 面板界面"一句。
+- [x] **Step 4: 合并到 `main`(快进)、清理 worktree 与分支,** 不碰主工作区未提交的改动。
 - [ ] **Step 5: 发布新版本(项目硬性要求:每个面板迁移完成后,Dozer 与 Digger 各重新发布一个版本)。** Project 面板迁移在两个产品里都落地、真机回归通过后:① Dozer 走它自己的发布流程(`scripts/build-macos-app.sh release`:升版本号 → 门禁 → 打包);② Digger 走 `bash scripts/release.sh`(门禁 → 升版本 → 打包 → 签名校验 → 压缩;不提交、不打 tag、不推送)。两个产物都要装到本机启动一次确认版本号与面板可用。**发布(含升版本、提交版本号、安装)是对外动作,先向用户确认再执行**;报告里写明两个新版本号与产物路径。
 - [ ] **Step 6: 汇报:** 各仓库测试通过数、依赖图结论、真机截图结论、D1–D7(并附 Step 5 的两个新版本号) 的最终落地情况、哪些没验。
 
@@ -226,4 +226,5 @@
 
 - **Spec 覆盖:** G1 → Task 1–5;G2 → Task 7;G3 → Task 9;G4 → Task 6、10;G5 → Task 8;§6.4 转录动作不显示 → Task 3(`Option<Arc<dyn TranscriptService>>`)+ Task 7;D5/D6 → Task 7、9;§11.1 单栏 → Task 7;§11.2 panel-host → Task 3;§11.3 → Task 6、10;§11.4 无静默脚手架 → Global Constraints + Task 7 Step 6 + Task 11 Step 2;§11.5 门禁登记 → Task 2、4。
 - **类型一致:** `WorkspaceState` / `Message` / `update` 的签名在 Task 3 定义,Task 4、7、8 引用同名;`PanelDisplay` 在 Task 4 定义,Dozer 侧 `host_adapters/project_panel.rs` 实现;`set_topbar_control_hovered` / `install_topbar_drag_guard` 在 Task 6 定义,Task 10 引用。`shell::load_scoped` 只在 Task 9 出现。
+- **收尾补记(真机回归后):** 回归抓到三个宿主侧缺陷,已一并修好并提交 `b82e10b`:① 改名成功后库回 `NameRenamed(_, Ok(info))`,宿主原先只刷新面板、不更新注册表快照 → 顶栏页签一直显示旧名,现在宿主把新 `ProjectInfo` 替换进快照;② 「修复项目」进度卡在 Digger 里没有宿主(Dozer 用独立原生窗口),现改为同一窗口里的整窗覆盖层,整窗居中;③ 页签拖拽排序此前没实现,现按页签宽度估算落点实现拖拽换序并落盘。
 - **风险点:** Task 3 里转录入参改 `Option` 会触及 Dozer 的 5 个调用点,必须保持 Dozer 行为逐项不变(传 `Some`);Task 5 Step 3 的目测验收是 Part C 的闸门;tag 与推送都是对外动作。Task 4 Step 3 里"`ui_text::text` / `homespace` 的替换"是读代码时最不确定的一处,实现者读到实际函数后若发现替换会改变外观,先停下报告,不要改外观。
