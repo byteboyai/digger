@@ -117,6 +117,11 @@ impl ProjectsState {
         }
     }
 
+    /// 项目/记忆服务的进程内装配(Project 面板直接用它,与注册表共享同一个数据库文件)。
+    pub fn project_host(&self) -> Option<&ProjectHost> {
+        self.host.as_ref()
+    }
+
     /// 当前页签对应的项目;注册表还没读回来、或没有页签时为 `None`。
     pub fn current_project(&self) -> Option<&ProjectInfo> {
         let id = self.tabs.active()?;

@@ -21,6 +21,7 @@ use byteui::theme::{color, font, icon_size};
 
 use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Size, Subscription, Task, window};
+use iced_widget::core::Border;
 
 use crate::{paths, shell};
 
@@ -44,6 +45,17 @@ pub enum Msg {
     Markdown(crate::markdown::Message),
     /// 项目页签与注册表(顶栏页签行)。
     Projects(crate::projects::Message),
+    /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
+    /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
+    Project(dozer_panel_project::Message),
+    /// 一次「删除项目」后台结果:(项目 id, 是否已从注册表移除, 文件系统步骤的错误)。
+    ProjectDeleteDone {
+        project_id: i64,
+        deregistered: bool,
+        errors: Vec<String>,
+    },
+    /// 一次「选择文档链接文件/目录」的返回(库的 `Pick` 由宿主落地)。
+    ProjectLinkPicked(dozer_panel_project::links::LinkTarget, Option<PathBuf>),
     /// 面板生命周期自检的推进(仅 `DIGGER_LIFECYCLE_SELFTEST` 设置时出现)。
     Lifecycle(crate::lifecycle_selftest::Phase),
     Tick,
@@ -72,10 +84,17 @@ pub struct ProductShell {
     markdown: crate::markdown::MarkdownPanel,
     /// 项目注册表与已开页签(Project 是 host 层共享业务,ADR-014)。
     projects: crate::projects::ProjectsState,
+    /// 「项目」面板适配(共享 `dozer-panel-project` 库 + 注入的项目/记忆服务)。
+    project: crate::adapters::project::ProjectPanel,
+    /// 「删除项目」结果回流:库的后台任务在线程池里跑,结果经这里转成产品消息。
+    delete_tx: tokio::sync::mpsc::UnboundedSender<Msg>,
+    /// 上面那条通道的接收端,`boot` 里取一次接成 iced 流(`None` = 已取走)。
+    delete_rx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Msg>>>,
     /// 生命周期自检的驱动(只在环境变量设置时有)。
     lifecycle: Option<crate::lifecycle_selftest::Driver>,
     /// [应用, 用量] 面板上一次是否可见:变为可见时触发各自的切入动作;应用面板变为不可见时关掉正在显示的应用。
-    visible_before: [bool; 2],
+    /// 与 [`shell::all_panels`] 同序。
+    visible_before: Vec<bool>,
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
     closing: bool,
@@ -132,6 +151,7 @@ impl ProductShell {
             (shell::info_id(), "Digger"),
             (shell::apps_id(), "应用"),
             (shell::usage_id(), "用量"),
+            (shell::project_id(), "项目"),
         ] {
             catalog
                 .register(CatalogEntry {
@@ -175,6 +195,9 @@ impl ProductShell {
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(paths::config_dir);
         let projects = crate::projects::ProjectsState::open_in(&data_dir);
+        let project = crate::adapters::project::ProjectPanel::new(projects.project_host());
+        let (delete_tx, delete_rx) = tokio::sync::mpsc::unbounded_channel();
+        let delete_rx = std::sync::Mutex::new(Some(delete_rx));
         let lifecycle = crate::lifecycle_selftest::Driver::from_env();
         // 自检模式需要编辑器一开始就看得见。
         if markdown.is_selftest() || lifecycle.is_some() {
@@ -191,8 +214,11 @@ impl ProductShell {
             usage,
             markdown,
             projects,
+            project,
+            delete_tx,
+            delete_rx,
             lifecycle,
-            visible_before: [false; 2],
+            visible_before: Vec::new(),
             boot_note,
             closing: false,
             shutdown_started: false,
@@ -202,8 +228,7 @@ impl ProductShell {
         };
         // 构造时就记下此刻谁可见:否则第一条消息会把本来就看得见的面板当成"刚变可见",重复触发切入动作
         // (启动时本来就可见的面板由 `boot` 显式触发一次,不靠这里)。
-        shell.visible_before =
-            [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
+        shell.visible_before = visible_panels(&shell);
         shell
     }
 
@@ -259,7 +284,51 @@ impl ProductShell {
             // 进入「用量」面板:触发一次取数(库的 on_activate,Task 20)。
             self.usage.activate();
         }
+        if *panel == shell::project_id() {
+            // 进入「项目」面板:当前项目的信息/文档/记忆一次拉齐(库的 on_activate)。
+            self.activate_project_panel();
+        }
         Task::none()
+    }
+
+    /// 把 Project 面板切到当前项目(切入面板 / 换项目页签时都走这里)。没有项目时什么都不做。
+    fn activate_project_panel(&mut self) {
+        let Some(project) = self.projects.current_project().cloned() else {
+            return;
+        };
+        self.project.activate(&project);
+    }
+
+    /// 「删除项目」二次确认卡片点"删除":先取走待确认的层级(库的 `delete_pending`),
+    /// 关掉产品页签,再依次 delist + 删文件系统(库的 `spawn_delete_project`)。
+    /// 与 Dozer 的 `project_delete_confirm` 同序:关页签必须在发起删除之前。
+    fn project_delete_confirm(&mut self, project: &dozer_model::ProjectInfo) {
+        let Some(scope) = self.project.take_delete_pending(project.id) else {
+            return;
+        };
+        let close = self
+            .projects
+            .update(crate::projects::Message::Close(project.id));
+        let _ = close;
+        let (project, tx) = (project.clone(), self.delete_tx.clone());
+        self.project
+            .delete_project(project, scope, move |project_id, deregistered, errors| {
+                let _ = tx.send(Msg::ProjectDeleteDone {
+                    project_id,
+                    deregistered,
+                    errors,
+                });
+            });
+    }
+
+    /// 排空 Project 面板待发提示。Digger 一期没有 Toast:落到 stderr,不静默吞掉。
+    fn flush_project_notices(&mut self) {
+        let Some(project_id) = self.project.focused_project() else {
+            return;
+        };
+        for (level, text) in self.project.take_notices(project_id) {
+            eprintln!("digger: project 面板/{level}: {text}"); // cli-output
+        }
     }
 
     fn on_shell(&mut self, msg: ShellMsg) -> Task<Msg> {
@@ -274,11 +343,11 @@ impl ProductShell {
         let mut tasks = Vec::new();
         // "切入时动作"挂在"从看不见变成看得见"上,而不只是"被切入":展开收起的区、退出放大态、跨栏搬走对侧面板后
         // 本栏退回的面板,都没有 `switched_in`,但用户眼前出现了这个面板。动作本身幂等,与 `switched_in` 重叠无害。
-        let visible_now = [shell::apps_id(), shell::usage_id()].map(|p| self.panel_visible(&p));
+        let visible_now = visible_panels(self);
         let mut entered: Vec<PanelId> = out.switched_in.into_iter().collect();
-        for (panel, (now, was)) in [shell::apps_id(), shell::usage_id()]
+        for (panel, (now, was)) in shell::all_panels()
             .into_iter()
-            .zip(visible_now.into_iter().zip(self.visible_before))
+            .zip(visible_now.iter().copied().zip(self.visible_before.clone()))
         {
             if now && !was && !entered.contains(&panel) {
                 entered.push(panel);
@@ -288,7 +357,12 @@ impl ProductShell {
             tasks.push(self.on_visible(&panel));
         }
         // 应用面板从可见变成不可见(切走 / 收起 / 被放大盖住):关掉正在显示的应用,别留一个看不见的 webview 盖在别处。
-        if self.visible_before[0] && !visible_now[0] {
+        let apps = shell::all_panels()
+            .iter()
+            .position(|p| *p == shell::apps_id());
+        if apps.is_some_and(|i| {
+            self.visible_before.get(i).copied().unwrap_or(false) && !visible_now[i]
+        }) {
             self.apps.close_selected();
         }
         self.visible_before = visible_now;
@@ -435,6 +509,27 @@ impl ProductShell {
             .into()
     }
 
+    fn project_view(&self, area: &BodyArea) -> Element<'_, Msg> {
+        let current = self.projects.current_project();
+        let body = self
+            .project
+            .view(current, Length::Fixed(area.rect.w), Border::default());
+        // 删除确认是覆盖在面板上的三选一卡片(库的 `project_delete_card`),有才盖。
+        let overlay: Option<Element<'_, Msg>> = current
+            .and_then(|p| self.project.delete_card(p.id))
+            .map(|card| {
+                container(card)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .center(Length::Fill)
+                    .into()
+            });
+        match overlay {
+            Some(card) => iced::widget::stack![body, card].into(),
+            None => body,
+        }
+    }
+
     fn markdown_view(&self) -> Element<'_, Msg> {
         // 条在上;下面留空,原生 webview 由 `sync_native` 摆在条的下方。
         column![
@@ -465,6 +560,11 @@ impl ProductShell {
 
     pub fn markdown_probe(&self, id: window::Id) -> Task<Msg> {
         self.markdown.probe(id).map(Msg::Markdown)
+    }
+
+    /// 取走「删除项目」结果的接收端(只能取一次;`boot` 用它接成 iced 流)。
+    pub fn take_delete_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Msg>> {
+        self.delete_rx.lock().ok().and_then(|mut r| r.take())
     }
 
     pub fn usage_ready(&self) -> bool {
@@ -517,6 +617,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.apps" => self.apps_view(),
             "digger.usage" => self.usage_view(area),
             "digger.markdown" => self.markdown_view(),
+            "digger.project" => self.project_view(area),
             _ => column![].into(),
         }
     }
@@ -563,6 +664,25 @@ fn load_usage_ledger(
             (svc, None, note)
         }
     }
+}
+
+/// 用系统默认应用打开一个路径(文档链接)。失败只记日志:用户还能从别的入口打开。
+fn open_in_system(path: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(not(target_os = "macos"))]
+    let opener = "xdg-open";
+    if let Err(e) = std::process::Command::new(opener).arg(path).spawn() {
+        eprintln!("digger: 打开 {} 失败: {e}", path.display()); // cli-output
+    }
+}
+
+/// 每个已注册面板此刻的可见性(下标与 [`shell::all_panels`] 对齐)。
+fn visible_panels(shell: &ProductShell) -> Vec<bool> {
+    shell::all_panels()
+        .iter()
+        .map(|p| shell.panel_visible(p))
+        .collect()
 }
 
 impl Default for ProductShell {
@@ -622,7 +742,99 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
-            Msg::Projects(m) => self.projects.update(m).map(Msg::Projects),
+            Msg::Projects(m) => {
+                // 打开/切换项目:若「项目」面板此刻就在眼前,立刻把它切到新项目
+                // (否则要等下一次切入才拉数据——用户刚打开的项目看着是空的)。
+                let before = self.projects.current_project_id();
+                let task = self.projects.update(m).map(Msg::Projects);
+                if before != self.projects.current_project_id()
+                    && self.panel_visible(&shell::project_id())
+                {
+                    self.activate_project_panel();
+                }
+                task
+            }
+            Msg::Project(m) => {
+                let Some(project) = self.project.resolve_project(&m).and_then(|id| {
+                    self.projects
+                        .current_project()
+                        .filter(|p| p.id == id)
+                        .cloned()
+                }) else {
+                    return Task::none();
+                };
+                use dozer_panel_project::Message as PM;
+                match m {
+                    // 悬停动画:Digger 不挂 hover 动画表,按"未悬停"画,消息直接丢掉。
+                    PM::ToolbarHover(..) => {}
+                    // 文本编辑框的复制/粘贴菜单:一期不做(与其它面板一致)。
+                    PM::TextInputMenuOpen(..) => {}
+                    // 没有预览栏(S5b):点文档用系统默认应用打开。
+                    PM::OpenLink(path) => open_in_system(&path),
+                    // 右键菜单:一期只有"移除",不做浮层,直接落到库的 `LinkRemove`。
+                    PM::LinkContextMenu { target, index } => self
+                        .project
+                        .update(Some(&project), PM::LinkRemove { target, index }),
+                    PM::DeleteProjectConfirm => {
+                        self.project_delete_confirm(&project);
+                        return Task::none();
+                    }
+                    PM::Pick(target) => {
+                        return Task::perform(
+                            async move {
+                                let picked = rfd::AsyncFileDialog::new()
+                                    .set_title("选择项目文档")
+                                    .set_directory(&project.path)
+                                    .pick_file()
+                                    .await
+                                    .map(|h| h.path().to_path_buf());
+                                Msg::ProjectLinkPicked(target, picked)
+                            },
+                            |m| m,
+                        );
+                    }
+                    m => self.project.update(Some(&project), m),
+                }
+                self.flush_project_notices();
+                Task::none()
+            }
+            Msg::ProjectLinkPicked(target, Some(path)) => {
+                let Some(project) = self.projects.current_project().cloned() else {
+                    return Task::none();
+                };
+                let kind = if path.is_dir() {
+                    dozer_panel_project::links::LinkKind::Dir
+                } else {
+                    dozer_panel_project::links::LinkKind::File
+                };
+                self.project.update(
+                    Some(&project),
+                    dozer_panel_project::Message::LinkAdd { target, path, kind },
+                );
+                self.flush_project_notices();
+                Task::none()
+            }
+            Msg::ProjectLinkPicked(_, None) => Task::none(),
+            Msg::ProjectDeleteDone {
+                project_id,
+                deregistered,
+                errors,
+            } => {
+                for e in &errors {
+                    eprintln!("digger: 删除项目 {project_id}: {e}"); // cli-output
+                }
+                // 注册表已移除 → 页面上的页签也一并关掉(库只碰文件系统,不碰产品页签)。
+                if deregistered {
+                    let close = self
+                        .projects
+                        .update(crate::projects::Message::Close(project_id));
+                    return Task::batch([
+                        close.map(Msg::Projects),
+                        self.projects.refresh().map(Msg::Projects),
+                    ]);
+                }
+                Task::none()
+            }
             Msg::Lifecycle(phase) => {
                 let Some(mut driver) = self.lifecycle.take() else {
                     return Task::none();
@@ -746,6 +958,9 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     let size = default_window_size_for_boot();
     // 用量面板要 iced 运行时句柄在后台取数:`boot` 在 iced 运行时内执行,这里补挂。
     shell.usage.attach_handle(tokio::runtime::Handle::current());
+    shell
+        .project
+        .attach_handle(tokio::runtime::Handle::current());
     // 应用面板后台结果回流:一次性流出接收端,持续到进程结束(与窗口尺寸任务并行)。
     use iced::futures::StreamExt;
     let reply_task = match crate::apps::take_reply_receiver(&shell.apps.reply_receiver()) {
@@ -779,14 +994,27 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     } else {
         Task::none()
     };
+    // 「项目」面板的后台结果(记忆列表 / git 快照 / 磁盘占用)回流成 iced 流。
+    let project_task = match shell.project.take_receiver() {
+        Some(rx) => Task::stream(crate::adapters::project::receiver_stream(rx).map(Msg::Project)),
+        None => Task::none(),
+    };
+    // 「删除项目」的后台结果回流(库的 `spawn_delete_project` 在结束回调里投递)。
+    let delete_task = match shell.take_delete_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            let next = rx.recv().await?;
+            Some((next, rx))
+        })),
+        None => Task::none(),
+    };
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
-    for panel in [shell::apps_id(), shell::usage_id()] {
+    for panel in shell::all_panels() {
         if shell.panel_visible(&panel) {
             initial.push(shell.on_visible(&panel));
         }
     }
-    shell.visible_before = [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
+    shell.visible_before = visible_panels(&shell);
     let projects_task = shell.projects.refresh().map(Msg::Projects);
     (
         shell,
@@ -797,6 +1025,8 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             usage_task,
             native_usage,
             markdown_task,
+            project_task,
+            delete_task,
             lifecycle_task,
             Task::batch(initial),
         ]),
@@ -872,7 +1102,7 @@ mod tests {
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 4);
+        assert_eq!(shell.catalog.len(), 5);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,

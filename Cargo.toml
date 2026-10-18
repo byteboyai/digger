@@ -49,6 +49,12 @@ byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
 dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
 dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
 dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
+# 同源 Project 面板库(S5a):状态 / 更新 / 视图;依赖闭包不含 dozer-app/client/core。
+dozer-panel-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
+# 面板库依赖的宿主件(激活上下文 / 请求身份);只许宿主适配层直接依赖。
+dozer-panel-host = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
+# 面板的 git 快照(分支/脏标/remote)与「修复项目」的 git init 共用同一个 tag,图里只有一份。
+bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1" }
 # Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。
 dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
 

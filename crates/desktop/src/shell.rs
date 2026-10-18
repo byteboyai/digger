@@ -33,10 +33,20 @@ pub fn usage_id() -> PanelId {
 pub fn markdown_id() -> PanelId {
     id("digger.markdown")
 }
+/// 项目面板(共享 `dozer-panel-project` 库):当前项目的信息、描述、文档链接与共享记忆。
+pub fn project_id() -> PanelId {
+    id("digger.project")
+}
 
 /// 产品的全部面板。落盘时清单里有而文件里没有的面板,会回到它的默认栏(新版本新增面板不会重置用户布局)。
 pub fn all_panels() -> Vec<PanelId> {
-    vec![markdown_id(), info_id(), apps_id(), usage_id()]
+    vec![
+        markdown_id(),
+        info_id(),
+        apps_id(),
+        usage_id(),
+        project_id(),
+    ]
 }
 
 /// 图标栏上的图标与悬停标题。
@@ -46,6 +56,7 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
         "digger.info" => ("信息", IconKind::SquareActivity),
         "digger.apps" => ("应用", IconKind::LayoutList),
         "digger.usage" => ("用量", IconKind::BarChart3),
+        "digger.project" => ("项目", IconKind::Briefcase),
         _ => return None,
     };
     Some(PanelMeta {
@@ -67,6 +78,7 @@ pub fn list_min_width() -> f32 {
 /// (所以在右栏时是"内容 | 列表",拖到左栏镜像成"列表 | 内容"),可拖窄收起。其余面板仍是单栏。
 pub fn rules(panel: &PanelId) -> Option<PanelRules> {
     match panel.as_str() {
+        // 一期单栏:配对(预览)留给 S5b。
         "digger.usage" => Some(PanelRules {
             default_side: Side::Right,
             pane: Some(PaneRules {
@@ -95,7 +107,10 @@ pub fn pair_rects(model: &ShellModel, side: Side) -> Option<PairRects> {
 pub fn defaults() -> Defaults {
     let (w, h) = byteui::theme::geometry::initial_window_size();
     Defaults {
-        rails: [vec![markdown_id(), info_id()], vec![apps_id(), usage_id()]],
+        rails: [
+            vec![markdown_id(), info_id()],
+            vec![apps_id(), usage_id(), project_id()],
+        ],
         selected: [markdown_id(), usage_id()],
         left_width: 640.0,
         window: (w, h),
@@ -139,6 +154,7 @@ mod tests {
         assert_eq!(apps_id().as_str(), "digger.apps");
         assert_eq!(usage_id().as_str(), "digger.usage");
         assert_eq!(markdown_id().as_str(), "digger.markdown");
+        assert_eq!(project_id().as_str(), "digger.project");
     }
 
     #[test]
@@ -170,7 +186,10 @@ mod tests {
             [markdown_id(), info_id()],
             "content panels on the left, like Dozer"
         );
-        assert_eq!(model.rail(Side::Right), [apps_id(), usage_id()]);
+        assert_eq!(
+            model.rail(Side::Right),
+            [apps_id(), usage_id(), project_id()]
+        );
         assert_eq!(model.selected(Side::Left), &markdown_id());
         assert_eq!(model.selected(Side::Right), &usage_id());
         assert_eq!(d.left_width, 640.0);
@@ -214,8 +233,8 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [apps_id(), usage_id()],
-            "the new panel lands on its default side"
+            [apps_id(), usage_id(), project_id()],
+            "the new panels land on their default side"
         );
         assert_eq!(model.left_width(), 500.0);
         let _ = std::fs::remove_dir_all(&dir);
