@@ -2,7 +2,7 @@
 
 - 日期:2026-10-18
 - 对应计划:`docs/superpowers/plans/2026-10-18-preview-engine-p2-panel.md` Task 1 Step 4
-- 状态:**待用户过目**(未确认前不进入 Task 2 之后的搬迁)
+- 状态:**用户已确认(2026-10-18)**:§5 的三件事按我的倾向——① 持久化经 `UpdateCtx` 注入 `PreviewPersistence` trait;② 降级页按钮样式经展示适配注入;③ 三个空函数与相关消息按现状搬(消息保留为库的 no-op 变体,停用的测试原样不动)。Task 2 起等 P1 合并后继续。
 - 取自:Dozer `main` @ `ed041788`(worktree `../dozer-panel-preview`,分支 `feat/panel-preview-lib`)。清单由脚本从 `workspace/state.rs`、`app/update.rs`、`app/app.rs` 提取名字含 `preview` / `find_` / `conflict` / `blank_info` / `recovery` 的函数(80 个)并逐个读过函数体判定;`app/update.rs` 的消息分支单列。
 
 判定符号:**A** 进库(只碰 `PreviewPane` / 核心类型 / 本地文件 / `tokio`);**B** 留在 `dozer-app`(碰 wry、几何、协议、Agent 命令、MCP 预览上下文、Dozer 键盘 / 焦点、跨面板);**C** 拆开(给出怎么拆)。
