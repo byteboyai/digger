@@ -13,3 +13,6 @@
 
 # spike build outputs
 **/target/
+
+.dozer/
+spike/corpus/
