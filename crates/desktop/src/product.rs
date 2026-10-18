@@ -798,6 +798,9 @@ impl Product<Msg> for ProductShell {
                 // macOS:全屏期间把红绿灯临时挂到内容视图(原生全屏不绘制标题栏,红绿灯会跟着移出窗口)。
                 #[cfg(target_os = "macos")]
                 let guard = window::run(id, |w| {
+                    // 顶栏拖窗保护:悬停页签/"＋"时 (`projects` 里的悬停状态) 放行按下给 iced,
+                    // 悬停在空白顶栏时保留原生拖窗。
+                    bytehost_chrome::platform_macos::install_topbar_drag_guard(w);
                     bytehost_chrome::platform_macos::install_fullscreen_guard(w)
                 })
                 .discard();

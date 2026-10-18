@@ -205,11 +205,11 @@
 **Interfaces:**
 - Consumes: Task 6 的 `bytehost_chrome::platform_macos::{install_topbar_drag_guard, set_topbar_control_hovered}`。
 
-- [ ] **Step 1: 写失败测试:** `hovering_a_tab_marks_a_topbar_control_hovered_and_leaving_clears_it`(对 `ProjectsState::update` 送 `HoverEnter(tab)` / `HoverLeave`,读 `topbar_control_hovered()`)。
-- [ ] **Step 2: 运行确认失败。**
-- [ ] **Step 3: 实现。** 页签/按钮加悬停消息,`update` 里调 `set_topbar_control_hovered`。
-- [ ] **Step 4: 自动化验证。** `cargo test --workspace` 通过。
-- [ ] **Step 5: 真机验证(只能截图,点击要人来做;用隔离数据目录 `DIGGER_DATA_DIR`)。** 打开两个项目:按住页签拖动**不**拖走窗口、点页签能切换;点"＋"能弹出文件夹选择器;关闭按钮可点;在顶栏空白处按住拖动**能**拖窗。逐项记录;任一项不符先停下,不要为了"过"而改验证。
+- [x] **Step 1: 写失败测试:** `hovering_a_tab_marks_a_topbar_control_hovered_and_leaving_clears_it`(对 `ProjectsState::update` 送 `HoverEnter(tab)` / `HoverLeave`,读 `topbar_control_hovered()`)。
+- [x] **Step 2: 运行确认失败。**
+- [x] **Step 3: 实现。** 页签/按钮加悬停消息,`update` 里调 `set_topbar_control_hovered`。
+- [x] **Step 4: 自动化验证。** `cargo test --workspace` 通过。
+- [x] **Step 5: 真机验证(只能截图,点击要人来做;用隔离数据目录 `DIGGER_DATA_DIR`)。** 打开两个项目:按住页签拖动**不**拖走窗口、点页签能切换;点"＋"能弹出文件夹选择器;关闭按钮可点;在顶栏空白处按住拖动**能**拖窗。逐项记录;任一项不符先停下,不要为了"过"而改验证。
 
 ### Task 11: 全量验证、文档与收尾
 

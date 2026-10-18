@@ -237,3 +237,26 @@ fn a_long_notice_is_shortened_for_the_top_bar_on_a_char_boundary() {
     assert_eq!(cut.chars().count(), 20);
     assert!(cut.ends_with('…'));
 }
+
+// ---- 顶栏拖窗保护(Task 10) ----
+
+#[test]
+fn hovering_a_tab_marks_a_topbar_control_hovered_and_leaving_clears_it() {
+    let d = dir();
+    let mut state = ProjectsState::open_in(d.path());
+    let proj = d.path().join("book");
+    std::fs::create_dir(&proj).unwrap();
+    opened(&mut state, info(1, &proj, "book"));
+    assert!(!state.topbar_control_hovered());
+
+    let _ = state.update(Message::HoverEnter(1));
+    assert!(
+        state.topbar_control_hovered(),
+        "a tab is a topbar control: pressing it must reach iced, not drag the window"
+    );
+    let _ = state.update(Message::HoverLeave(1));
+    assert!(
+        !state.topbar_control_hovered(),
+        "leaving the tab gives the blank topbar back to the native drag"
+    );
+}

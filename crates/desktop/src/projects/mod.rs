@@ -13,7 +13,7 @@ use byteui::interaction::icons::{self, IconKind};
 use byteui::theme::{color, font, icon_size};
 use digger_store::ProjectHost;
 use dozer_model::ProjectInfo;
-use iced::widget::{button, row, text, tooltip};
+use iced::widget::{button, mouse_area, row, text, tooltip};
 use iced::{Alignment, Element, Task};
 
 use crate::paths;
@@ -31,6 +31,10 @@ pub enum Message {
     Listed(Result<Listing, String>),
     Activate(i64),
     Close(i64),
+    /// 鼠标进入某个页签(含它的关闭按钮)或"＋":顶栏上的可交互控件。
+    HoverEnter(i64),
+    /// 鼠标离开它。
+    HoverLeave(i64),
 }
 
 /// 一次注册表读取的结果:项目列表(最近优先)与"目录已不存在"的项目 id。
@@ -69,6 +73,9 @@ enum NoticeKind {
 /// 顶栏上提示文字的最大字数;全文放在悬停提示里。
 const NOTICE_MAX_CHARS: usize = 48;
 
+/// "＋"不是页签:`hovered` 用这个 id 记它。
+pub const ADD_TAB_HOVER: i64 = -1;
+
 fn shorten(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -91,6 +98,8 @@ pub struct ProjectsState {
     registry: Vec<ProjectInfo>,
     /// 目录已不存在的项目:页签标灰,不自动删除。
     missing: HashSet<i64>,
+    /// 此刻悬停在顶栏可交互控件上的页签("＋"记为 [`ADD_TAB_HOVER`])。
+    hovered: Option<i64>,
     notice: Option<(NoticeKind, String)>,
 }
 
@@ -113,6 +122,7 @@ impl ProjectsState {
             tabs_blocked: loaded.save_blocked,
             registry: Vec::new(),
             missing: HashSet::new(),
+            hovered: None,
             notice,
         }
     }
@@ -137,6 +147,19 @@ impl ProjectsState {
     #[cfg(test)]
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_ref().map(|(_, text)| text.as_str())
+    }
+
+    /// 此刻是否有顶栏可交互控件被悬停。原生拖窗覆写读的是进程级原子量(由 [`Self::set_hovered`] 维护),
+    /// 这个读取器给测试用。
+    #[allow(dead_code)] // 只有测试读它
+    pub fn topbar_control_hovered(&self) -> bool {
+        self.hovered.is_some()
+    }
+
+    fn set_hovered(&mut self, hovered: Option<i64>) {
+        self.hovered = hovered;
+        #[cfg(target_os = "macos")]
+        bytehost_chrome::platform_macos::set_topbar_control_hovered(hovered.is_some());
     }
 
     fn set_notice(&mut self, kind: NoticeKind, text: String) {
@@ -172,6 +195,18 @@ impl ProjectsState {
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
+        if let Message::HoverEnter(id) = msg {
+            self.set_hovered(Some(id));
+            return Task::none();
+        }
+        if let Message::HoverLeave(id) = msg {
+            // 从一个页签的关闭按钮移到它的名字上时,两边的 enter/exit 顺序不保证:
+            // 只在离开的正是当前悬停目标时才清,免得"离开关闭按钮"把刚进入的页签也清掉。
+            if self.hovered == Some(id) {
+                self.set_hovered(None);
+            }
+            return Task::none();
+        }
         match msg {
             Message::PickFolder => {
                 self.clear_notice(NoticeKind::Open);
@@ -231,6 +266,8 @@ impl ProjectsState {
                 self.set_notice(NoticeKind::List, format!("读取项目列表失败: {e}"));
                 Task::none()
             }
+            // 已在函数开头处理(不落盘、不碰注册表):这里只是让穷尽匹配完整。
+            Message::HoverEnter(_) | Message::HoverLeave(_) => Task::none(),
             Message::Activate(id) => {
                 if self.tabs.activate(id) {
                     self.save_tabs();
@@ -295,17 +332,22 @@ impl ProjectsState {
             } else {
                 project.name.clone()
             };
-            tabs = tabs
-                .push(
-                    button(text(name).size(font::body()).color(label_color))
-                        .style(button::text)
-                        .on_press(Message::Activate(*id)),
-                )
-                .push(
-                    button(text("×").size(font::body()).color(dim))
-                        .style(button::text)
-                        .on_press(Message::Close(*id)),
-                );
+            // 整张页签(名字 + 关闭按钮)算一个顶栏可交互控件:悬停期间原生拖窗让路,
+            // 否则落在原生拖窗带里的按下会变成拖窗,点不动页签。离开时清掉(见 `update`)。
+            let tab = row![
+                button(text(name).size(font::body()).color(label_color))
+                    .style(button::text)
+                    .on_press(Message::Activate(*id)),
+                button(text("×").size(font::body()).color(dim))
+                    .style(button::text)
+                    .on_press(Message::Close(*id)),
+            ]
+            .align_y(Alignment::Center);
+            tabs = tabs.push(
+                mouse_area(tab)
+                    .on_enter(Message::HoverEnter(*id))
+                    .on_exit(Message::HoverLeave(*id)),
+            );
         }
         if self.tabs.open().is_empty() {
             tabs = tabs.push(text("无项目").size(font::body()).color(dim));
@@ -313,6 +355,9 @@ impl ProjectsState {
         let plus = button(icons::view(IconKind::Plus, icon_size::rail(), dim))
             .style(button::text)
             .on_press_maybe(self.host.as_ref().map(|_| Message::PickFolder));
+        let plus = mouse_area(plus)
+            .on_enter(Message::HoverEnter(ADD_TAB_HOVER))
+            .on_exit(Message::HoverLeave(ADD_TAB_HOVER));
         let hint = if self.host.is_some() {
             "打开项目文件夹"
         } else {
