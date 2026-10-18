@@ -30,7 +30,7 @@
     <key>NSAllowsArbitraryLoads</key>
     <true/>
   </dict>
-  <!-- 图标:本期无 Digger 品牌资源,暂不设 CFBundleIconFile,
-       系统用默认图标。品牌图标就绪后补 AppIcon.icns 并在此声明。 -->
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
 </dict>
 </plist>
