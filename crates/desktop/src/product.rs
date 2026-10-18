@@ -6,7 +6,7 @@
 //!
 //! 范围(S1):以**无 Project** 状态启动;顶栏的项目页签行保留结构、内容留空,"＋"置灰;**不伪造**任何写入能力。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bytehost_chrome::persist::SCHEMA_VERSION;
 use bytehost_chrome::{
@@ -117,6 +117,12 @@ fn logical(r: Rect) -> LogicalRect {
     }
 }
 
+/// 项目布局文件:`<root>/shell-projects/<id>.json`。生产里 `root` 是配置目录(`<config>/digger/shell-projects/`),
+/// 测试里跟着全局 `shell.json` 走,免得测试互相覆盖、也不碰真实配置目录。
+fn project_shell_path_of(root: &Path, id: i64) -> PathBuf {
+    root.join("shell-projects").join(format!("{id}.json"))
+}
+
 /// 向下缩 `top` 像素(面板自己的头部占掉的高度)。
 fn below_header(r: Rect, top: f32) -> Rect {
     Rect::new(r.x, r.y + top, r.w, (r.h - top).max(1.0))
@@ -168,6 +174,7 @@ impl ProductShell {
             .register(CatalogEntry::single_surface(shell::markdown_id(), "编辑器"))
             .expect("首次注册 digger.markdown");
 
+        // 启动时读全局布局(项目布局只在切到项目页签时换上,见 `Msg::Projects`)。
         let loaded = shell::load(&shell_path);
         let shell_save_blocked = match &loaded {
             Loaded::Newer { found, .. } => Some(format!(
@@ -237,13 +244,88 @@ impl ProductShell {
 
     /// 落盘当前骨架状态(退出 / 布局变化时调用)。失败不 panic,记入 boot_note。
     /// 磁盘上是**不支持的高版本**布局时**拒绝回写**(复盘发现 4:绝不覆盖原文件)。
+    ///
+    /// 有当前项目时布局写到该项目自己的文件,窗口大小仍写全局 `shell.json`;没有项目时整份写全局。
     fn save_shell(&mut self) {
+        let project = self.current_project_shell_path();
+        self.save_shell_scoped(project);
+    }
+
+    /// 把内存里的布局写到指定项目的文件(`None` = 整份写全局)。切页签时用它写**旧**项目,
+    /// 因为此刻 `projects` 里的当前项目已经是新的。
+    fn save_shell_for(&mut self, project: Option<i64>) {
+        let path = project.and_then(|id| self.project_shell_path_for(id));
+        self.save_shell_scoped(path);
+    }
+
+    fn save_shell_scoped(&mut self, project_path: Option<PathBuf>) {
         if let Some(note) = &self.shell_save_blocked {
             self.boot_note = format!("布局未保存:{note}");
             return;
         }
-        if let Err(e) = bytehost_chrome::persist::save_atomic(&self.shell_path, &self.shell) {
+        let Some(project_path) = project_path else {
+            if let Err(e) = bytehost_chrome::persist::save_atomic(&self.shell_path, &self.shell) {
+                self.boot_note = format!("布局保存失败:{e}");
+            }
+            return;
+        };
+        if let Err(e) = bytehost_chrome::persist::save_atomic(&project_path, &self.shell) {
             self.boot_note = format!("布局保存失败:{e}");
+        }
+        // 窗口大小是窗口的属性,不是项目的:项目布局里也存了,但只有全局那份决定下次启动的窗口尺寸。
+        if let Err(e) = bytehost_chrome::persist::save_atomic(&self.shell_path, &self.shell) {
+            self.boot_note = format!("窗口大小未保存:{e}");
+        }
+    }
+
+    /// 切到当前项目后换布局:窗口大小沿用内存里的(窗口没变),其余读该项目自己的文件;
+    /// 没有项目或项目没有文件时读全局布局。
+    fn load_project_shell(&mut self) {
+        let project = self.current_project_shell_path().filter(|p| p.exists());
+        // 项目文件是更高 schema 版本写的:照骨架的规矩用默认布局显示,但**不回写**它。
+        self.shell_save_blocked = project
+            .as_deref()
+            .and_then(|p| self.project_save_blocked(p));
+        let window = self.shell.window();
+        let mut model = shell::load_scoped(&self.shell_path, project.as_deref()).into_model();
+        if model.window() != window {
+            shell::update(
+                &mut model,
+                ShellMsg::Resized {
+                    w: window.0,
+                    h: window.1,
+                },
+            );
+        }
+        self.shell = model;
+        // 换布局可能让某些面板从看不见变成看得见:在新布局上重算一次,别拿旧布局的可见性比较。
+        self.visible_before = visible_panels(self);
+    }
+
+    /// 当前项目自己的布局文件;没有当前项目时为 `None`(整份写全局)。
+    fn current_project_shell_path(&self) -> Option<PathBuf> {
+        let id = self.projects.current_project_id()?;
+        self.project_shell_path_for(id)
+    }
+
+    /// 某个项目的布局文件(与它是否当前项目无关)。
+    fn project_shell_path_for(&self, id: i64) -> Option<PathBuf> {
+        let root = self
+            .shell_path
+            .parent()
+            .filter(|p| p != &paths::config_dir())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(paths::config_dir);
+        Some(project_shell_path_of(&root, id))
+    }
+
+    /// 该项目的布局文件若是更高 schema 版本写的,给它一条说明;调用方据此拒绝回写。
+    fn project_save_blocked(&self, project_path: &Path) -> Option<String> {
+        match shell::load_scoped(&self.shell_path, Some(project_path)) {
+            Loaded::Newer { found, .. } => Some(format!(
+                "项目布局 schema 版本 {found} 高于本宿主支持的 {SCHEMA_VERSION},已用默认布局显示且**不覆盖原文件**"
+            )),
+            _ => None,
         }
     }
 
@@ -755,10 +837,17 @@ impl Product<Msg> for ProductShell {
                 // (否则要等下一次切入才拉数据——用户刚打开的项目看着是空的)。
                 let before = self.projects.current_project_id();
                 let task = self.projects.update(m).map(Msg::Projects);
-                if before != self.projects.current_project_id()
-                    && self.panel_visible(&shell::project_id())
-                {
-                    self.activate_project_panel();
+                // 只有"当前项目"真的换了才换布局:打开/关闭非激活项目的页签不碰它。
+                let after = self.projects.current_project_id();
+                if before.is_some() && before != after {
+                    // 布局按项目一份:把**旧**项目的布局落到它自己的文件里。
+                    self.save_shell_for(before);
+                }
+                if before != after {
+                    self.load_project_shell();
+                    if self.panel_visible(&shell::project_id()) {
+                        self.activate_project_panel();
+                    }
                 }
                 task
             }
@@ -1068,6 +1157,11 @@ mod tests {
         dir
     }
 
+    /// 测试用:项目布局文件放在测试目录下(生产是 `<config>/shell-projects/`)。
+    fn project_path_in(dir: &std::path::Path, id: i64) -> std::path::PathBuf {
+        dir.join("shell-projects").join(format!("{id}.json"))
+    }
+
     /// 带独立落盘路径的壳:互不干扰,也不碰真实配置目录。
     fn fresh(tag: &str) -> ProductShell {
         ProductShell::with_shell_path(test_temp_dir(tag).join("shell.json"))
@@ -1112,6 +1206,109 @@ mod tests {
             Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![info])))),
         );
         assert_eq!(again.projects.current_project_id(), Some(1));
+    }
+
+    /// 布局按项目一份(Task 9):切项目页签换布局,窗口大小仍写全局。
+    #[test]
+    fn switching_project_tabs_swaps_the_layout_and_keeps_the_window_global() {
+        use crate::projects::Message as P;
+        let dir = test_temp_dir("project-scope");
+        for name in ["a", "b"] {
+            std::fs::create_dir(dir.join(name)).unwrap();
+        }
+        let info = |id: i64, name: &str| dozer_model::ProjectInfo {
+            id,
+            path: dir.join(name).to_string_lossy().into_owned(),
+            name: name.into(),
+            last_active_ms: id as u64,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        // 线程复用会让这个目录带着上一轮的残留(页签、项目库、项目布局都算):构造壳之前全清掉,
+        // 再写 B 的项目布局。`project_tabs.json` 里残留的"当前项目"会让壳一启动就切到那个项目。
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = std::fs::remove_dir_all(&path);
+            } else {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        std::fs::create_dir(dir.join("shell-projects")).unwrap();
+        let mut b_saved = shell::defaults();
+        b_saved.left_width = 400.0;
+        let b_model = ShellModel::new(
+            b_saved.rails.clone(),
+            b_saved.selected.clone(),
+            b_saved.left_width,
+            b_saved.window,
+        )
+        .unwrap();
+        bytehost_chrome::persist::save_atomic(&project_path_in(&dir, 2), &b_model).unwrap();
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        assert_eq!(shell.projects.current_project_id(), None);
+        let a = info(1, "a");
+        let b = info(2, "b");
+        // `Opened` 的后续步骤是异步任务,测试里跑不到:直接用 `Listed` 建快照并打开这两个页签。
+        send(
+            &mut shell,
+            Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![
+                a.clone(),
+                b.clone(),
+            ])))),
+        );
+        // 两张页签都开,但只让 A 当当前项目:B 此刻不该被任何一次保存碰到。
+        shell.projects.add_tab_for_test(a.id);
+        shell.projects.add_tab_for_test(b.id);
+        send(&mut shell, Msg::Projects(P::Activate(a.id)));
+        assert_eq!(shell.projects.current_project_id(), Some(a.id));
+
+        let a_path = project_path_in(&dir, a.id);
+        let b_path = project_path_in(&dir, b.id);
+
+        // 在 A 里把左区拉宽:落到 A 的项目文件,不碰 B 的。
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::DividerPress(Divider::Zones)),
+        );
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::CursorMoved { x: 544.0, y: 300.0 }),
+        );
+        send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
+        assert_eq!(shell.shell.left_width(), 500.0);
+        assert!(a_path.exists(), "A's drag is written to A's file");
+        let b_before = std::fs::read(&b_path).unwrap();
+
+        // 全局文件仍存在(窗口大小写在那里)。
+        assert!(matches!(
+            shell::load(&dir.join("shell.json")),
+            Loaded::Restored(_)
+        ));
+
+        // 切到 B(第一次把它变成当前项目):B 自己的布局(400)回来,不是 A 的 500。
+        send(&mut shell, Msg::Projects(P::Activate(b.id)));
+        assert_eq!(shell.shell.left_width(), 400.0, "B's layout, not A's");
+        assert_eq!(
+            std::fs::read(&b_path).unwrap(),
+            b_before,
+            "B untouched by A"
+        );
+
+        // 切回 A:500 仍在。
+        send(&mut shell, Msg::Projects(P::Activate(a.id)));
+        assert_eq!(shell.shell.left_width(), 500.0, "A's layout comes back");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn with_no_project_the_layout_goes_to_the_global_file() {
+        let dir = test_temp_dir("global-only");
+        let path = dir.join("shell.json");
+        let mut shell = ProductShell::with_shell_path(path.clone());
+        press(&mut shell, &shell::info_id());
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1183,7 +1380,6 @@ mod tests {
         let original = r#"{ "schema_version": 999, "left": ["digger.info"], "right": [] }"#;
         std::fs::write(&path, original).unwrap();
         let mut shell = ProductShell::with_shell_path(path.clone());
-        assert!(shell.shell_save_blocked.is_some());
         press(&mut shell, &shell::info_id());
         let _ = Product::update(&mut shell, HostMessage::Product(Msg::Exit));
         assert_eq!(

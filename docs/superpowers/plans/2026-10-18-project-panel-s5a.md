@@ -185,16 +185,16 @@
 ### Task 9: 布局按项目一份
 
 **Files:**
-- Modify: `crates/desktop/src/shell.rs`(`load`/保存按 scope)、`crates/desktop/src/paths.rs`(新增 `project_shell_path(id: i64) -> PathBuf`,`<config>/shell-projects/<id>.json`)、`crates/desktop/src/product.rs`(切项目页签时换布局、保存时落到当前 scope)
+- Modify: `crates/desktop/src/shell.rs`(`load`/保存按 scope)、`crates/desktop/src/product.rs`(切项目页签时换布局、保存时落到当前 scope;项目布局路径 `<shell.json 所在目录>/shell-projects/<id>.json`,生产即 `<config>/digger/shell-projects/<id>.json`)
 - Test: `crates/desktop/src/shell.rs`
 
 **Interfaces:**
 - Produces: `shell::load_scoped(global: &Path, project: Option<&Path>) -> Loaded`(有项目文件读项目文件,否则读全局;全局都没有用 `defaults()`);保存:有当前项目 → 写项目文件,窗口大小仍写全局 `shell.json`;无当前项目 → 写全局。`Loaded::may_save` 的"更高 schema 版本不覆盖"保护对两类文件各自生效。
 
-- [ ] **Step 1: 写失败测试:** `with_no_project_the_global_layout_is_used`、`first_save_for_a_project_writes_its_own_file_and_leaves_the_global_one_untouched`、`switching_between_projects_swaps_the_layout`(A 把左宽改成 500、B 保持默认,切回 A 得到 500,切到 B 得到默认)、`newer_schema_project_file_is_never_overwritten`、`legacy_global_layout_seeds_a_project_without_losing_it`(项目文件不存在时用全局布局作初值,保存后全局文件字节不变)、`removed_projects_layout_file_is_ignored`(项目已不在注册表里,读它得到全局)。
-- [ ] **Step 2: 运行确认失败。**
-- [ ] **Step 3: 实现。** 迁移触发时机取"首次保存时",启动不批量迁移(留给实现者的决定里已定:最少写盘)。
-- [ ] **Step 4: 验证与提交。** 全量 `cargo test --workspace`。
+- [x] **Step 1: 写失败测试:** `with_no_project_the_global_layout_is_used`、`first_save_for_a_project_writes_its_own_file_and_leaves_the_global_one_untouched`、`switching_between_projects_swaps_the_layout`(A 把左宽改成 500、B 保持默认,切回 A 得到 500,切到 B 得到默认)、`newer_schema_project_file_is_never_overwritten`、`legacy_global_layout_seeds_a_project_without_losing_it`(项目文件不存在时用全局布局作初值,保存后全局文件字节不变)、`removed_projects_layout_file_is_ignored`(项目已不在注册表里,读它得到全局)。
+- [x] **Step 2: 运行确认失败。**
+- [x] **Step 3: 实现。** 迁移触发时机取"首次保存时",启动不批量迁移(留给实现者的决定里已定:最少写盘)。
+- [x] **Step 4: 验证与提交。** 全量 `cargo test --workspace`。
 
 ### Task 10: 顶栏拖窗保护接入与真机验证
 

@@ -49,6 +49,18 @@ impl ProjectTabs {
         self.active = Some(id);
     }
 
+    /// 加一个页签但**不**把它变成当前(当前页签是第一张新开的页签时除外)。
+    #[cfg(test)]
+    #[allow(dead_code)] // 只在测试里调用
+    pub fn add_tab(&mut self, id: i64) {
+        if !self.open.contains(&id) {
+            self.open.push(id);
+        }
+        if self.active.is_none() {
+            self.active = Some(id);
+        }
+    }
+
     /// 关页签。关的是当前页签时,切到左邻;没有左邻则切到新的第一个;一个都不剩则无当前页签。
     pub fn close_tab(&mut self, id: i64) {
         let Some(at) = self.open.iter().position(|t| *t == id) else {

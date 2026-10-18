@@ -259,6 +259,22 @@ impl ProjectsState {
         }
     }
 
+    /// 测试用:直接开页签(`Opened` 的后续步骤是异步任务,单元测试跑不到)。
+    #[cfg(test)]
+    #[allow(dead_code)] // 只在测试里调用
+    pub fn open_tab_for_test(&mut self, id: i64) {
+        self.tabs.open_tab(id);
+        self.save_tabs();
+    }
+
+    /// 测试用:`open_tab` 会顺带把新页签变成当前;要单独摆布"当前项目"时用它。
+    #[cfg(test)]
+    #[allow(dead_code)] // 只在测试里调用
+    pub fn add_tab_for_test(&mut self, id: i64) {
+        self.tabs.add_tab(id);
+        self.save_tabs();
+    }
+
     /// 顶栏页签行:已开项目的页签 + "＋"。
     pub fn tabs_view(&self) -> Element<'_, Message> {
         let tokens = color::current();

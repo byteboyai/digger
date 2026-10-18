@@ -123,6 +123,23 @@ pub fn defaults() -> Defaults {
 
 /// 读盘:文件不存在、损坏、或布局无法修复时用默认值;更高 schema 版本的文件拒绝覆盖(见 [`Loaded::may_save`])。
 pub fn load(path: &Path) -> Loaded {
+    load_scoped(path, None)
+}
+
+/// 按项目读盘:`project` 指向该项目自己的布局文件时读它,否则读全局 `path`(两者都没有就用默认值)。
+///
+/// 项目文件不存在、损坏或版本更高时**不**回落全局布局:项目有文件才算"该项目的布局";文件在但不可用
+/// 按骨架自己的规则处理(损坏 → 默认;版本更高 → 不覆盖)。全新项目(没有文件)以全局布局为初值,
+/// 首次保存才写项目文件,全局文件字节不动。
+pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
+    let Some(project_path) = project.filter(|p| p.exists()) else {
+        return load_file(path);
+    };
+    // 项目的布局文件存在但解析失败:这是该项目的布局,不能悄悄借用全局那份。
+    load_file(project_path)
+}
+
+fn load_file(path: &Path) -> Loaded {
     let json = std::fs::read_to_string(path).ok();
     persist::load(
         json.as_deref(),
@@ -147,6 +164,7 @@ pub fn update(model: &mut ShellModel, msg: ShellMsg) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytehost_chrome::Divider;
 
     #[test]
     fn panel_ids_are_the_persisted_wire_names_and_must_not_change() {
@@ -295,5 +313,147 @@ mod tests {
             pair_rects(&model, Side::Left).is_none(),
             "the editor is not a pair"
         );
+    }
+
+    // ---- 布局按项目一份(Task 9) ----
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("digger-shell-scoped-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn drag_left_width_to(model: &mut ShellModel, x: f32) {
+        update(model, ShellMsg::DividerPress(Divider::Zones));
+        update(model, ShellMsg::CursorMoved { x, y: 300.0 });
+        update(model, ShellMsg::PointerReleased);
+    }
+
+    #[test]
+    fn with_no_project_the_global_layout_is_used() {
+        let dir = tmp_dir("global");
+        let global = dir.join("shell.json");
+        let mut saved = defaults_layout();
+        drag_left_width_to(&mut saved, 544.0);
+        persist::save_atomic(&global, &saved).unwrap();
+        let loaded = load_scoped(&global, None);
+        assert!(matches!(loaded, Loaded::Restored(_)));
+        assert_eq!(loaded.model().left_width(), 500.0, "x minus the rail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn defaults_layout() -> ShellModel {
+        let d = defaults();
+        ShellModel::new(d.rails.clone(), d.selected.clone(), d.left_width, d.window).unwrap()
+    }
+
+    #[test]
+    fn first_save_for_a_project_writes_its_own_file_and_leaves_the_global_one_untouched() {
+        let dir = tmp_dir("first-save");
+        let global = dir.join("shell.json");
+        let project = dir.join("shell-projects").join("7.json");
+        let mut g = defaults_layout();
+        drag_left_width_to(&mut g, 544.0);
+        persist::save_atomic(&global, &g).unwrap();
+        let global_bytes = std::fs::read(&global).unwrap();
+
+        // 项目还没有自己的文件:以全局布局为初值(不复制文件)。
+        let loaded = load_scoped(&global, Some(&project));
+        assert_eq!(loaded.model().left_width(), 500.0);
+        assert!(!project.exists(), "loading never writes the project file");
+
+        // 第一次保存写项目文件;全局文件字节不动。
+        let mut own = loaded.into_model();
+        drag_left_width_to(&mut own, 744.0);
+        persist::save_atomic(&project, &own).unwrap();
+        assert_eq!(std::fs::read(&global).unwrap(), global_bytes);
+        let again = load_scoped(&global, Some(&project));
+        assert_eq!(again.model().left_width(), 700.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn switching_between_projects_swaps_the_layout() {
+        let dir = tmp_dir("switch");
+        let global = dir.join("shell.json");
+        let a_path = dir.join("a.json");
+        let b_path = dir.join("b.json");
+        // A 的左宽改成 500,并保存;全局写另一份宽度 400。
+        let mut a = defaults_layout();
+        drag_left_width_to(&mut a, 544.0);
+        persist::save_atomic(&a_path, &a).unwrap();
+        let mut g = defaults_layout();
+        drag_left_width_to(&mut g, 444.0);
+        persist::save_atomic(&global, &g).unwrap();
+
+        assert_eq!(
+            load_scoped(&global, Some(&a_path)).model().left_width(),
+            500.0
+        );
+        // B 没有文件:拿到全局的初值,而不是 A 的。
+        let b = load_scoped(&global, Some(&b_path));
+        assert_eq!(b.model().left_width(), 400.0);
+        // 切回 A 仍是 A 的。
+        assert_eq!(
+            load_scoped(&global, Some(&a_path)).model().left_width(),
+            500.0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn newer_schema_project_file_is_never_overwritten() {
+        let dir = tmp_dir("newer-project");
+        let global = dir.join("shell.json");
+        let project = dir.join("future.json");
+        let original = r#"{ "schema_version": 999, "left": ["digger.info"], "right": [] }"#;
+        std::fs::write(&project, original).unwrap();
+        let loaded = load_scoped(&global, Some(&project));
+        assert!(matches!(loaded, Loaded::Newer { .. }));
+        assert!(!loaded.may_save());
+        assert_eq!(std::fs::read_to_string(&project).unwrap(), original);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_global_layout_seeds_a_project_without_losing_it() {
+        let dir = tmp_dir("legacy");
+        let global = dir.join("shell.json");
+        let project = dir.join("p.json");
+        // 旧版本的全局文件(只有部分字段)。
+        std::fs::write(
+            &global,
+            r#"{ "left": ["digger.info", "digger.markdown"], "right": ["digger.apps"], "left_width": 500.0 }"#,
+        )
+        .unwrap();
+        let global_bytes = std::fs::read(&global).unwrap();
+        let mut first = load_scoped(&global, Some(&project)).into_model();
+        assert_eq!(first.left_width(), 500.0, "the user's width is kept");
+        assert_eq!(first.rail(Side::Left), [info_id(), markdown_id()]);
+        assert_eq!(
+            first.rail(Side::Right),
+            [apps_id(), usage_id(), project_id()]
+        );
+        drag_left_width_to(&mut first, 744.0);
+        persist::save_atomic(&project, &first).unwrap();
+        assert_eq!(std::fs::read(&global).unwrap(), global_bytes);
+        let rel = load_scoped(&global, Some(&project));
+        assert_eq!(rel.model().left_width(), 700.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removed_projects_layout_file_is_ignored() {
+        let dir = tmp_dir("removed");
+        let global = dir.join("shell.json");
+        let mut g = defaults_layout();
+        drag_left_width_to(&mut g, 444.0);
+        persist::save_atomic(&global, &g).unwrap();
+        // 注册表里已经没有 id=7:调用方传 None,读到的就是全局布局。
+        let loaded = load_scoped(&global, None);
+        assert_eq!(loaded.model().left_width(), 400.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
