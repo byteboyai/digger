@@ -112,14 +112,14 @@
 
 **Files:**
 - Modify:`crates/desktop/src/adapters/agent.rs`、`crates/desktop/src/product.rs`(`agent_view`、覆盖层)
-- Create:`crates/desktop/src/adapters/agent_display.rs`(`PanelDisplay` 实现与朴素页签)
+- Create:`crates/desktop/src/adapters/agent_display.rs`(`PanelDisplay` 实现与朴素页签)、`crates/desktop/src/adapters/menu_overlay.rs`(菜单弹层:外框 + 菜单行 + 分隔线 + 点空白/Esc 关闭 + 钳制在窗口内;若 S5b-1 已先建则复用并只补缺的部分;测试:`menu_is_clamped_inside_the_window`、`empty_item_list_opens_nothing`、`disabled_entries_are_not_clickable`、`separator_is_not_clickable`)
 - Test:`agent_display.rs`、`product.rs`
 
 **Interfaces:**
 - Produces:
   - `AgentDisplay<'a> { panel: &'a AgentPanel, pid: i64, term_style: &'a TermStyle, locale: &'a str }` 实现 `PanelDisplay<Msg>`:`wrap` → `Msg::Agent(pid, m)`;`panel_head` / `list_collapse_button`(按下发 `Msg::Shell(ShellMsg::TogglePane(agent_id))`)/ `tab_divider` / `pane_style` 仿 `ProjectPanel` 与 Dozer 区域度量;`hover_progress` 恒 0、`hover_tooltip_ready` 恒假(设计 D3);`term_style` / `terminal_focused`(= `panel.focus`)/ `ime_preedit` / `term_event`(把库的 `TermEvent` 映射成 `Msg::Agent(pid, ..)`,同时置 `focus = true`);`tab_bar_avail_px`;**朴素页签四件**:`panel_tab` = 状态点 + 标题的按钮 + 一个 × 按钮(`tab_core` 即可);`overflow_button` → `None`;`overflow_menu` → 空元素;`drag_surface` → 原样返回内容。文件头注明「S6d-3 替换为 Dozer 同款页签」。
   - `ProductShell::agent_view(&self, area: &BodyArea) -> Element<Msg>`:有项目且已启动 → `pair_view(area, 列表, 终端, Msg::Shell(DividerPress(Pair(side))), bg, panel_bg)`;列表块收起时只画终端块;顶部 `notice` 行;`Unavailable`/`Checking`/无项目沿用 S6d-1 的壳;终端块外层包 `ImeSink`。
-  - 选择器:`AgentRequest::ShowPicker { at }` → `AgentPanel.picker = Some(at)`,`stack!` 叠一层 byteui `context_menu`(条目取 `picker::picker_entries()`,图标与颜色取条目自带),点选发 `Message::PickerSelect(launch)`,点空白或 Esc 发 `PickerClose`。
+  - 选择器:`AgentRequest::ShowPicker { at }` → `AgentPanel.picker = Some(at)`,`stack!` 叠一层 `adapters/menu_overlay.rs` 的菜单(byteui 的 `interaction::context_menu` 只是「右键触发」封装(`MouseArea::on_right_press`),**没有**菜单外框与菜单项渲染——那部分(`shell`、`item`、分隔线、悬停样式)在 Dozer 的 `chrome/menu.rs`。Digger 因此自备一个菜单弹层模块 `crates/desktop/src/adapters/menu_overlay.rs`(外框与行样式对照 Dozer `chrome/menu.rs` 与 `workspace.json` 的 `context_menu` 区域;谁先做谁建,另一方复用),长期应迁入 byteui;条目取 `picker::picker_entries()`,图标与颜色取条目自带),点选发 `Message::PickerSelect(launch)`,点空白或 Esc 发 `PickerClose`。
   - 关闭确认:`close_confirm_spec(state, locale, wrap)` 返回的 `ConfirmDialog` 用 byteui 的对话框元素叠在面板上(同 `project_delete_confirm` 的覆盖方式)。
 - Consumes:库的 `view::{agent_list, terminal_pane}`、`picker::*`、`PanelDisplay`;S6d-1 的 `ImeSink`、`terminal_style()`。
 

@@ -6,7 +6,7 @@
 
 **Architecture:** 两段:(A)Dozer 里抽库,每一步 Dozer 都能编译且测试全绿,最后发新的 `libs-` tag;(C)Digger 升级依赖、接面板。库里原来"直接调原生菜单、直接开预览、直接读 `crate::project`"的三处耦合,分别换成:宿主请求队列(`FilesRequest::ShowContextMenu`)、跨面板命令(`PanelCommand::OpenFile`)、库内自带的文件系统层(`fs` 模块)。不支持的动作由产品注入的 `FilesCapabilities` 过滤,不显示。
 
-**Tech Stack:** Rust、iced 0.14、`dozer-panel-host`、`bytegit`(git 着色、监听、分支)、byteui(`interaction::context_menu`)、`dozer-i18n`。
+**Tech Stack:** Rust、iced 0.14、`dozer-panel-host`、`bytegit`(git 着色、监听、分支)、byteui(主题、图标;菜单渲染由 Digger 的 `adapters/menu_overlay.rs` 承担,见 Task 9)、`dozer-i18n`。
 
 **Spec:** `docs/superpowers/specs/2026-10-18-files-tree-s5b1-design.md`。模板:S5a 计划 `docs/superpowers/plans/2026-10-18-project-panel-s5a.md`(同一套 Dozer worktree、门禁登记方式)。
 
@@ -101,7 +101,7 @@
   - `pub fn update(ws_state: &mut WorkspaceState, app_state: &mut AppState, msg: Message, project_id: i64, handle: &tokio::runtime::Handle, emit: impl Fn(Message) + Send + 'static, external_apps: &ExternalAppsConfig, caps: &FilesCapabilities, locale: &str)`——原来的 `agent_terminal_visible: bool` 并入 `caps.send_to_agent`,不再单独传。
   - `pub fn view<'a>(ws_state: &'a WorkspaceState, width: Length, outer: Border, search_hover_t: f32, dotfiles_hover_t: f32, branch_hover_t: f32, locale: &'a str) -> Element<'a, Message, iced_widget::Theme, iced_renderer::Renderer>`(与原一致)。
   - `adapter::PanelDisplay`:沿用 S5a 的形状,只含树视图用到的方法(`hover_progress`、`panel_head`、`header_padding`、`locale`);`crate::workspace::tree_row_font_size` 与 `chrome::homespace::home_panel_head` 经它或 byteui 取得。
-  - 分支选择弹层 `branch_picker_popup` 改成返回 `Element`,由产品决定放在哪;其内部用到的 `chrome::menu::{item_row, shell_frosted}` 换成 byteui `interaction::context_menu` 的同类组件(外观以 Dozer 现状为准,若 byteui 没有等价物,先停下报告)。
+  - 分支选择弹层 `branch_picker_popup` 改成返回 `Element`,由产品决定放在哪;其内部用到的 `chrome::menu::{item_row, shell_frosted}` 库**不得**再依赖 `chrome::menu`。已核实 byteui 没有菜单外框/菜单项组件(`interaction::context_menu` 只是右键触发封装),原先「先停下报告」的条件已触发,处理定为:分支选择改为库只产出 `Vec<MenuItem<Message>>` 并经 `FilesRequest` 交给产品渲染(与右键菜单同一路径),Dozer 继续用原来的弹层,Digger 用 `adapters/menu_overlay.rs`。
 
 - [ ] **Step 1: 写失败测试**(随代码搬来的保持原样,另加):`late_completion_for_a_previous_project_is_dropped`(以 `project_id=1` 发起粘贴/删除,再用 `project_id=2` 调 `update`,送入带旧 id 的 `PasteDone` / `DeleteApplied` / `FileDropDone` / `StatusesRefreshed`,断言树与提示都不变)、`right_click_pushes_a_context_menu_request_instead_of_showing_one`(`RightClickAt` + `ContextMenuOpen` 后 `take_requests()` 有且仅有一条 `ShowContextMenu`,且 `items` 与 `context_menu_items` 同序)、`double_click_on_a_file_emits_open_file_command`(`TreeRowDoubleClick` 对文件行,`ws_state.host` 里出现 `PanelCommand::OpenFile { path }`)。
 - [ ] **Step 2: 运行确认失败。**
@@ -169,12 +169,12 @@
 - Test: `crates/desktop/src/adapters/files.rs`
 
 **Interfaces:**
-- Consumes: `PanelCommand::OpenFile { path }`、`FilesRequest::ShowContextMenu { items, at }`、byteui `interaction::context_menu`。
-- Produces: `adapters::files::open_with_default(path: &Path) -> std::io::Result<()>`(macOS 走 `open <path>`,不经 shell 拼接字符串,路径作为独立参数);产品把 `OpenFile` 映射到它;`ShowContextMenu` 渲染成 byteui 弹层,点选后把条目的 `msg` 送回 `Msg::Files`,点空白或按 Esc 关闭。
+- Consumes: `PanelCommand::OpenFile { path }`、`FilesRequest::ShowContextMenu { items, at }`、Digger 的 `adapters/menu_overlay.rs`(byteui 没有菜单渲染,见该条注)。
+- Produces: `adapters::files::open_with_default(path: &Path) -> std::io::Result<()>`(macOS 走 `open <path>`,不经 shell 拼接字符串,路径作为独立参数);产品把 `OpenFile` 映射到它;`ShowContextMenu` 渲染成 `menu_overlay` 弹层(byteui 的 `interaction::context_menu` 只是「右键触发」封装(`MouseArea::on_right_press`),**没有**菜单外框与菜单项渲染——那部分(`shell`、`item`、分隔线、悬停样式)在 Dozer 的 `chrome/menu.rs`。Digger 因此自备一个菜单弹层模块 `crates/desktop/src/adapters/menu_overlay.rs`(外框与行样式对照 Dozer `chrome/menu.rs` 与 `workspace.json` 的 `context_menu` 区域;谁先做谁建,另一方复用),长期应迁入 byteui),点选后把条目的 `msg` 送回 `Msg::Files`,点空白或按 Esc 关闭。
 
 - [ ] **Step 1: 写失败测试:** `open_file_command_uses_the_system_opener_with_the_path_as_a_single_argument`(把"执行 `open`"抽成可注入的函数,测试注入一个记录参数的假实现,路径含空格与引号时参数数组恰为 `[path]`)、`the_context_menu_request_is_not_dropped_when_no_project_is_open`(无项目时右键空白区域不 panic 也不弹空菜单)、`an_empty_item_list_does_not_open_a_popup`。
 - [ ] **Step 2: 运行确认失败。**
-- [ ] **Step 3: 实现。** 菜单弹层位置取 `at`,并钳制在窗口内(沿用 byteui `context_menu_width/height` 度量);删除确认与移动对话框用库里已有的 `delete_confirm_spec` / `files_move_card` 元素,放在面板内;分支选择弹层:若在 Digger 里放不下,降级为只读显示当前分支并把降级写进报告(设计 D6)。
+- [ ] **Step 3: 实现。** 菜单弹层位置取 `at`,并钳制在窗口内(沿用 byteui `geometry::context_menu_width/height` 度量);删除确认与移动对话框用库里已有的 `delete_confirm_spec` / `files_move_card` 元素,放在面板内;分支选择弹层:若在 Digger 里放不下,降级为只读显示当前分支并把降级写进报告(设计 D6)。
 - [ ] **Step 4: 验证与提交。**
 
 ### Task 10: 全量验证、真机回归与文档

@@ -79,7 +79,7 @@ Digger 要有与 Dozer 一模一样的 Agent 面板:在当前项目目录里新�
 
 ### 6.6 选择器、确认框与溢出菜单
 
-- 选择器:库发 `AgentRequest::ShowPicker { at }`,Digger 用 byteui `context_menu` 在 `at` 处弹层(条目取 `picker_entries()`),点选后回送 `PickerSelect`,点空白或 Esc 关闭。
+- 选择器:库发 `AgentRequest::ShowPicker { at }`,Digger 用自备的 `adapters/menu_overlay.rs`(byteui 的 `context_menu` 只是右键触发封装,没有菜单渲染)在 `at` 处弹层(条目取 `picker_entries()`),点选后回送 `PickerSelect`,点空白或 Esc 关闭。
 - 关闭确认:库的 `close_confirm_spec` 返回 `ConfirmDialog`,Digger 用 `stack!` 覆盖卡片(同 `project_delete_confirm` 的做法),不开独立窗口。
 - 溢出菜单:`overflow_menu` 同样是 `stack!` 覆盖层,锚点用最近的光标位置。
 - 这些覆盖层要盖住右栏的 webview 面板吗?Agent 面板自身没有 webview,但右栏切换时 apps/usage 的原生 webview 要在 Agent 面板可见时隐藏——沿用现有 `sync_native` 的可见性判断,不新增逻辑。

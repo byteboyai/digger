@@ -25,7 +25,7 @@ Digger 要重用 Dozer 的 project、files、agent、群聊、会话等面板,Do
 
 - 不做预览面板与预览引擎(S5b-2)。文件树与预览之间的拖拽随它一起到。
 - 不做:查看文件历史、回滚到上一版本、从树发起搜索弹窗、预览页签右键菜单、"发送到 Agent 上下文/终端"。这些在 Digger 里**不显示**(见 §6.3)。
-- 不做 macOS 原生 `NSMenu`:Digger 的右键菜单用 byteui 已有的 `interaction::context_menu` 渲染(iced 弹层)。
+- 不做 macOS 原生 `NSMenu`:Digger 的右键菜单用 iced 弹层渲染;byteui 的 `interaction::context_menu` 只是右键触发封装、没有菜单外框与菜单项,所以 Digger 自备 `adapters/menu_overlay.rs`(对照 Dozer `chrome/menu.rs`)。
 - 不改 `bytegit`、不改任何服务 trait 签名。
 - 不升级任何依赖。
 
@@ -57,7 +57,7 @@ Digger 要重用 Dozer 的 project、files、agent、群聊、会话等面板,Do
 |---|---|
 | `external_apps`(扩展名 → 外部 App 的配置表,82 处引用) | 配置表的类型与 `load_from` / `save_to` 搬进库;读写哪个文件由产品注入(Dozer 仍是 `config_dir()/external_apps.json`) |
 | `project::ProjectFsError` 及项目内文件操作(粘贴、移动) | 搬进库,保持"不越出项目目录"的检查 |
-| `menu_spec::MenuSpec` | 库自己产出菜单项列表(`FilesMenuItem`),产品用各自的后端渲染:Dozer 转 `MenuSpec`(原生/iced 两条路),Digger 转 byteui `context_menu` |
+| `menu_spec::MenuSpec` | 库自己产出菜单项列表(`FilesMenuItem`),产品用各自的后端渲染:Dozer 转 `MenuSpec`(原生/iced 两条路),Digger 转 `menu_overlay` |
 | `chrome`、`theme`、`app::TextInputTarget` | `PanelDisplay` 适配(同 S5a),取 byteui 已有的 |
 | `panel_host::*` | 用 `dozer-panel-host` 的请求追踪、`NoticeOutbox`、`HostOutbox`、`PanelCommand` |
 | `preview::*`(10 处) | 见 §6.2,树只发命令,不再直接碰预览 |
@@ -107,7 +107,7 @@ Digger 要重用 Dozer 的 project、files、agent、群聊、会话等面板,Do
 - D1 左栏顺序 `[project, files, markdown, info]`。
 - D2 新增 `PanelCommand::OpenFile`(而不是让树直接依赖一个"打开器"trait),与已有的 `SearchIn` / `ShowFileHistory` 同一个机制。
 - D3 能力开关用一个布尔结构体 `FilesCapabilities`,由产品注入。
-- D4 右键菜单在 Digger 用 byteui 的 `interaction::context_menu`,不做原生菜单。
+- D4 右键菜单在 Digger 用自备的 `adapters/menu_overlay.rs` 渲染(2026-10-18 核实 byteui 无菜单渲染,订正此前写法),不做原生菜单。
 - D5 本轮所有文件都走系统默认应用打开(Markdown 面板还没有打开文件的入口),不做内容嗅探。
 - D6 分支选择与 `git init` 留在范围内(它们只依赖 `bytegit`);若实现时发现分支弹层在 Digger 里放不下,降级为只读显示当前分支,并在报告里说明。
 
