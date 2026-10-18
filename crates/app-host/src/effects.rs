@@ -301,6 +301,8 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
                 );
                 false
             }
+            // 上游以后再加的变体:默认交给组合根(不 panic、不派发请求)。
+            _ => false,
         }
     }
 
