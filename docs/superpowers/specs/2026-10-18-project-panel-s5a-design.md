@@ -125,3 +125,11 @@ Digger 没有对话转录。面板里依赖它的动作(打开项目时的转录
 ## 10. 留给实现者决定
 
 库内部的模块切分细节、`ProjectOutbox` 的具体字段、`shell.json` 新 schema 的版本号与字段名、迁移的触发时机(启动时一次性,还是首次保存时)、拖窗保护里 unsafe 代码的封装位置。
+
+## 11. 修订(2026-10-18,写实施计划时读代码发现)
+
+1. **Dozer 的 Project 面板是配对视图**:左半 `project::view`(信息),右半 `project_preview_pane`(项目文件的预览页签,默认空白页显示 `BlankPaneInfo`)。右半属于 files(S5b)。**所以 S5a 里 Digger 的 Project 面板是单栏的信息面板**(`rules()` 返回 `None`,不配对),与 Dozer 的左半逐项一致;配对与预览随 S5b 一起到。这是 D7,是对"一模一样"的一处临时偏离。
+2. **共享宿主件已经存在**:`dozer-panel-host` 已提供 `ActivationCtx`、`RequestTrackers`、`scope_of` / `project_of`、`NoticeOutbox`、`HostOutbox`。§6.1 表里"库自带激活上下文 / `ProjectOutbox`"改为**直接用 `dozer-panel-host`**,不新造;`dozer-panel-todo` 就是这么做的。
+3. **拖窗保护的落点是 `bytehost-chrome`**(`platform_macos.rs`,它的文件头注释明确写着等顶栏有项目页签时再移植),不是 Digger 自己。这需要 bytehost 发新 tag,Digger 再升级。产品侧每帧要告诉它"鼠标是否悬停在顶栏的可交互控件上"。
+4. **脚手架比设计里写的更动磁盘**:`scaffold_steps()` 是四步——建 `.dozer/`、写 README、`git init`、写项目文档。设计 Q1/Q2 把它说成"只建 `.dozer/`"是不准确的。**计划里的默认改为:Digger 打开项目时不做任何静默脚手架**,只有用户在面板里点"修复项目"才执行这四步(行为与 Dozer 一致,但由用户触发)。项目描述仍写 `<项目>/.dozer/description.md`,那是用户在面板里主动编辑才写。
+5. **Dozer 一侧还要登记新 crate 的门禁**:`scripts/i18n/*.py` 的扫描路径、`scripts/audit/check_panel_boundary.py`(`extensions/` 下不得出现 `crate::app::App`,所以 `PanelDisplay` 的 `App` 实现要放 `host_adapters/`,同 todo)、`dozer-app/src/i18n.rs` 的 owner 注册。
