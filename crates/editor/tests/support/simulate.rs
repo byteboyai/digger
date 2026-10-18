@@ -555,13 +555,13 @@ impl Sim {
                 let b = self.blocks.remove(i);
                 let at = self.rng.below(self.blocks.len() + 1);
                 self.blocks.insert(at, b);
-                if op == Op::MoveAndEdit {
-                    if matches!(
+                if op == Op::MoveAndEdit
+                    && matches!(
                         self.blocks[at].c,
                         Content::Para { .. } | Content::List { .. } | Content::Quote { .. }
-                    ) {
-                        self.type_small(at);
-                    }
+                    )
+                {
+                    self.type_small(at);
                 }
                 true
             }

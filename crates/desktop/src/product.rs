@@ -493,7 +493,7 @@ fn top_bar_slots<'a>(projects: &'a crate::projects::ProjectsState) -> TopBarSlot
     let tabs = projects.tabs_view().map(Msg::Projects);
     TopBarSlots {
         title: title.into(),
-        tabs: tabs.into(),
+        tabs,
         right: iced::widget::Space::new().into(),
     }
 }

@@ -306,11 +306,11 @@ pub fn reconcile(
         }
     }
     for n in 0..new.len() {
-        if out[n].is_none() {
-            if let Some(o) = by_hash.get_mut(&nh[n]).and_then(|q| q.pop_front()) {
-                give(&mut out, &mut old_used, o, n, How::Moved, 1.0);
-                src[n] = Some(o);
-            }
+        if out[n].is_none()
+            && let Some(o) = by_hash.get_mut(&nh[n]).and_then(|q| q.pop_front())
+        {
+            give(&mut out, &mut old_used, o, n, How::Moved, 1.0);
+            src[n] = Some(o);
         }
     }
 
@@ -447,12 +447,12 @@ fn refine_duplicates(
     for h in keys {
         let (os, ns) = &groups[&h];
         for &n in ns {
-            if let Some(o) = src[n] {
-                if oh[o] == h {
-                    used[o] = false;
-                    out[n] = None;
-                    src[n] = None;
-                }
+            if let Some(o) = src[n]
+                && oh[o] == h
+            {
+                used[o] = false;
+                out[n] = None;
+                src[n] = None;
             }
         }
         let ctx = |o: usize, n: usize| -> u32 {

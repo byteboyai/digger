@@ -40,13 +40,18 @@ pub struct Step {
     pub expect: Option<String>,
 }
 
+/// the parse of the whole document at the last edit: its blocks plus each block's (id, kind name)
+type LastParse = (Vec<Parsed>, Vec<(u64, &'static str)>);
+/// one step's edits: (from, to, replacement) byte ranges
+type Patch = Vec<(usize, usize, String)>;
+
 #[derive(Clone)]
 pub struct Doc {
     pub text: String,
     pub version: u64,
     tracked: Vec<Tracked>,
     next_id: u64,
-    last: Option<(Vec<Parsed>, Vec<(u64, &'static str)>)>,
+    last: Option<LastParse>,
     /// old block id -> (id of the block that replaced it, plan run that did it): a rewrite gives the block a new id
     aliases: std::collections::HashMap<u64, (u64, u64)>,
     runs: u64,
@@ -137,6 +142,12 @@ fn kind_name(k: &Kind) -> (&'static str, Option<u8>) {
         Kind::Html => ("html", None),
         Kind::Footnote => ("footnote", None),
         Kind::Other => ("other", None),
+    }
+}
+
+impl Default for Doc {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -336,13 +347,14 @@ impl Doc {
             AgentOp::ReplaceBlock { id, text } => {
                 let (i, own) = self.resolve(id, run)?;
                 let (parsed, ids) = self.last.as_ref().unwrap();
-                if let Some(want) = expect {
-                    if !own && fnv(&parsed[i].text) != want {
-                        return Err(AgentError::Stale {
-                            id: id.clone(),
-                            current: parsed[i].text.clone(),
-                        });
-                    }
+                if let Some(want) = expect
+                    && !own
+                    && fnv(&parsed[i].text) != want
+                {
+                    return Err(AgentError::Stale {
+                        id: id.clone(),
+                        current: parsed[i].text.clone(),
+                    });
                 }
                 alias_from = Some((ids[i].0, parsed[i].start));
                 let (from, to) = ranges[i];
@@ -390,10 +402,10 @@ impl Doc {
         if let Some((old, start)) = alias_from {
             // the text before the block is unchanged, so the rewrite begins at the same byte offset
             let (parsed, ids) = self.last.as_ref().unwrap();
-            if let Some(j) = parsed.iter().position(|p| p.start == start) {
-                if ids[j].0 != old {
-                    self.aliases.insert(old, (ids[j].0, run));
-                }
+            if let Some(j) = parsed.iter().position(|p| p.start == start)
+                && ids[j].0 != old
+            {
+                self.aliases.insert(old, (ids[j].0, run));
             }
         }
         Ok(patch)
@@ -402,10 +414,7 @@ impl Doc {
     /// A plan is all or nothing: if a step cannot be resolved or is stale, the document is left exactly as it was.
     /// Each step is resolved when it runs, so a step may name a block an earlier step of the same plan rewrote.
     /// Returns one patch per step; each is in the coordinates of the version before it.
-    pub fn agent_plan(
-        &mut self,
-        steps: &[Step],
-    ) -> Result<Vec<Vec<(usize, usize, String)>>, (usize, AgentError)> {
+    pub fn agent_plan(&mut self, steps: &[Step]) -> Result<Vec<Patch>, (usize, AgentError)> {
         let saved = self.clone();
         self.runs += 1;
         let run = self.runs;
@@ -1124,7 +1133,7 @@ mod tests {
                     .chain(std::iter::once(a.text.len()))
                     .collect();
                 let at = chars[r.next() % chars.len()];
-                let (from, to, ins) = if r.next() % 3 == 0 {
+                let (from, to, ins) = if r.next().is_multiple_of(3) {
                     let e = chars[(chars.iter().position(|c| *c == at).unwrap() + r.next() % 6)
                         .min(chars.len() - 1)];
                     (at, e, String::new())

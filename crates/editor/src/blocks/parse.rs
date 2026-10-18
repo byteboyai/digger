@@ -57,10 +57,10 @@ pub fn parse_blocks(text: &str) -> Vec<Parsed> {
             }
             Event::End(_) => {
                 depth -= 1;
-                if depth == 0 {
-                    if let Some((kind, start)) = open.take() {
-                        push(&mut out, text, kind, start, range.end);
-                    }
+                if depth == 0
+                    && let Some((kind, start)) = open.take()
+                {
+                    push(&mut out, text, kind, start, range.end);
                 }
             }
             Event::Rule if depth == 0 => push(&mut out, text, Kind::Rule, range.start, range.end),
