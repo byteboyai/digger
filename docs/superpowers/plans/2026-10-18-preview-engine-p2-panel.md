@@ -30,7 +30,7 @@
 
 1. **加载状态机与代数防过期:** 过期的 `PreviewProfiled` / 超时 / `WindowIndex` / 恢复读写结果被丢弃;`reserve` 被拒绝后的降级;同一路径连续打开两次只留一个页签;`begin_load` / `advance_load` / `finish_load` / `fail_load` / `cancel_load` 的所有迁移;页签在加载中被关闭。(随代码搬走的测试覆盖,另补乱序组合。)→ Task 3、4。
 2. **脏页签与数据保护:** 关闭脏页签前先保存、冲突时「保留我的修改 / 丢弃并重载」、外部修改检测(`disk_mtime`)、保存失败不丢缓冲;搬迁不得改变任何一条的语义。→ Task 3、4。
-3. **视图模型与格式化:** 页签标题(同名文件消歧)、页签宽度估算、空白信息卡的大小 / 时间 / 千分位格式(中英文、0 字节、超大值、未来时间、纪元时间)、降级页文案按 `PreviewKind` × `PreviewCapabilities` 的全组合。→ Task 1、5。
+3. **视图模型与格式化:** 页签标题(`Blank` 占位用项目根目录名、脏页签加 ` *`;现状没有同名消歧)、页签宽度估算、空白信息卡的大小 / 时间 / 千分位格式(中英文、0 字节、超大值、未来时间、纪元时间)、降级页文案按 `PreviewKind` × `PreviewCapabilities` 的全组合。→ Task 1、5。
 4. **能力开关穷举:** 对 `PreviewKind` 的每个变体 × `PreviewCapabilities` 各特性开关组合:启用 → 原后端;关闭 → `Unsupported` / `External` 降级页与「用系统应用打开」动作;不 panic;路由结果不变。→ Task 4。
 5. **两个面板的隔离与消息映射:** Files 与 Project 同时有多个页签、同时加载、同时查找时互不影响;Dozer 适配层把库消息映射回原顶层消息后,每一条消息的目标面板正确(用全组合表测试固定)。→ Task 6。
 
@@ -46,7 +46,7 @@
 
 - [ ] **Step 1: 记录基线。** worktree 里 `cargo test --workspace 2>&1 | grep "^test result"`;再单独记 `cargo test -p dozer-app preview::` 与 `workspace::view` 的通过数;记 `grep -c "#\[test\]"` 对 `preview/state.rs`、`preview/view.rs`、`tabular/mod.rs`、`workspace/view.rs` 的值。
 - [ ] **Step 2: 抽出视图模型(单独一个提交,不搬位置)。** 在 `workspace/view.rs` 内把下列逻辑从 iced 构造函数里抽成纯函数 / 小结构体并让原函数改用它们:`preview_tab_display_title`(已纯)与 `preview_tab_display_width`;`BlankInfoModel`(= `preview_blank_info_card` 里的文件名、类型、大小、修改时间、路径等行的文案,含 `format_human_size`、`with_thousands_separator`、`format_time`、`month_name_en`、`civil_from_days`);`FallbackModel`(= `preview_fallback_page` 里按 `PreviewKind` / 错误 / 能力选择的标题、说明、按钮集合);`ConflictBarModel`;`ToolbarModel`(哪些模式切换按钮出现:渲染 / 代码、表格网格 / 原文、JSON 树 / 原文,取决于 `wry_toggle_eligible` 等)。
-- [ ] **Step 3: 写表驱动测试固定现状**(期望值按现状手推并写死,抽取前后都要过):`tab_titles_disambiguate_same_names_and_cjk_widths_are_stable`;`blank_info_formats_sizes_times_and_thousands_for_zh_and_en`(0 字节、1023 / 1024、数 GB、`u64::MAX`、纪元时间、未来时间);`fallback_model_for_every_preview_kind`(遍历 `PreviewKind` 的**每个**变体 × 能力全开 / 全关);`toolbar_model_shows_mode_buttons_only_for_eligible_tabs`;`conflict_bar_model_for_dirty_and_clean_tabs`。
+- [ ] **Step 3: 写表驱动测试固定现状**(期望值按现状手推并写死,抽取前后都要过):`tab_label_and_title_rules_are_stable_for_blank_dirty_and_cjk`;`blank_info_formats_sizes_times_and_thousands_for_zh_and_en`(0 字节、1023 / 1024、数 GB、`u64::MAX`、纪元时间、未来时间);`fallback_model_for_every_preview_kind`(遍历 `PreviewKind` 的**每个**变体 × 能力全开 / 全关);`toolbar_model_shows_mode_buttons_only_for_eligible_tabs`;`conflict_bar_model_for_dirty_and_clean_tabs`。
 - [ ] **Step 3b: 在改任何代码之前写 `WebviewSpec` 黄金。** `preview_webview_specs_match_the_golden`:构造若干组 `PreviewPane` 状态(Files / Project 各自:空、一个代码页签、一个渲染型页签、一个 JSON 页签、一个表格页签、多页签含挂起 / 加载中 / 冲突态),对 `desired_webviews` / `desired_editor_webviews` / `desired_json_webviews` / `desired_tabular_webviews` 的输出(`id`、`url`、`visible`、`park_offscreen`、绑定)序列化后与 `crates/dozer-app/tests/fixtures/preview_webview_specs_golden.txt` 逐字比较(`UPDATE_GOLDEN=1` 仅此一次,之后字节不得变)。
 - [ ] **Step 4: 函数清单(D1 的判定表)。** 输出 `docs/superpowers/notes/2026-10-18-preview-p2-inventory.md`:逐个列出 `workspace/state.rs`、`app/update.rs`、`app/app.rs` 里名字含 `preview` 的函数(约 60 个,起点见 `grep -n "fn .*preview"`),每个写 `进库 / 留 dozer-app(原因)/ 拆开(怎么拆)`。**这份清单是 Task 3–5 的施工图,交给用户过目后再继续。**
 - [ ] **Step 5: 验证并提交。**
