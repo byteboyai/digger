@@ -1116,6 +1116,8 @@ pub fn surface_task(window: iced::window::Id, action: SurfaceAction) -> iced::Ta
                     );
                 },
                 |_slot| {},
+                // Digger 一期应用无 i18n 桥:不注入脚本桥。
+                false,
                 move |built| match built.result {
                     Ok(()) => Message::SurfaceOpened(app.clone(), generation, slot, Ok(())),
                     Err(e) => Message::SurfaceOpened(app.clone(), generation, slot, Err(e)),

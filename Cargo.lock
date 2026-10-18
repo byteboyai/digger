@@ -401,8 +401,8 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytegit"
-version = "0.7.0"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.7.0#0a3d2ab3e835ed20119dcaa6ce1a88d0a075ae3f"
+version = "0.8.1"
+source = "git+https://github.com/byteboyai/bytegit?tag=v0.8.1#ae60c831e43bd5732e41124c29333560a36d5b7d"
 dependencies = [
  "git2",
  "serde",
@@ -411,6 +411,7 @@ dependencies = [
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.8#5626db1bce6548773adce141f135aa796356d2c7"
 dependencies = [
  "bytes",
  "flate2",
@@ -432,6 +433,7 @@ dependencies = [
 [[package]]
 name = "bytehost-chrome"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.8#5626db1bce6548773adce141f135aa796356d2c7"
 dependencies = [
  "block2 0.6.2",
  "bytehost-core",
@@ -450,6 +452,7 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.8#5626db1bce6548773adce141f135aa796356d2c7"
 dependencies = [
  "bytehost-apps",
  "tokio",
@@ -459,6 +462,7 @@ dependencies = [
 [[package]]
 name = "bytehost-core"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.8#5626db1bce6548773adce141f135aa796356d2c7"
 dependencies = [
  "serde",
  "serde_json",
@@ -467,6 +471,7 @@ dependencies = [
 [[package]]
 name = "bytehost-desktop"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.8#5626db1bce6548773adce141f135aa796356d2c7"
 dependencies = [
  "bytehost-core",
  "bytehost-webview",
@@ -484,6 +489,7 @@ dependencies = [
 [[package]]
 name = "bytehost-panel"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.8#5626db1bce6548773adce141f135aa796356d2c7"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -492,8 +498,11 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.8#5626db1bce6548773adce141f135aa796356d2c7"
 dependencies = [
  "bytehost-apps",
+ "serde",
+ "serde_json",
  "url",
  "uuid",
 ]
@@ -532,7 +541,8 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "byteui"
-version = "0.4.3"
+version = "0.4.5"
+source = "git+https://github.com/byteboyai/byteui?tag=v0.4.5#18980577f4d434ef887bda80278b13b342bcf282"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -1093,8 +1103,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dozer-i18n"
+version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-18a#868977ec7e58049ac876f500b9e06c2b00e0933c"
+dependencies = [
+ "dozer-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dozer-model"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-18a#868977ec7e58049ac876f500b9e06c2b00e0933c"
 dependencies = [
  "serde",
 ]
@@ -1102,11 +1123,12 @@ dependencies = [
 [[package]]
 name = "dozer-panel-usage"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?rev=67ab0e657d75135b882ace2f3aa7a56617776c60#67ab0e657d75135b882ace2f3aa7a56617776c60"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-18a#868977ec7e58049ac876f500b9e06c2b00e0933c"
 dependencies = [
  "bytehost-core",
  "bytehost-desktop",
  "byteui",
+ "dozer-i18n",
  "dozer-model",
  "dozer-services",
  "iced_renderer",
@@ -1119,6 +1141,7 @@ dependencies = [
 [[package]]
 name = "dozer-services"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-18a#868977ec7e58049ac876f500b9e06c2b00e0933c"
 dependencies = [
  "dozer-model",
 ]
@@ -1126,6 +1149,7 @@ dependencies = [
 [[package]]
 name = "dozer-store-project"
 version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-18a#868977ec7e58049ac876f500b9e06c2b00e0933c"
 dependencies = [
  "anyhow",
  "bytegit",

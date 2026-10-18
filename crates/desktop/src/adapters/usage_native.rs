@@ -42,12 +42,26 @@ fn probe_view(generation: u64) -> Probe {
             let frame = ns.frame();
             // SAFETY: 在窗口线程上读一个仍在句柄表里的、存活的 NSView 及其父视图的几何,只读。
             let bounds = unsafe { ns.superview() }.map(|parent| {
-                let y = if parent.isFlipped() { frame.origin.y } else { parent.frame().size.height - frame.origin.y - frame.size.height };
+                let y = if parent.isFlipped() {
+                    frame.origin.y
+                } else {
+                    parent.frame().size.height - frame.origin.y - frame.size.height
+                };
                 (frame.origin.x, y, frame.size.width, frame.size.height)
             });
-            Probe { exists: true, visible: !ns.isHidden(), bounds, handles }
+            Probe {
+                exists: true,
+                visible: !ns.isHidden(),
+                bounds,
+                handles,
+            }
         }
-        _ => Probe { exists: false, visible: false, bounds: None, handles },
+        _ => Probe {
+            exists: false,
+            visible: false,
+            bounds: None,
+            handles,
+        },
     })
 }
 
@@ -143,8 +157,14 @@ impl Native {
                 Event::Done
             });
         }
-        self.surface
-            .set_desired(dozer_panel_usage::current_view_payload(state));
+        self.surface.set_desired(dozer_model::Stamped::new(
+            // Digger 一期无语言切换:固定 `en` + 本地显示代 0。
+            dozer_model::LocaleStamp {
+                ui_locale: dozer_model::Locale::default_locale(),
+                locale_revision: 0,
+            },
+            dozer_panel_usage::current_view_payload(state),
+        ));
         if !self.live {
             self.live = true;
             self.bounds = Some(rect);

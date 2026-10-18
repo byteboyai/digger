@@ -443,6 +443,32 @@ fn a_ui_only_effect_is_left_to_the_composition_root() {
 }
 
 #[test]
+fn connection_lost_and_restored_are_left_to_the_composition_root() {
+    let rt = rt();
+    let _g = rt.enter();
+    let fake = FakeHost::new();
+    let requests = Arc::new(RequestTable::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink: Arc<dyn ReplySink> = Arc::new(ChannelSink(tx));
+    let host = HostService::with_api(fake, None);
+    let exec = Executor::new(host.api(), requests.clone(), sink, host.cancel_token());
+
+    assert!(
+        !exec.run(SCOPE, PANEL, 0, PanelEffect::ConnectionLost),
+        "断线由组合根处理"
+    );
+    assert!(
+        !exec.run(SCOPE, PANEL, 0, PanelEffect::ConnectionRestored),
+        "恢复由组合根处理"
+    );
+    assert!(
+        !requests.accept(RequestTable::new().dispatch(SCOPE, PANEL, 0, RequestKey::List)),
+        "不向请求台账派发任何请求"
+    );
+    assert!(rx.try_recv().is_err(), "不产生任何后台回信");
+}
+
+#[test]
 fn a_pushed_change_reaches_the_state_machine_as_a_refresh() {
     let rt = rt();
     let _g = rt.enter();
