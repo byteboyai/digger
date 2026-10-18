@@ -56,6 +56,9 @@ pub enum Msg {
     },
     /// 一次「选择文档链接文件/目录」的返回(库的 `Pick` 由宿主落地)。
     ProjectLinkPicked(dozer_panel_project::links::LinkTarget, Option<PathBuf>),
+    /// 面板上按下鼠标:编辑框此刻若还在编辑态,就是失焦了(iced 不报焦点事件,
+    /// 只能由"点别处"触发落盘)。
+    ProjectPointerDown,
     /// 面板生命周期自检的推进(仅 `DIGGER_LIFECYCLE_SELFTEST` 设置时出现)。
     Lifecycle(crate::lifecycle_selftest::Phase),
     Tick,
@@ -511,9 +514,14 @@ impl ProductShell {
 
     fn project_view(&self, area: &BodyArea) -> Element<'_, Msg> {
         let current = self.projects.current_project();
-        let body = self
-            .project
-            .view(current, Length::Fixed(area.rect.w), Border::default());
+        // 整个面板区域接一记"按下":编辑中点到别处就提交(见 `Msg::ProjectPointerDown`)。
+        let body: Element<'_, Msg> = iced::widget::mouse_area(self.project.view(
+            current,
+            Length::Fixed(area.rect.w),
+            Border::default(),
+        ))
+        .on_press(Msg::ProjectPointerDown)
+        .into();
         // 删除确认是覆盖在面板上的三选一卡片(库的 `project_delete_card`),有才盖。
         let overlay: Option<Element<'_, Msg>> = current
             .and_then(|p| self.project.delete_card(p.id))
@@ -815,6 +823,16 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::ProjectLinkPicked(_, None) => Task::none(),
+            Msg::ProjectPointerDown => {
+                let Some(project) = self.projects.current_project().cloned() else {
+                    return Task::none();
+                };
+                if self.project.is_editing(project.id) {
+                    self.project.blur_editors(&project);
+                    self.flush_project_notices();
+                }
+                Task::none()
+            }
             Msg::ProjectDeleteDone {
                 project_id,
                 deregistered,

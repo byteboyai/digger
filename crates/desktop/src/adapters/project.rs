@@ -637,6 +637,47 @@ impl ProjectPanel {
         );
     }
 
+    /// 名称编辑框失焦:库的 `submit_name_edit` 走一次改名(空名/未改名在库内是 no-op)。
+    pub fn submit_name_edit(&mut self, project: &ProjectInfo) {
+        let Some(handle) = self.handle.clone() else {
+            return;
+        };
+        let Some(state) = self.states.get_mut(&project.id) else {
+            return;
+        };
+        let project_id = project.id;
+        let current_name = project.name.clone();
+        let service = self.services.project.clone();
+        let tx = self.tx.clone();
+        let emit = move |m| {
+            let _ = tx.send(m);
+        };
+        dozer_panel_project::submit_name_edit(
+            state,
+            project_id,
+            &current_name,
+            service,
+            &handle,
+            emit,
+        );
+    }
+
+    /// 名称/描述编辑框是否正在编辑。用于"编辑中点了面板别处就提交"的失焦兜底。
+    pub fn is_editing(&self, project_id: i64) -> bool {
+        self.states
+            .get(&project_id)
+            .is_some_and(|s| s.name_editing.is_some() || s.description_editing.is_some())
+    }
+
+    /// 两个编辑框同时失焦:名称改名、描述写盘。与 Dozer 的 `blur_inputs` 同序。
+    pub fn blur_editors(&mut self, project: &ProjectInfo) {
+        let Some(state) = self.states.get_mut(&project.id) else {
+            return;
+        };
+        state.submit_description_edit_on_blur(Path::new(&project.path));
+        self.submit_name_edit(project);
+    }
+
     /// 排空待发提示。Digger 一期没有 Toast:调用方把文本落到 stderr,不静默吞掉。
     pub fn take_notices(&mut self, project_id: i64) -> Vec<(String, String)> {
         let Some(state) = self.states.get_mut(&project_id) else {
@@ -911,6 +952,45 @@ mod tests {
             };
             assert_eq!(intercept(&m), expected, "{m:?}");
         }
+    }
+
+    #[test]
+    fn blurring_the_name_editor_submits_the_pending_rename() {
+        let mut p = panel();
+        let dir = std::env::temp_dir().join(format!(
+            "digger-project-rename-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        p.attach_handle(rt.handle().clone());
+        let project = rt
+            .block_on(
+                p.services
+                    .project
+                    .open_project(dir.to_string_lossy().into_owned()),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!p.is_editing(project.id));
+        p.state_of(&project).name_editing = Some("renamed".into());
+        assert!(p.is_editing(project.id));
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        p.tx = tx;
+        p.blur_editors(&project);
+        let event = rt.block_on(async { rx.recv().await });
+        let Some(ProjectMessage::NameRenamed(id, Ok(updated))) = event else {
+            panic!("expected a rename, got {event:?}");
+        };
+        assert_eq!(id, project.id);
+        assert_eq!(updated.name, "renamed");
+        assert!(!p.is_editing(project.id));
     }
 
     #[test]
