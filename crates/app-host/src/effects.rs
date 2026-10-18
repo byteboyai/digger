@@ -214,7 +214,11 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
     }
 
     /// 执行一条应用面板 effect。返回 `false` = 由组合根处理(SetUrl/ClearUrl/Notice/SyncRail/
-    /// OpenSettingsApps/Subscribe)。
+    /// OpenSettingsApps/Subscribe/ConnectionLost/ConnectionRestored)。
+    ///
+    /// 断线/恢复只记一条日志:Digger 是进程内嵌入(ADR-011),订阅流只在接收端被丢弃时以
+    /// `Disconnected` 收尾,运行中真正"断线"的路径几乎不存在,不凭空设计 UI;以后要给用户看
+    /// 再在这里换映射(状态机只发中立效果)。
     pub fn run(
         &self,
         scope: ScopeId,
@@ -283,6 +287,20 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
             | PanelEffect::ClearUrl(_)
             | PanelEffect::OpenSettingsApps
             | PanelEffect::Notice { .. } => false,
+            PanelEffect::ConnectionLost => {
+                eprintln!(
+                    "digger: 应用变更订阅连续失败,宿主侧未处理 (scope={}, panel={})", // cli-output
+                    scope.0, panel.0
+                );
+                false
+            }
+            PanelEffect::ConnectionRestored => {
+                eprintln!(
+                    "digger: 应用变更订阅已恢复 (scope={}, panel={})", // cli-output
+                    scope.0, panel.0
+                );
+                false
+            }
         }
     }
 
