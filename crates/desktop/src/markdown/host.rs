@@ -33,7 +33,11 @@ fn bounds(rect: LogicalRect) -> wry::Rect {
 
 /// 初始化脚本:在页面脚本之前冻结握手 nonce 与运行模式。
 fn init_script(nonce: &str, mode: Mode) -> String {
-    let mode = if mode == Mode::SelfTest { "selftest" } else { "app" };
+    let mode = if mode == Mode::SelfTest {
+        "selftest"
+    } else {
+        "app"
+    };
     format!("window.__DIGGER__ = Object.freeze({{ nonce: {nonce:?}, mode: {mode:?} }});")
 }
 
@@ -66,7 +70,10 @@ pub fn build(
 
 /// Rust → 页面:`window.__md.receive(<json>)`。过期的 generation 不执行。
 pub fn send(generation: u64, json: &str) {
-    let js = format!("window.__md && window.__md.receive({})", serde_json::to_string(json).expect("string serialises"));
+    let js = format!(
+        "window.__md && window.__md.receive({})",
+        serde_json::to_string(json).expect("string serialises")
+    );
     with(generation, |view| {
         let _ = view.evaluate_script(&js);
     });
@@ -108,12 +115,26 @@ pub fn probe(generation: u64) -> Probe {
             let frame = ns.frame();
             // SAFETY: 在窗口线程上读一个仍在句柄表里的、存活的 NSView 及其父视图的几何,只读。
             let bounds = unsafe { ns.superview() }.map(|parent| {
-                let y = if parent.isFlipped() { frame.origin.y } else { parent.frame().size.height - frame.origin.y - frame.size.height };
+                let y = if parent.isFlipped() {
+                    frame.origin.y
+                } else {
+                    parent.frame().size.height - frame.origin.y - frame.size.height
+                };
                 (frame.origin.x, y, frame.size.width, frame.size.height)
             });
-            Probe { exists: true, visible: !view.webview().isHidden(), bounds, handles }
+            Probe {
+                exists: true,
+                visible: !view.webview().isHidden(),
+                bounds,
+                handles,
+            }
         }
-        _ => Probe { exists: false, visible: false, bounds: None, handles },
+        _ => Probe {
+            exists: false,
+            visible: false,
+            bounds: None,
+            handles,
+        },
     })
 }
 
@@ -166,7 +187,10 @@ mod tests {
     ];
 
     fn production_source() -> &'static str {
-        include_str!("host.rs").split("#[cfg(test)]").next().unwrap()
+        include_str!("host.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap()
     }
 
     fn check_pins(src: &str) -> Result<(), String> {
@@ -177,7 +201,11 @@ mod tests {
         }
         for needle in FORBIDDEN {
             // 文档注释里提到被禁用的名字是允许的:只查代码行
-            if src.lines().filter(|l| !l.trim_start().starts_with("//")).any(|l| l.contains(needle)) {
+            if src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .any(|l| l.contains(needle))
+            {
                 return Err(format!("出现了被禁用的东西:{needle}"));
             }
         }
@@ -193,15 +221,30 @@ mod tests {
     fn relaxing_any_one_pin_fails_the_check() {
         let src = production_source();
         for needle in REQUIRED {
-            assert!(check_pins(&src.replace(needle, "")).is_err(), "removing {needle} must be caught");
+            assert!(
+                check_pins(&src.replace(needle, "")).is_err(),
+                "removing {needle} must be caught"
+            );
         }
         for (from, to) in [
             (".with_devtools(false)", ".with_devtools(true)"),
-            (".with_download_started_handler(|_, _| false)", ".with_download_started_handler(|_, _| true)"),
-            ("wry::NewWindowResponse::Deny", "wry::NewWindowResponse::Allow"),
-            (".with_navigation_handler(|url| url == \"about:blank\")", ".with_navigation_handler(|_| true)"),
+            (
+                ".with_download_started_handler(|_, _| false)",
+                ".with_download_started_handler(|_, _| true)",
+            ),
+            (
+                "wry::NewWindowResponse::Deny",
+                "wry::NewWindowResponse::Allow",
+            ),
+            (
+                ".with_navigation_handler(|url| url == \"about:blank\")",
+                ".with_navigation_handler(|_| true)",
+            ),
         ] {
-            assert!(check_pins(&src.replace(from, to)).is_err(), "relaxing {from} must be caught");
+            assert!(
+                check_pins(&src.replace(from, to)).is_err(),
+                "relaxing {from} must be caught"
+            );
         }
     }
 
@@ -215,13 +258,19 @@ mod tests {
     #[test]
     fn the_init_script_freezes_the_nonce_and_mode() {
         let js = init_script("abc", Mode::Normal);
-        assert_eq!(js, r#"window.__DIGGER__ = Object.freeze({ nonce: "abc", mode: "app" });"#);
+        assert_eq!(
+            js,
+            r#"window.__DIGGER__ = Object.freeze({ nonce: "abc", mode: "app" });"#
+        );
         assert!(init_script("abc", Mode::SelfTest).contains(r#"mode: "selftest""#));
     }
 
     #[test]
     fn the_embedded_page_reads_the_nonce_the_host_injects() {
-        assert!(HTML.contains("__DIGGER__"), "the bundle must read window.__DIGGER__");
+        assert!(
+            HTML.contains("__DIGGER__"),
+            "the bundle must read window.__DIGGER__"
+        );
         assert!(!HTML.contains("localhost"), "no network origin in the page");
     }
 }

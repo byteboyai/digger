@@ -65,7 +65,15 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { low: 0.5, high: 0.6, kind_change: 0.8, min_chars: 4, short_chars: 12, short_ratio: 0.6, split: SplitPolicy::LargestPart }
+        Self {
+            low: 0.5,
+            high: 0.6,
+            kind_change: 0.8,
+            min_chars: 4,
+            short_chars: 12,
+            short_ratio: 0.6,
+            split: SplitPolicy::LargestPart,
+        }
     }
 }
 
@@ -80,7 +88,10 @@ struct Sig {
 }
 
 fn normalize(text: &str) -> Vec<char> {
-    text.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
 }
 
 /// Comparison tokens: character bigrams for CJK text, whole words for alphabetic text. Bigrams of Latin letters
@@ -138,7 +149,13 @@ fn sig(text: &str) -> Sig {
             }
         }
     }
-    Sig { norm, grams, total, units, unit_count }
+    Sig {
+        norm,
+        grams,
+        total,
+        units,
+        unit_count,
+    }
 }
 
 /// Shared sentences/lines over the larger count.
@@ -147,7 +164,11 @@ fn unit_overlap(a: &Sig, b: &Sig) -> f32 {
     if max < 2 {
         return 0.0; // a single unit gives no extra evidence beyond the character similarity
     }
-    let inter: usize = a.units.iter().map(|(u, &n)| n.min(*b.units.get(u).unwrap_or(&0)) as usize).sum();
+    let inter: usize = a
+        .units
+        .iter()
+        .map(|(u, &n)| n.min(*b.units.get(u).unwrap_or(&0)) as usize)
+        .sum();
     inter as f32 / max as f32
 }
 
@@ -163,8 +184,16 @@ fn dice(a: &Sig, b: &Sig) -> f32 {
     if a.total == 0 || b.total == 0 {
         return if a.norm == b.norm { 1.0 } else { 0.0 };
     }
-    let (small, big) = if a.grams.len() <= b.grams.len() { (a, b) } else { (b, a) };
-    let inter: usize = small.grams.iter().map(|(g, &n)| n.min(*big.grams.get(g).unwrap_or(&0)) as usize).sum();
+    let (small, big) = if a.grams.len() <= b.grams.len() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let inter: usize = small
+        .grams
+        .iter()
+        .map(|(g, &n)| n.min(*big.grams.get(g).unwrap_or(&0)) as usize)
+        .sum();
     2.0 * inter as f32 / (a.total + b.total) as f32
 }
 
@@ -188,7 +217,11 @@ impl Ctx<'_> {
         let (a, b) = (&self.osig[o], &self.nsig[n]);
         let shortest = a.norm.len().min(b.norm.len());
         let same_kind = self.old[o].kind == self.new[n].kind;
-        let mut need = if same_kind { threshold } else { threshold.max(self.cfg.kind_change) };
+        let mut need = if same_kind {
+            threshold
+        } else {
+            threshold.max(self.cfg.kind_change)
+        };
         let s = if shortest < self.cfg.min_chars {
             // too little text to say anything: only an identical text (syntax aside) is a match
             if a.norm == b.norm { 1.0 } else { return None }
@@ -200,30 +233,66 @@ impl Ctx<'_> {
             let d = dice(a, b).max(unit_overlap(a, b));
             // Bigram statistics are stricter than an edit ratio; when they say "somewhat similar", ask the
             // character edit ratio too (only for plausible pairs, so the cost stays small).
-            if d < need && d >= 0.25 { d.max(char_ratio(a, b)) } else { d }
+            if d < need && d >= 0.25 {
+                d.max(char_ratio(a, b))
+            } else {
+                d
+            }
         };
         (s >= need).then_some(s)
     }
 }
 
-pub fn reconcile(old: &[Tracked], new: &[Parsed], cfg: &Config, mut fresh: impl FnMut() -> BlockId) -> Vec<Assigned> {
-    let cx = Ctx { old, new, osig: old.iter().map(|b| sig(&b.text)).collect(), nsig: new.iter().map(|b| sig(&b.text)).collect(), cfg };
+pub fn reconcile(
+    old: &[Tracked],
+    new: &[Parsed],
+    cfg: &Config,
+    mut fresh: impl FnMut() -> BlockId,
+) -> Vec<Assigned> {
+    let cx = Ctx {
+        old,
+        new,
+        osig: old.iter().map(|b| sig(&b.text)).collect(),
+        nsig: new.iter().map(|b| sig(&b.text)).collect(),
+        cfg,
+    };
     let mut out: Vec<Option<Assigned>> = vec![None; new.len()];
     let mut old_used = vec![false; old.len()];
     let mut src: Vec<Option<usize>> = vec![None; new.len()];
-    let give = |out: &mut Vec<Option<Assigned>>, used: &mut Vec<bool>, o: usize, n: usize, how: How, conf: f32| {
+    let give = |out: &mut Vec<Option<Assigned>>,
+                used: &mut Vec<bool>,
+                o: usize,
+                n: usize,
+                how: How,
+                conf: f32| {
         debug_assert!(!used[o] && out[n].is_none());
         used[o] = true;
-        out[n] = Some(Assigned { id: old[o].id, how, confidence: conf });
+        out[n] = Some(Assigned {
+            id: old[o].id,
+            how,
+            confidence: conf,
+        });
     };
 
     // 1. exact hashes along the longest common subsequence.
     let oh: Vec<u64> = old.iter().map(|b| hash_of(&b.text)).collect();
     let nh: Vec<u64> = new.iter().map(|b| hash_of(&b.text)).collect();
     for op in capture_diff_slices(Algorithm::Myers, &oh, &nh) {
-        if let DiffOp::Equal { old_index, new_index, len } = op {
+        if let DiffOp::Equal {
+            old_index,
+            new_index,
+            len,
+        } = op
+        {
             for k in 0..len {
-                give(&mut out, &mut old_used, old_index + k, new_index + k, How::Exact, 1.0);
+                give(
+                    &mut out,
+                    &mut old_used,
+                    old_index + k,
+                    new_index + k,
+                    How::Exact,
+                    1.0,
+                );
                 src[new_index + k] = Some(old_index + k);
             }
         }
@@ -249,13 +318,19 @@ pub fn reconcile(old: &[Tracked], new: &[Parsed], cfg: &Config, mut fresh: impl 
     refine_duplicates(&oh, &nh, &mut out, &mut old_used, &mut src, old);
 
     // Anchors: the exact matches that keep the document order (longest increasing run); the rest are moves.
-    let pairs: Vec<(usize, usize)> = (0..new.len()).filter_map(|n| src[n].map(|o| (o, n))).collect();
+    let pairs: Vec<(usize, usize)> = (0..new.len())
+        .filter_map(|n| src[n].map(|o| (o, n)))
+        .collect();
     let chain = lis(&pairs.iter().map(|p| p.0).collect::<Vec<_>>());
     let anchors: Vec<(usize, usize)> = chain.iter().map(|&i| pairs[i]).collect();
     let in_chain: std::collections::HashSet<usize> = anchors.iter().map(|a| a.1).collect();
     for &(_, n) in &pairs {
         if let Some(a) = out[n].as_mut() {
-            a.how = if in_chain.contains(&n) { How::Exact } else { How::Moved };
+            a.how = if in_chain.contains(&n) {
+                How::Exact
+            } else {
+                How::Moved
+            };
         }
     }
 
@@ -264,8 +339,12 @@ pub fn reconcile(old: &[Tracked], new: &[Parsed], cfg: &Config, mut fresh: impl 
     bounds.extend(anchors.iter().map(|&(o, n)| (o as i64, n as i64)));
     bounds.push((old.len() as i64, new.len() as i64));
     for w in bounds.windows(2) {
-        let os: Vec<usize> = ((w[0].0 + 1) as usize..w[1].0 as usize).filter(|&i| !old_used[i]).collect();
-        let ns: Vec<usize> = ((w[0].1 + 1) as usize..w[1].1 as usize).filter(|&i| out[i].is_none()).collect();
+        let os: Vec<usize> = ((w[0].0 + 1) as usize..w[1].0 as usize)
+            .filter(|&i| !old_used[i])
+            .collect();
+        let ns: Vec<usize> = ((w[0].1 + 1) as usize..w[1].1 as usize)
+            .filter(|&i| out[i].is_none())
+            .collect();
         if os.is_empty() || ns.is_empty() {
             continue;
         }
@@ -287,7 +366,12 @@ pub fn reconcile(old: &[Tracked], new: &[Parsed], cfg: &Config, mut fresh: impl 
                 }
             }
         }
-        cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        cands.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap()
+                .then(a.1.cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+        });
         for (s, o, n) in cands {
             if !old_used[o] && out[n].is_none() {
                 give(&mut out, &mut old_used, o, n, How::Similar, s);
@@ -296,7 +380,15 @@ pub fn reconcile(old: &[Tracked], new: &[Parsed], cfg: &Config, mut fresh: impl 
     }
 
     // 5. new blocks.
-    out.into_iter().map(|a| a.unwrap_or_else(|| Assigned { id: fresh(), how: How::Fresh, confidence: 1.0 })).collect()
+    out.into_iter()
+        .map(|a| {
+            a.unwrap_or_else(|| Assigned {
+                id: fresh(),
+                how: How::Fresh,
+                confidence: 1.0,
+            })
+        })
+        .collect()
 }
 
 /// Indices of a longest strictly increasing subsequence of `a`.
@@ -308,7 +400,11 @@ fn lis(a: &[usize]) -> Vec<usize> {
         if pos > 0 {
             prev[i] = tails[pos - 1];
         }
-        if pos == tails.len() { tails.push(i) } else { tails[pos] = i }
+        if pos == tails.len() {
+            tails.push(i)
+        } else {
+            tails[pos] = i
+        }
     }
     let mut out = Vec::new();
     let mut i = tails.last().copied().unwrap_or(usize::MAX);
@@ -322,22 +418,54 @@ fn lis(a: &[usize]) -> Vec<usize> {
 
 /// For each group of identical blocks (same hash) that occurs more than once on either side, redo the pairing
 /// of old to new by how many of the immediate neighbours also match, then by closeness of rank.
-fn refine_duplicates(oh: &[u64], nh: &[u64], out: &mut [Option<Assigned>], used: &mut [bool], src: &mut [Option<usize>], old: &[Tracked]) {
+fn refine_duplicates(
+    oh: &[u64],
+    nh: &[u64],
+    out: &mut [Option<Assigned>],
+    used: &mut [bool],
+    src: &mut [Option<usize>],
+    old: &[Tracked],
+) {
     let mut groups: HashMap<u64, (Vec<usize>, Vec<usize>)> = HashMap::new();
-    for (i, h) in oh.iter().enumerate() { groups.entry(*h).or_default().0.push(i); }
-    for (i, h) in nh.iter().enumerate() { groups.entry(*h).or_default().1.push(i); }
-    let mut keys: Vec<u64> = groups.iter().filter(|(_, (o, n))| !o.is_empty() && !n.is_empty() && (o.len() > 1 || n.len() > 1) && o.len() * n.len() <= 100_000).map(|(h, _)| *h).collect();
+    for (i, h) in oh.iter().enumerate() {
+        groups.entry(*h).or_default().0.push(i);
+    }
+    for (i, h) in nh.iter().enumerate() {
+        groups.entry(*h).or_default().1.push(i);
+    }
+    let mut keys: Vec<u64> = groups
+        .iter()
+        .filter(|(_, (o, n))| {
+            !o.is_empty()
+                && !n.is_empty()
+                && (o.len() > 1 || n.len() > 1)
+                && o.len() * n.len() <= 100_000
+        })
+        .map(|(h, _)| *h)
+        .collect();
     keys.sort();
     for h in keys {
         let (os, ns) = &groups[&h];
         for &n in ns {
             if let Some(o) = src[n] {
-                if oh[o] == h { used[o] = false; out[n] = None; src[n] = None; }
+                if oh[o] == h {
+                    used[o] = false;
+                    out[n] = None;
+                    src[n] = None;
+                }
             }
         }
         let ctx = |o: usize, n: usize| -> u32 {
-            let side = |a: Option<usize>, b: Option<usize>, ha: &[u64], hb: &[u64]| matches!((a, b), (Some(x), Some(y)) if ha[x] == hb[y]) as u32;
-            2 * (side(o.checked_sub(1), n.checked_sub(1), oh, nh) + side((o + 1 < oh.len()).then_some(o + 1), (n + 1 < nh.len()).then_some(n + 1), oh, nh))
+            let side = |a: Option<usize>, b: Option<usize>, ha: &[u64], hb: &[u64]| {
+                matches!((a, b), (Some(x), Some(y)) if ha[x] == hb[y]) as u32
+            };
+            2 * (side(o.checked_sub(1), n.checked_sub(1), oh, nh)
+                + side(
+                    (o + 1 < oh.len()).then_some(o + 1),
+                    (n + 1 < nh.len()).then_some(n + 1),
+                    oh,
+                    nh,
+                ))
         };
         let mut cands: Vec<(u32, usize, usize, usize)> = Vec::new();
         for (ro, &o) in os.iter().enumerate() {
@@ -345,11 +473,20 @@ fn refine_duplicates(oh: &[u64], nh: &[u64], out: &mut [Option<Assigned>], used:
                 cands.push((ctx(o, n), ro.abs_diff(rn), o, n));
             }
         }
-        cands.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
+        cands.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(a.1.cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+        });
         for (_, _, o, n) in cands {
             if !used[o] && out[n].is_none() {
                 used[o] = true;
-                out[n] = Some(Assigned { id: old[o].id, how: How::Exact, confidence: 1.0 });
+                out[n] = Some(Assigned {
+                    id: old[o].id,
+                    how: How::Exact,
+                    confidence: 1.0,
+                });
                 src[n] = Some(o);
             }
         }
@@ -359,7 +496,11 @@ fn refine_duplicates(oh: &[u64], nh: &[u64], out: &mut [Option<Assigned>], used:
 fn concat_sig(cx: &Ctx, idx: &[usize], old_side: bool) -> Sig {
     let mut s = String::new();
     for &i in idx {
-        s.push_str(if old_side { &cx.old[i].text } else { &cx.new[i].text });
+        s.push_str(if old_side {
+            &cx.old[i].text
+        } else {
+            &cx.new[i].text
+        });
         s.push('\n');
     }
     sig(&s)
@@ -367,8 +508,16 @@ fn concat_sig(cx: &Ctx, idx: &[usize], old_side: bool) -> Sig {
 
 /// Tokens of `a` that also occur in `b` (multiset intersection size).
 fn overlap(a: &Sig, b: &Sig) -> usize {
-    let (small, big) = if a.grams.len() <= b.grams.len() { (a, b) } else { (b, a) };
-    small.grams.iter().map(|(g, &n)| n.min(*big.grams.get(g).unwrap_or(&0)) as usize).sum()
+    let (small, big) = if a.grams.len() <= b.grams.len() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    small
+        .grams
+        .iter()
+        .map(|(g, &n)| n.min(*big.grams.get(g).unwrap_or(&0)) as usize)
+        .sum()
 }
 
 /// A part counts as a fragment of the other side when most of its own tokens come from it.
@@ -377,36 +526,70 @@ const FRAGMENT: f32 = 0.6;
 /// One old block that became several (split), or several that became one (merge). It only counts when at least
 /// two parts are real fragments of the other side AND together they still add up to it; a block that merely sits
 /// next to an unrelated new block is an ordinary edit, not a split.
-fn split_or_merge(cx: &Ctx, os: &[usize], ns: &[usize], out: &mut [Option<Assigned>], used: &mut [bool]) -> bool {
+fn split_or_merge(
+    cx: &Ctx,
+    os: &[usize],
+    ns: &[usize],
+    out: &mut [Option<Assigned>],
+    used: &mut [bool],
+) -> bool {
     // "Largest" means the most text, in characters, so the answer does not depend on the script used.
     let choose = |parts: &[(usize, usize)], size: &dyn Fn(usize) -> usize| -> usize {
         match cx.cfg.split {
             SplitPolicy::FirstPart => parts[0].0,
-            SplitPolicy::LargestPart => parts.iter().fold(parts[0], |best, &p| if size(p.0) > size(best.0) { p } else { best }).0,
+            SplitPolicy::LargestPart => {
+                parts
+                    .iter()
+                    .fold(
+                        parts[0],
+                        |best, &p| if size(p.0) > size(best.0) { p } else { best },
+                    )
+                    .0
+            }
         }
     };
     if os.len() == 1 && (2..=4).contains(&ns.len()) {
         let o = os[0];
-        let frags: Vec<(usize, usize)> = ns.iter().map(|&n| (n, overlap(&cx.osig[o], &cx.nsig[n]))).filter(|&(n, ov)| cx.nsig[n].total > 0 && ov as f32 / cx.nsig[n].total as f32 >= FRAGMENT).collect();
+        let frags: Vec<(usize, usize)> = ns
+            .iter()
+            .map(|&n| (n, overlap(&cx.osig[o], &cx.nsig[n])))
+            .filter(|&(n, ov)| {
+                cx.nsig[n].total > 0 && ov as f32 / cx.nsig[n].total as f32 >= FRAGMENT
+            })
+            .collect();
         if frags.len() >= 2 {
             let fr: Vec<usize> = frags.iter().map(|f| f.0).collect();
             if dice(&cx.osig[o], &concat_sig(cx, &fr, false)) >= cx.cfg.high {
                 let n = choose(&frags, &|n| cx.nsig[n].norm.len());
                 used[o] = true;
-                out[n] = Some(Assigned { id: cx.old[o].id, how: How::Split, confidence: 0.8 });
+                out[n] = Some(Assigned {
+                    id: cx.old[o].id,
+                    how: How::Split,
+                    confidence: 0.8,
+                });
                 return true;
             }
         }
     }
     if ns.len() == 1 && (2..=4).contains(&os.len()) {
         let n = ns[0];
-        let frags: Vec<(usize, usize)> = os.iter().map(|&o| (o, overlap(&cx.osig[o], &cx.nsig[n]))).filter(|&(o, ov)| cx.osig[o].total > 0 && ov as f32 / cx.osig[o].total as f32 >= FRAGMENT).collect();
+        let frags: Vec<(usize, usize)> = os
+            .iter()
+            .map(|&o| (o, overlap(&cx.osig[o], &cx.nsig[n])))
+            .filter(|&(o, ov)| {
+                cx.osig[o].total > 0 && ov as f32 / cx.osig[o].total as f32 >= FRAGMENT
+            })
+            .collect();
         if frags.len() >= 2 {
             let fr: Vec<usize> = frags.iter().map(|f| f.0).collect();
             if dice(&concat_sig(cx, &fr, true), &cx.nsig[n]) >= cx.cfg.high {
                 let o = choose(&frags, &|o| cx.osig[o].norm.len());
                 used[o] = true;
-                out[n] = Some(Assigned { id: cx.old[o].id, how: How::Merged, confidence: 0.8 });
+                out[n] = Some(Assigned {
+                    id: cx.old[o].id,
+                    how: How::Merged,
+                    confidence: 0.8,
+                });
                 return true;
             }
         }
@@ -429,7 +612,9 @@ fn align(cx: &Ctx, os: &[usize], ns: &[usize], out: &mut [Option<Assigned>], use
     let mut best = vec![vec![0f32; b + 1]; a + 1];
     for i in 1..=a {
         for j in 1..=b {
-            let diag = s[i - 1][j - 1].map(|v| best[i - 1][j - 1] + v).unwrap_or(f32::MIN);
+            let diag = s[i - 1][j - 1]
+                .map(|v| best[i - 1][j - 1] + v)
+                .unwrap_or(f32::MIN);
             best[i][j] = best[i - 1][j].max(best[i][j - 1]).max(diag);
         }
     }
@@ -439,7 +624,11 @@ fn align(cx: &Ctx, os: &[usize], ns: &[usize], out: &mut [Option<Assigned>], use
         if diag.is_some_and(|d| (d - best[i][j]).abs() < 1e-6) {
             let (o, n) = (os[i - 1], ns[j - 1]);
             used[o] = true;
-            out[n] = Some(Assigned { id: cx.old[o].id, how: How::Similar, confidence: s[i - 1][j - 1].unwrap() });
+            out[n] = Some(Assigned {
+                id: cx.old[o].id,
+                how: How::Similar,
+                confidence: s[i - 1][j - 1].unwrap(),
+            });
             i -= 1;
             j -= 1;
         } else if best[i - 1][j] >= best[i][j - 1] {
@@ -456,11 +645,22 @@ mod tests {
     use crate::blocks::parse::parse_blocks;
 
     fn track(text: &str, first_id: u64) -> Vec<Tracked> {
-        parse_blocks(text).into_iter().enumerate().map(|(i, p)| Tracked { id: first_id + i as u64, kind: p.kind, text: p.text }).collect()
+        parse_blocks(text)
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| Tracked {
+                id: first_id + i as u64,
+                kind: p.kind,
+                text: p.text,
+            })
+            .collect()
     }
     fn run(old: &[Tracked], new_text: &str) -> Vec<Assigned> {
         let mut next = 1000;
-        reconcile(old, &parse_blocks(new_text), &Config::default(), || { next += 1; next })
+        reconcile(old, &parse_blocks(new_text), &Config::default(), || {
+            next += 1;
+            next
+        })
     }
     fn ids(a: &[Assigned]) -> Vec<u64> {
         a.iter().map(|x| x.id).collect()
@@ -482,9 +682,17 @@ mod tests {
         let edited = BASE.replace("留下一个开放的问题", "留下一个开放的问题吗");
         assert_eq!(ids(&run(&old, &edited)), [1, 2, 3, 4]);
         let mut big = String::from("# 序章\n\n");
-        for i in 0..40 { big.push_str(&format!("序章里的第{i}段，讲述与本章无关的另一件事情，字数不少。\n\n")); }
+        for i in 0..40 {
+            big.push_str(&format!(
+                "序章里的第{i}段，讲述与本章无关的另一件事情，字数不少。\n\n"
+            ));
+        }
         let r = run(&old, &format!("{big}{BASE}"));
-        assert_eq!(&ids(&r)[r.len() - 4..], [1, 2, 3, 4], "the original blocks keep their ids after 41 new blocks");
+        assert_eq!(
+            &ids(&r)[r.len() - 4..],
+            [1, 2, 3, 4],
+            "the original blocks keep their ids after 41 new blocks"
+        );
         assert!(r[..r.len() - 4].iter().all(|a| a.how == How::Fresh));
     }
 
@@ -492,7 +700,10 @@ mod tests {
     fn moved_and_deleted_blocks() {
         let old = track(BASE, 1);
         let blocks = parse_blocks(BASE);
-        let moved = format!("{}\n\n{}\n\n{}\n\n{}\n", blocks[0].text, blocks[3].text, blocks[1].text, blocks[2].text);
+        let moved = format!(
+            "{}\n\n{}\n\n{}\n\n{}\n",
+            blocks[0].text, blocks[3].text, blocks[1].text, blocks[2].text
+        );
         assert_eq!(ids(&run(&old, &moved)), [1, 4, 2, 3]);
         let deleted = format!("{}\n\n{}\n", blocks[0].text, blocks[2].text);
         assert_eq!(ids(&run(&old, &deleted)), [1, 3]);
@@ -508,7 +719,10 @@ mod tests {
     #[test]
     fn unrelated_new_text_never_steals_an_id() {
         let old = track(BASE, 1);
-        let r = run(&old, "# 完全不同\n\nA completely different English paragraph about databases.\n\n另一段毫无关系的中文内容，讨论的是烹饪与旅行。\n");
+        let r = run(
+            &old,
+            "# 完全不同\n\nA completely different English paragraph about databases.\n\n另一段毫无关系的中文内容，讨论的是烹饪与旅行。\n",
+        );
         assert!(r.iter().all(|a| a.how == How::Fresh), "{r:?}");
     }
 
@@ -519,54 +733,108 @@ mod tests {
         let (a, b) = p.split_once("。他").unwrap();
         let split = BASE.replace(&p, &format!("{a}。\n\n他{b}"));
         let mut next = 1000;
-        let largest = reconcile(&old, &parse_blocks(&split), &Config::default(), || { next += 1; next });
-        assert_eq!(largest.iter().filter(|x| x.id == 2).count(), 1, "the id survives on exactly one part");
-        let cfg = Config { split: SplitPolicy::FirstPart, ..Config::default() };
-        let first = reconcile(&old, &parse_blocks(&split), &cfg, || { next += 1; next });
+        let largest = reconcile(&old, &parse_blocks(&split), &Config::default(), || {
+            next += 1;
+            next
+        });
+        assert_eq!(
+            largest.iter().filter(|x| x.id == 2).count(),
+            1,
+            "the id survives on exactly one part"
+        );
+        let cfg = Config {
+            split: SplitPolicy::FirstPart,
+            ..Config::default()
+        };
+        let first = reconcile(&old, &parse_blocks(&split), &cfg, || {
+            next += 1;
+            next
+        });
         assert_eq!(first[1].id, 2, "first part keeps the id");
         // merge the last two paragraphs
         let blocks = parse_blocks(BASE);
-        let merged = format!("{}\n\n{}\n\n{} {}\n", blocks[0].text, blocks[1].text, blocks[2].text, blocks[3].text);
-        let r = reconcile(&old, &parse_blocks(&merged), &cfg, || { next += 1; next });
-        assert_eq!(ids(&r), [1, 2, 3], "merged block keeps the first id under FirstPart");
+        let merged = format!(
+            "{}\n\n{}\n\n{} {}\n",
+            blocks[0].text, blocks[1].text, blocks[2].text, blocks[3].text
+        );
+        let r = reconcile(&old, &parse_blocks(&merged), &cfg, || {
+            next += 1;
+            next
+        });
+        assert_eq!(
+            ids(&r),
+            [1, 2, 3],
+            "merged block keeps the first id under FirstPart"
+        );
     }
 
     #[test]
     fn short_blocks_do_not_match_by_chance() {
         let old = track("# 第一章\n\n正文内容足够长，用来占位的一段话。\n", 1);
         let r = run(&old, "# 第二章\n\n正文内容足够长，用来占位的一段话。\n");
-        assert_eq!(r[0].how, How::Fresh, "第一章 vs 第二章 share no bigram and are too short to guess");
+        assert_eq!(
+            r[0].how,
+            How::Fresh,
+            "第一章 vs 第二章 share no bigram and are too short to guess"
+        );
         assert_eq!(r[1].id, 2);
     }
 
     #[test]
     fn a_short_block_survives_a_small_edit() {
-        let old = track("# 总览\n\n> 的屋行好次开，西那。\n\n正文内容足够长，用来占位的一段话，这里再多写一些文字。\n", 1);
-        let r = run(&old, "# 总览\n\n> 的次开，西那。\n\n正文内容足够长，用来占位的一段话，这里再多写一些文字。\n");
+        let old = track(
+            "# 总览\n\n> 的屋行好次开，西那。\n\n正文内容足够长，用来占位的一段话，这里再多写一些文字。\n",
+            1,
+        );
+        let r = run(
+            &old,
+            "# 总览\n\n> 的次开，西那。\n\n正文内容足够长，用来占位的一段话，这里再多写一些文字。\n",
+        );
         assert_eq!(ids(&r), [1, 2, 3]);
     }
 
     #[test]
     fn half_untouched_sentences_keep_the_id_even_when_the_rest_is_rewritten() {
-        let old = track("# 题\n\n第一句话是这样写的，保持不变。第二句话也保持不变，没有任何改动。第三句话原本很长很长，写了许多许多内容在里面，现在它要被整个换掉了。\n", 1);
-        let r = run(&old, "# 题\n\n第一句话是这样写的，保持不变。第二句话也保持不变，没有任何改动。This is an entirely new third sentence written in English, of a similar length.\n");
+        let old = track(
+            "# 题\n\n第一句话是这样写的，保持不变。第二句话也保持不变，没有任何改动。第三句话原本很长很长，写了许多许多内容在里面，现在它要被整个换掉了。\n",
+            1,
+        );
+        let r = run(
+            &old,
+            "# 题\n\n第一句话是这样写的，保持不变。第二句话也保持不变，没有任何改动。This is an entirely new third sentence written in English, of a similar length.\n",
+        );
         assert_eq!(ids(&r), [1, 2]);
     }
 
     #[test]
     fn identical_blocks_are_assigned_by_their_surroundings() {
-        let old = track("甲段落内容。\n\n重复的一段话，出现在两个地方。\n\n乙段落内容。\n", 1);
+        let old = track(
+            "甲段落内容。\n\n重复的一段话，出现在两个地方。\n\n乙段落内容。\n",
+            1,
+        );
         // a copy of the repeated paragraph is pasted ABOVE the original: the original keeps its neighbours
-        let r = run(&old, "重复的一段话，出现在两个地方。\n\n甲段落内容。\n\n重复的一段话，出现在两个地方。\n\n乙段落内容。\n");
-        assert_eq!(r[2].id, 2, "the block still between 甲 and 乙 is the original");
+        let r = run(
+            &old,
+            "重复的一段话，出现在两个地方。\n\n甲段落内容。\n\n重复的一段话，出现在两个地方。\n\n乙段落内容。\n",
+        );
+        assert_eq!(
+            r[2].id, 2,
+            "the block still between 甲 and 乙 is the original"
+        );
         assert_eq!(r[0].how, How::Fresh, "the pasted copy is new");
     }
 
     #[test]
     fn an_edited_block_next_to_an_unrelated_new_block_is_not_a_split() {
-        let old = track("# 题\n\n这一段文字比较长，讲述了许多许多内容，我们会在这里改动其中的一个字，其余全部保持原样。\n\n结尾段落，保持不变，用来固定位置。\n", 1);
+        let old = track(
+            "# 题\n\n这一段文字比较长，讲述了许多许多内容，我们会在这里改动其中的一个字，其余全部保持原样。\n\n结尾段落，保持不变，用来固定位置。\n",
+            1,
+        );
         // the paragraph gets one character edit, and a short unrelated English quote appears right after it
-        let r = run(&old, "# 题\n\n这一段文字比较长，讲述了许多许多内容，我们会在这里改动其中的一个字啊，其余全部保持原样。\n\n> An unrelated quotation about databases and nothing else.\n\n结尾段落，保持不变，用来固定位置。\n");
+        let r = run(
+            &old,
+            "# 题\n\n这一段文字比较长，讲述了许多许多内容，我们会在这里改动其中的一个字啊，其余全部保持原样。\n\n> An unrelated quotation about databases and nothing else.\n\n结尾段落，保持不变，用来固定位置。\n",
+        );
         assert_eq!(r[1].id, 2, "the edited paragraph keeps its id");
         assert_eq!(r[2].how, How::Fresh, "the quote is new");
     }

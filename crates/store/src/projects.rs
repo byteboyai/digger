@@ -37,7 +37,10 @@ mod tests {
     use super::*;
 
     fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(f)
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(f)
     }
 
     #[test]
@@ -48,8 +51,21 @@ mod tests {
         std::fs::create_dir(&proj).unwrap();
         let id = {
             let host = ProjectHost::open(&db).unwrap();
-            let info = block_on(host.projects.open_project(proj.to_string_lossy().into_owned())).unwrap().unwrap();
-            block_on(host.memory.write_memory(info.id, "风格".into(), "feedback".into(), "".into(), "短句".into(), "user".into())).unwrap();
+            let info = block_on(
+                host.projects
+                    .open_project(proj.to_string_lossy().into_owned()),
+            )
+            .unwrap()
+            .unwrap();
+            block_on(host.memory.write_memory(
+                info.id,
+                "风格".into(),
+                "feedback".into(),
+                "".into(),
+                "短句".into(),
+                "user".into(),
+            ))
+            .unwrap();
             info.id
         };
         let host = ProjectHost::open(&db).unwrap();
@@ -64,7 +80,9 @@ mod tests {
         let blocker = dir.path().join("file");
         std::fs::write(&blocker, "x").unwrap();
         // 把"文件"当目录用,建库目录必然失败。
-        let e = ProjectHost::open(&blocker.join("projects.db")).err().expect("must fail");
+        let e = ProjectHost::open(&blocker.join("projects.db"))
+            .err()
+            .expect("must fail");
         assert_eq!(e.kind, ServiceErrorKind::Unavailable);
     }
 }

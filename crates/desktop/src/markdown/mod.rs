@@ -74,14 +74,29 @@ struct SelfTestTally {
 fn fresh_nonce() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
     h.write_u32(std::process::id());
-    format!("{:016x}{:016x}", h.finish(), std::collections::hash_map::RandomState::new().build_hasher().finish())
+    format!(
+        "{:016x}{:016x}",
+        h.finish(),
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    )
 }
 
 impl MarkdownPanel {
     pub fn new() -> Self {
-        let mode = if std::env::var_os(SELFTEST_ENV).is_some() { Mode::SelfTest } else { Mode::Normal };
+        let mode = if std::env::var_os(SELFTEST_ENV).is_some() {
+            Mode::SelfTest
+        } else {
+            Mode::Normal
+        };
         Self::with_mode(mode)
     }
 
@@ -208,22 +223,49 @@ impl MarkdownPanel {
         match report {
             Report::Ready { .. } => {}
             Report::Result { name, pass, detail } => {
-                println!("{}: {name}{}", if pass { "PASS" } else { "FAIL" }, if detail.is_empty() { String::new() } else { format!("\n      {detail}") }); // cli-output
-                if pass { self.selftest.passes += 1 } else { self.selftest.fails += 1 }
+                println!(
+                    "{}: {name}{}",
+                    if pass { "PASS" } else { "FAIL" },
+                    if detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n      {detail}")
+                    }
+                ); // cli-output
+                if pass {
+                    self.selftest.passes += 1
+                } else {
+                    self.selftest.fails += 1
+                }
             }
             Report::Info { name, detail } => println!("INFO: {name}\n      {detail}"), // cli-output
             Report::Done => {
-                println!("SUMMARY digger-editor selftest: {} passed, {} failed", self.selftest.passes, self.selftest.fails); // cli-output
-                std::process::exit(i32::from(self.selftest.fails > 0 || self.selftest.passes == 0));
+                println!(
+                    "SUMMARY digger-editor selftest: {} passed, {} failed",
+                    self.selftest.passes, self.selftest.fails
+                ); // cli-output
+                std::process::exit(i32::from(
+                    self.selftest.fails > 0 || self.selftest.passes == 0,
+                ));
             }
         }
         Task::none()
     }
 
     /// 面板几何与可见性同步。`rect` 是面板内容区;webview 让出顶栏。
-    pub fn sync_native(&mut self, id: window::Id, visible: bool, rect: LogicalRect) -> Task<Message> {
+    pub fn sync_native(
+        &mut self,
+        id: window::Id,
+        visible: bool,
+        rect: LogicalRect,
+    ) -> Task<Message> {
         self.window = Some(id);
-        let web = LogicalRect { x: rect.x, y: rect.y + BAR_HEIGHT, width: rect.width, height: (rect.height - BAR_HEIGHT).max(1.0) };
+        let web = LogicalRect {
+            x: rect.x,
+            y: rect.y + BAR_HEIGHT,
+            width: rect.width,
+            height: (rect.height - BAR_HEIGHT).max(1.0),
+        };
         if !visible {
             // 切走:隐藏而不是留一个看不见的 webview 盖在别的面板上;文档与撤销历史留在页面里
             if !self.live || !self.shown {
@@ -240,8 +282,18 @@ impl MarkdownPanel {
             self.live = true;
             self.shown = true;
             self.bounds = Some(web);
-            let (generation, nonce, mode, tx) = (self.generation(), self.nonce.clone(), self.bridge.mode(), self.tx.clone());
-            return window::run(id, move |w| Message::Built(generation, host::build(&w, generation, web, &nonce, mode, tx)));
+            let (generation, nonce, mode, tx) = (
+                self.generation(),
+                self.nonce.clone(),
+                self.bridge.mode(),
+                self.tx.clone(),
+            );
+            return window::run(id, move |w| {
+                Message::Built(
+                    generation,
+                    host::build(&w, generation, web, &nonce, mode, tx),
+                )
+            });
         }
         if self.error.is_some() {
             return Task::none();
@@ -293,7 +345,11 @@ impl MarkdownPanel {
                 Some(reason) => format!(" · 拒绝 {}（最近：{reason}）", self.rejects),
                 None => String::new(),
             };
-            format!("版本 {} · {} 个字符{sync}", doc.version, doc.text.chars().count())
+            format!(
+                "版本 {} · {} 个字符{sync}",
+                doc.version,
+                doc.text.chars().count()
+            )
         } else {
             "正在打开…".to_string()
         };
@@ -304,7 +360,9 @@ impl MarkdownPanel {
             append = append.on_press(Message::StandIn(StandIn::Append));
         }
         column![
-            row![text("未持久化 / 示例章节"), text(status), rewrite, append].spacing(16).align_y(iced::Alignment::Center),
+            row![text("未持久化 / 示例章节"), text(status), rewrite, append]
+                .spacing(16)
+                .align_y(iced::Alignment::Center),
         ]
         .height(iced::Length::Fixed(BAR_HEIGHT as f32))
         .into()

@@ -40,7 +40,10 @@ fn kind_of(tag: &Tag) -> Kind {
 
 /// CommonMark + GFM tables, footnotes, strikethrough, task lists.
 pub fn parse_blocks(text: &str) -> Vec<Parsed> {
-    let opts = Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let opts = Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS;
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut open: Option<(Kind, usize)> = None;
@@ -71,7 +74,12 @@ fn push(out: &mut Vec<Parsed>, text: &str, kind: Kind, start: usize, mut end: us
     while end > start && text.as_bytes()[end - 1] == b'\n' {
         end -= 1;
     }
-    out.push(Parsed { kind, start, end, text: text[start..end].to_string() });
+    out.push(Parsed {
+        kind,
+        start,
+        end,
+        text: text[start..end].to_string(),
+    });
 }
 
 #[cfg(test)]
@@ -83,7 +91,19 @@ mod tests {
         let t = "# 标题\n\n第一段。\n\n- a\n- b\n\n> 引用\n\n```\ncode\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n\n末段\n";
         let b = parse_blocks(t);
         let kinds: Vec<_> = b.iter().map(|x| x.kind.clone()).collect();
-        assert_eq!(kinds, [Kind::Heading(1), Kind::Paragraph, Kind::List, Kind::Quote, Kind::Code, Kind::Table, Kind::Rule, Kind::Paragraph]);
+        assert_eq!(
+            kinds,
+            [
+                Kind::Heading(1),
+                Kind::Paragraph,
+                Kind::List,
+                Kind::Quote,
+                Kind::Code,
+                Kind::Table,
+                Kind::Rule,
+                Kind::Paragraph
+            ]
+        );
         for x in &b {
             assert_eq!(&t[x.start..x.end], x.text);
         }

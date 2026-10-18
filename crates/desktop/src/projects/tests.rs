@@ -2,7 +2,14 @@ use super::*;
 use crate::paths;
 
 fn info(id: i64, path: &Path, name: &str) -> ProjectInfo {
-    ProjectInfo { id, path: path.to_string_lossy().into_owned(), name: name.into(), last_active_ms: id as u64, created_ms: 1, updated_ms: id as u64 }
+    ProjectInfo {
+        id,
+        path: path.to_string_lossy().into_owned(),
+        name: name.into(),
+        last_active_ms: id as u64,
+        created_ms: 1,
+        updated_ms: id as u64,
+    }
 }
 
 fn dir() -> tempfile::TempDir {
@@ -37,9 +44,17 @@ fn opening_a_project_adds_and_activates_its_tab_and_survives_a_restart() {
     assert_eq!(state.current_project_id(), Some(1));
 
     let mut again = ProjectsState::open_in(d.path());
-    assert_eq!(again.current_project_id(), None, "快照还没读回来,页签先不画");
+    assert_eq!(
+        again.current_project_id(),
+        None,
+        "快照还没读回来,页签先不画"
+    );
     let _ = again.update(listed(vec![info(1, &proj, "book")]));
-    assert_eq!(again.current_project_id(), Some(1), "页签与当前项目随重启恢复");
+    assert_eq!(
+        again.current_project_id(),
+        Some(1),
+        "页签与当前项目随重启恢复"
+    );
 }
 
 #[test]
@@ -52,7 +67,10 @@ fn a_registry_read_returning_without_a_tabbed_project_drops_that_tab() {
     let _ = state.update(listed(vec![]));
     assert_eq!(state.current_project_id(), None);
     let reloaded = ProjectsState::open_in(d.path());
-    assert!(reloaded.tabs.open().is_empty(), "取消登记后的页签也从落盘里消失");
+    assert!(
+        reloaded.tabs.open().is_empty(),
+        "取消登记后的页签也从落盘里消失"
+    );
 }
 
 #[test]
@@ -121,7 +139,10 @@ fn a_newer_schema_tabs_file_is_never_overwritten() {
     std::fs::create_dir(&proj).unwrap();
     let mut state = ProjectsState::open_in(d.path());
     opened(&mut state, info(5, &proj, "p"));
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"{"schema":99,"open":[1],"active":1}"#);
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        r#"{"schema":99,"open":[1],"active":1}"#
+    );
 }
 
 #[test]
@@ -176,7 +197,10 @@ fn a_read_success_does_not_clear_an_unrelated_open_notice_but_a_new_pick_does() 
     let _ = state.update(listed(vec![]));
     assert!(state.notice().unwrap().contains("文件夹"));
     let _ = state.update(Message::PickFolder);
-    assert!(state.notice().is_none(), "开始新一次选择就清掉上一次的打开提示");
+    assert!(
+        state.notice().is_none(),
+        "开始新一次选择就清掉上一次的打开提示"
+    );
 }
 
 #[test]

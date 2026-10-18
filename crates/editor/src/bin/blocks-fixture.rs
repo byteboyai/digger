@@ -25,11 +25,16 @@ fn class(k: &Kind) -> &'static str {
 
 /// 0-based line number of byte offset `at` (lines end at '\n').
 fn line_of(text: &str, at: usize) -> usize {
-    text.as_bytes()[..at.min(text.len())].iter().filter(|&&b| b == b'\n').count()
+    text.as_bytes()[..at.min(text.len())]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: blocks-fixture <input.jsonl>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: blocks-fixture <input.jsonl>");
     let file = std::fs::File::open(path).expect("open input");
     for line in std::io::BufReader::new(file).lines() {
         let v: Value = serde_json::from_str(&line.expect("read line")).expect("json line");

@@ -9,7 +9,10 @@
 use std::path::PathBuf;
 
 use bytehost_chrome::persist::SCHEMA_VERSION;
-use bytehost_chrome::{BodyArea, Divider, El, Loaded, PairRects, PanelMeta, PanelRules, Rect, ShellHost, ShellModel, ShellMsg, TopBarSlots, metrics_from_theme, pair_view};
+use bytehost_chrome::{
+    BodyArea, Divider, El, Loaded, PairRects, PanelMeta, PanelRules, Rect, ShellHost, ShellModel,
+    ShellMsg, TopBarSlots, metrics_from_theme, pair_view,
+};
 use bytehost_core::registry::PanelCatalog;
 use bytehost_core::{LogicalRect, PanelId, PanelMeta as CatalogEntry};
 use bytehost_desktop::{HostMessage, Product, route_lifecycle};
@@ -84,7 +87,12 @@ pub struct ProductShell {
 }
 
 fn logical(r: Rect) -> LogicalRect {
-    LogicalRect { x: r.x as f64, y: r.y as f64, width: r.w as f64, height: r.h as f64 }
+    LogicalRect {
+        x: r.x as f64,
+        y: r.y as f64,
+        width: r.w as f64,
+        height: r.h as f64,
+    }
 }
 
 /// 向下缩 `top` 像素(面板自己的头部占掉的高度)。
@@ -120,14 +128,28 @@ impl ProductShell {
 
     pub(crate) fn with_shell_path(shell_path: PathBuf) -> Self {
         let mut catalog = PanelCatalog::new();
-        for (id, title) in [(shell::info_id(), "Digger"), (shell::apps_id(), "应用"), (shell::usage_id(), "用量")] {
-            catalog.register(CatalogEntry { id, title: title.into(), surfaces: vec![] }).expect("首次注册产品面板");
+        for (id, title) in [
+            (shell::info_id(), "Digger"),
+            (shell::apps_id(), "应用"),
+            (shell::usage_id(), "用量"),
+        ] {
+            catalog
+                .register(CatalogEntry {
+                    id,
+                    title: title.into(),
+                    surfaces: vec![],
+                })
+                .expect("首次注册产品面板");
         }
-        catalog.register(CatalogEntry::single_surface(shell::markdown_id(), "编辑器")).expect("首次注册 digger.markdown");
+        catalog
+            .register(CatalogEntry::single_surface(shell::markdown_id(), "编辑器"))
+            .expect("首次注册 digger.markdown");
 
         let loaded = shell::load(&shell_path);
         let shell_save_blocked = match &loaded {
-            Loaded::Newer { found, .. } => Some(format!("布局 schema 版本 {found} 高于本宿主支持的 {SCHEMA_VERSION},已用默认布局显示且**不覆盖原文件**")),
+            Loaded::Newer { found, .. } => Some(format!(
+                "布局 schema 版本 {found} 高于本宿主支持的 {SCHEMA_VERSION},已用默认布局显示且**不覆盖原文件**"
+            )),
             _ => None,
         };
         let mut model = loaded.into_model();
@@ -137,7 +159,8 @@ impl ProductShell {
         // 写进下次启动就不再引用的临时文件,等于静默丢。改为:查询恒返回 Unavailable、**不接线**用量生产者(没有记录悄悄
         // 写走),原损坏文件保持原样。
         let scope_path = paths::config_dir();
-        let (usage_service, usage_ledger, boot_note) = load_usage_ledger(paths::usage_ledger_path());
+        let (usage_service, usage_ledger, boot_note) =
+            load_usage_ledger(paths::usage_ledger_path());
 
         let mut apps = crate::apps::AppsState::new();
         // 只有账本可用时才接用量生产者;损坏时**不接**,避免记录写进无引用的临时文件。
@@ -147,7 +170,10 @@ impl ProductShell {
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
         let markdown = crate::markdown::MarkdownPanel::new();
         // 项目数据与布局同在一个数据目录里:生产是产品数据根,测试是各自的临时目录。
-        let data_dir = shell_path.parent().map(std::path::Path::to_path_buf).unwrap_or_else(paths::config_dir);
+        let data_dir = shell_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(paths::config_dir);
         let projects = crate::projects::ProjectsState::open_in(&data_dir);
         let lifecycle = crate::lifecycle_selftest::Driver::from_env();
         // 自检模式需要编辑器一开始就看得见。
@@ -176,7 +202,8 @@ impl ProductShell {
         };
         // 构造时就记下此刻谁可见:否则第一条消息会把本来就看得见的面板当成"刚变可见",重复触发切入动作
         // (启动时本来就可见的面板由 `boot` 显式触发一次,不靠这里)。
-        shell.visible_before = [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
+        shell.visible_before =
+            [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
         shell
     }
 
@@ -194,8 +221,12 @@ impl ProductShell {
 
     /// 面板此刻是否真的呈现在用户眼前:它是所在栏的选中面板、所在区没收起、也没被另一侧的放大态盖住。
     pub(crate) fn panel_visible(&self, panel: &PanelId) -> bool {
-        let Some(side) = self.shell.side_of(panel) else { return false };
-        self.shell.selected(side) == panel && !self.shell.collapsed(side) && self.shell.maximized().is_none_or(|m| m == side)
+        let Some(side) = self.shell.side_of(panel) else {
+            return false;
+        };
+        self.shell.selected(side) == panel
+            && !self.shell.collapsed(side)
+            && self.shell.maximized().is_none_or(|m| m == side)
     }
 
     /// 用量面板此刻的三态(唯一判断,见 [`UsageLayout`])。
@@ -219,7 +250,10 @@ impl ProductShell {
     fn on_visible(&mut self, panel: &PanelId) -> Task<Msg> {
         if *panel == shell::apps_id() {
             // 首次进入「应用」面板:触发一次探测 + 拉列表(Task 14)。
-            return self.apps.update(crate::apps::Message::Opened).map(Msg::Apps);
+            return self
+                .apps
+                .update(crate::apps::Message::Opened)
+                .map(Msg::Apps);
         }
         if *panel == shell::usage_id() {
             // 进入「用量」面板:触发一次取数(库的 on_activate,Task 20)。
@@ -242,7 +276,10 @@ impl ProductShell {
         // 本栏退回的面板,都没有 `switched_in`,但用户眼前出现了这个面板。动作本身幂等,与 `switched_in` 重叠无害。
         let visible_now = [shell::apps_id(), shell::usage_id()].map(|p| self.panel_visible(&p));
         let mut entered: Vec<PanelId> = out.switched_in.into_iter().collect();
-        for (panel, (now, was)) in [shell::apps_id(), shell::usage_id()].into_iter().zip(visible_now.into_iter().zip(self.visible_before)) {
+        for (panel, (now, was)) in [shell::apps_id(), shell::usage_id()]
+            .into_iter()
+            .zip(visible_now.into_iter().zip(self.visible_before))
+        {
             if now && !was && !entered.contains(&panel) {
                 entered.push(panel);
             }
@@ -266,7 +303,10 @@ impl ProductShell {
         #[cfg(target_os = "macos")]
         if let Some(id) = self.window {
             let top = byteui::theme::geometry::top_bar_height();
-            return window::run(id, move |w| bytehost_chrome::platform_macos::center_traffic_lights(w, top)).discard();
+            return window::run(id, move |w| {
+                bytehost_chrome::platform_macos::center_traffic_lights(w, top)
+            })
+            .discard();
         }
         Task::none()
     }
@@ -287,27 +327,48 @@ impl ProductShell {
         };
         let apps_rect = content_of(&shell::apps_id());
         let usage_rect = content_of(&shell::usage_id()).map(|content| {
-            let pair = self.shell.side_of(&shell::usage_id()).and_then(|side| shell::pair_rects(&self.shell, side));
+            let pair = self
+                .shell
+                .side_of(&shell::usage_id())
+                .and_then(|side| shell::pair_rects(&self.shell, side));
             usage_native_rect(self.usage_layout(), content, pair)
         });
         let markdown_rect = content_of(&shell::markdown_id());
-        let hidden = LogicalRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+        let hidden = LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
         let closing = self.closing;
 
         let apps_task = match apps_rect {
-            Some(r) if !closing => self.apps.sync_native(window, logical(below_header(r, APPS_HEADER_HEIGHT))).map(Msg::Apps),
+            Some(r) if !closing => self
+                .apps
+                .sync_native(window, logical(below_header(r, APPS_HEADER_HEIGHT)))
+                .map(Msg::Apps),
             // 关闭时由 `apps.prepare_shutdown` 收尾;不可见时 `on_shell` 已 `close_selected`,这里仍要让待办的原生动作跑完。
             _ => self.apps.sync_native(window, hidden).map(Msg::Apps),
         };
         let usage_task = self
             .usage
-            .sync_native(window, usage_rect.is_some() && !closing, usage_rect.map(|r| logical(below_header(r, USAGE_HEADER_HEIGHT))).unwrap_or(hidden))
+            .sync_native(
+                window,
+                usage_rect.is_some() && !closing,
+                usage_rect
+                    .map(|r| logical(below_header(r, USAGE_HEADER_HEIGHT)))
+                    .unwrap_or(hidden),
+            )
             .map(Msg::NativeUsage);
         // 关闭时销毁编辑器 webview 并丢掉文档;否则只在可见时显示,切走则隐藏。
         let markdown_task = if closing {
             self.markdown.close(window)
         } else {
-            self.markdown.sync_native(window, markdown_rect.is_some(), markdown_rect.map(logical).unwrap_or(hidden))
+            self.markdown.sync_native(
+                window,
+                markdown_rect.is_some(),
+                markdown_rect.map(logical).unwrap_or(hidden),
+            )
         }
         .map(Msg::Markdown);
         Task::batch([apps_task, usage_task, markdown_task])
@@ -318,7 +379,11 @@ impl ProductShell {
         let dim = tokens.dim;
         container(
             column![
-                text(format!("面板目录已注册 {} 个(产品组合根)", self.catalog.len())).color(tokens.body),
+                text(format!(
+                    "面板目录已注册 {} 个(产品组合根)",
+                    self.catalog.len()
+                ))
+                .color(tokens.body),
                 text(format!("数据根:{}", paths::config_dir().display())).color(dim),
                 text(format!("应用宿主根:{}", paths::bytehost_root().display())).color(dim),
                 text(match self.projects.current_project() {
@@ -339,23 +404,44 @@ impl ProductShell {
     }
 
     fn apps_view(&self) -> Element<'_, Msg> {
-        container(self.apps.view().map(Msg::Apps)).padding(0).width(Length::Fill).height(Length::Fill).into()
+        container(self.apps.view().map(Msg::Apps))
+            .padding(0)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn usage_view(&self, area: &BodyArea) -> Element<'_, Msg> {
         let tokens = color::current();
         let body: Element<'_, Msg> = match self.usage_layout() {
-            UsageLayout::ContentOnly => self.usage.content_view(self.pane_collapsed(&shell::usage_id())),
+            UsageLayout::ContentOnly => self
+                .usage
+                .content_view(self.pane_collapsed(&shell::usage_id())),
             UsageLayout::Collapsed => self.usage.content_view(true),
             // 列表是配对的第一块;"内容在前还是列表在前"由骨架按镜像算好,`pair_view` 直接读。
-            UsageLayout::Paired => pair_view(area, self.usage.list_view(), self.usage.content_view(false), Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))), tokens.bg, tokens.panel),
+            UsageLayout::Paired => pair_view(
+                area,
+                self.usage.list_view(),
+                self.usage.content_view(false),
+                Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
+                tokens.bg,
+                tokens.panel,
+            ),
         };
-        container(body).padding(0).width(Length::Fill).height(Length::Fill).into()
+        container(body)
+            .padding(0)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn markdown_view(&self) -> Element<'_, Msg> {
         // 条在上;下面留空,原生 webview 由 `sync_native` 摆在条的下方。
-        column![self.markdown.view().map(Msg::Markdown), iced::widget::Space::new().height(Length::Fill)].into()
+        column![
+            self.markdown.view().map(Msg::Markdown),
+            iced::widget::Space::new().height(Length::Fill)
+        ]
+        .into()
     }
 }
 
@@ -405,7 +491,11 @@ fn top_bar_slots<'a>(projects: &'a crate::projects::ProjectsState) -> TopBarSlot
     .spacing(6)
     .align_y(iced::Alignment::Center);
     let tabs = projects.tabs_view().map(Msg::Projects);
-    TopBarSlots { title: title.into(), tabs: tabs.into(), right: iced::widget::Space::new().into() }
+    TopBarSlots {
+        title: title.into(),
+        tabs: tabs.into(),
+        right: iced::widget::Space::new().into(),
+    }
 }
 
 impl ShellHost<Msg> for ProductShell {
@@ -491,21 +581,32 @@ impl Product<Msg> for ProductShell {
         match m {
             Msg::WindowReady(id, size) => {
                 self.window = Some(id);
-                let resized = self.on_shell(ShellMsg::Resized { w: size.width, h: size.height });
+                let resized = self.on_shell(ShellMsg::Resized {
+                    w: size.width,
+                    h: size.height,
+                });
                 // macOS:全屏期间把红绿灯临时挂到内容视图(原生全屏不绘制标题栏,红绿灯会跟着移出窗口)。
                 #[cfg(target_os = "macos")]
-                let guard = window::run(id, |w| bytehost_chrome::platform_macos::install_fullscreen_guard(w)).discard();
+                let guard = window::run(id, |w| {
+                    bytehost_chrome::platform_macos::install_fullscreen_guard(w)
+                })
+                .discard();
                 #[cfg(not(target_os = "macos"))]
                 let guard = Task::none();
                 Task::batch([resized, guard])
             }
             Msg::Shell(m) => self.on_shell(m),
-            Msg::ZoomToggle => self.window.map(window::toggle_maximize).unwrap_or_else(Task::none),
+            Msg::ZoomToggle => self
+                .window
+                .map(window::toggle_maximize)
+                .unwrap_or_else(Task::none),
             Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
             Msg::Usage(m) => {
                 // 库的 `update` 对这两条是 `unreachable!`(它们必须由宿主拦截):折叠转给骨架,悬停无事可做。
                 match m {
-                    dozer_panel_usage::Message::ToggleListCollapse => return self.on_shell(ShellMsg::TogglePane(shell::usage_id())),
+                    dozer_panel_usage::Message::ToggleListCollapse => {
+                        return self.on_shell(ShellMsg::TogglePane(shell::usage_id()));
+                    }
                     dozer_panel_usage::Message::CollapseHover(_) => return Task::none(),
                     m => self.usage.update(m),
                 }
@@ -558,7 +659,9 @@ impl Product<Msg> for ProductShell {
         if self.closing {
             let mut body = column![text("正在关闭 Digger…")].spacing(16).padding(20);
             if let Some(error) = &self.shutdown_error {
-                body = body.push(text(error)).push(button("强制退出").on_press(Msg::ForceExit));
+                body = body
+                    .push(text(error))
+                    .push(button("强制退出").on_press(Msg::ForceExit));
             }
             return body.into();
         }
@@ -592,7 +695,8 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
     let native = shell.sync_native();
     if shell.closing && !shell.shutdown_started && shell.apps.native_idle() {
         shell.shutdown_started = true;
-        Task::batch([task, native]).chain(Task::perform(shell.apps.shutdown(), Msg::ShutdownFinished))
+        Task::batch([task, native])
+            .chain(Task::perform(shell.apps.shutdown(), Msg::ShutdownFinished))
     } else {
         Task::batch([task, native])
     }
@@ -609,9 +713,15 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     if shell.closing {
         return events;
     }
-    let mut subs = vec![events, iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick)];
+    let mut subs = vec![
+        events,
+        iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
+    ];
     if shell.shell.animating() {
-        subs.push(iced::time::every(std::time::Duration::from_millis(16)).map(|_| Msg::Shell(ShellMsg::Tick)));
+        subs.push(
+            iced::time::every(std::time::Duration::from_millis(16))
+                .map(|_| Msg::Shell(ShellMsg::Tick)),
+        );
     }
     Subscription::batch(subs)
 }
@@ -648,18 +758,27 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         None => Task::none(),
     };
     let size_task = bytehost_desktop::panel::oldest_window().then(move |id| match id {
-        Some(id) => bytehost_desktop::panel::window_size(id).map(move |s| Msg::WindowReady(id, s.unwrap_or(size))),
+        Some(id) => bytehost_desktop::panel::window_size(id)
+            .map(move |s| Msg::WindowReady(id, s.unwrap_or(size))),
         None => Task::none(),
     });
     let native_usage = match shell.usage.native.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|event| (Msg::NativeUsage(event), rx)) })),
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::NativeUsage(event), rx))
+        })),
         None => Task::none(),
     };
     let markdown_task = match shell.markdown.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|event| (Msg::Markdown(event), rx)) })),
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::Markdown(event), rx))
+        })),
         None => Task::none(),
     };
-    let lifecycle_task = if shell.lifecycle.is_some() { crate::lifecycle_selftest::Driver::first() } else { Task::none() };
+    let lifecycle_task = if shell.lifecycle.is_some() {
+        crate::lifecycle_selftest::Driver::first()
+    } else {
+        Task::none()
+    };
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
     for panel in [shell::apps_id(), shell::usage_id()] {
@@ -669,9 +788,20 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     }
     shell.visible_before = [shell::apps_id(), shell::usage_id()].map(|p| shell.panel_visible(&p));
     let projects_task = shell.projects.refresh().map(Msg::Projects);
-    (shell, Task::batch([projects_task, size_task, reply_task, usage_task, native_usage, markdown_task, lifecycle_task, Task::batch(initial)]))
+    (
+        shell,
+        Task::batch([
+            projects_task,
+            size_task,
+            reply_task,
+            usage_task,
+            native_usage,
+            markdown_task,
+            lifecycle_task,
+            Task::batch(initial),
+        ]),
+    )
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -680,7 +810,11 @@ mod tests {
     use bytehost_desktop::SurfaceEvent;
 
     fn test_temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("digger-product-{tag}-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let dir = std::env::temp_dir().join(format!(
+            "digger-product-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -692,7 +826,12 @@ mod tests {
     }
 
     fn press(shell: &mut ProductShell, panel: &PanelId) {
-        let _ = Product::update(shell, HostMessage::Product(Msg::Shell(ShellMsg::PanelPress { panel: panel.clone() })));
+        let _ = Product::update(
+            shell,
+            HostMessage::Product(Msg::Shell(ShellMsg::PanelPress {
+                panel: panel.clone(),
+            })),
+        );
     }
 
     #[test]
@@ -707,13 +846,23 @@ mod tests {
         let dir = test_temp_dir("project-restore");
         let proj = dir.join("book");
         std::fs::create_dir(&proj).unwrap();
-        let info = dozer_model::ProjectInfo { id: 1, path: proj.to_string_lossy().into_owned(), name: "book".into(), last_active_ms: 1, created_ms: 1, updated_ms: 1 };
+        let info = dozer_model::ProjectInfo {
+            id: 1,
+            path: proj.to_string_lossy().into_owned(),
+            name: "book".into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        };
         let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
         send(&mut shell, Msg::Projects(P::Opened(Ok(Some(info.clone())))));
         assert_eq!(shell.projects.current_project_id(), Some(1));
 
         let mut again = ProductShell::with_shell_path(dir.join("shell.json"));
-        send(&mut again, Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![info])))));
+        send(
+            &mut again,
+            Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![info])))),
+        );
         assert_eq!(again.projects.current_project_id(), Some(1));
     }
 
@@ -725,8 +874,18 @@ mod tests {
         }
         assert_eq!(shell.catalog.len(), 4);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
-        assert_eq!(shell.catalog.get(&shell::markdown_id()).unwrap().surfaces, vec![bytehost_desktop::SurfaceSlot::MAIN]);
-        assert!(shell.catalog.get(&shell::info_id()).unwrap().surfaces.is_empty());
+        assert_eq!(
+            shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
+            vec![bytehost_desktop::SurfaceSlot::MAIN]
+        );
+        assert!(
+            shell
+                .catalog
+                .get(&shell::info_id())
+                .unwrap()
+                .surfaces
+                .is_empty()
+        );
     }
 
     #[test]
@@ -746,8 +905,14 @@ mod tests {
         assert!(!shell.panel_visible(&shell::markdown_id()));
         press(&mut shell, &shell::markdown_id()); // expands it again
         assert!(shell.panel_visible(&shell::markdown_id()));
-        let _ = Product::update(&mut shell, HostMessage::Product(Msg::Shell(ShellMsg::Maximize(Side::Right))));
-        assert!(!shell.panel_visible(&shell::markdown_id()), "covered by the right side's maximize");
+        let _ = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::Shell(ShellMsg::Maximize(Side::Right))),
+        );
+        assert!(
+            !shell.panel_visible(&shell::markdown_id()),
+            "covered by the right side's maximize"
+        );
         assert!(shell.panel_visible(&shell::usage_id()));
     }
 
@@ -773,7 +938,11 @@ mod tests {
         assert!(shell.shell_save_blocked.is_some());
         press(&mut shell, &shell::info_id());
         let _ = Product::update(&mut shell, HostMessage::Product(Msg::Exit));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "the original file stays byte for byte");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "the original file stays byte for byte"
+        );
         assert!(shell.boot_note.contains("布局未保存"));
     }
 
@@ -790,13 +959,23 @@ mod tests {
     async fn the_apps_panel_starts_when_expanding_its_zone_makes_it_visible() {
         let dir = test_temp_dir("apps-visible");
         let path = dir.join("shell.json");
-        std::fs::write(&path, r#"{ "selected_right": "digger.apps", "right_collapsed": true }"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{ "selected_right": "digger.apps", "right_collapsed": true }"#,
+        )
+        .unwrap();
         let mut shell = ProductShell::with_shell_path(path);
-        assert!(!shell.panel_visible(&shell::apps_id()), "selected but its zone is collapsed");
+        assert!(
+            !shell.panel_visible(&shell::apps_id()),
+            "selected but its zone is collapsed"
+        );
         assert!(!shell.apps.opened());
         press(&mut shell, &shell::apps_id()); // expands the zone: no panel switch happens
         assert!(shell.panel_visible(&shell::apps_id()));
-        assert!(shell.apps.opened(), "becoming visible by expanding still starts the service");
+        assert!(
+            shell.apps.opened(),
+            "becoming visible by expanding still starts the service"
+        );
     }
 
     /// 评审关注点 4:库的 `update` 对 `ToggleListCollapse` / `CollapseHover` 是 `unreachable!`(它们必须由宿主拦截)。
@@ -804,10 +983,27 @@ mod tests {
     #[test]
     fn library_messages_that_the_kernel_must_intercept_never_reach_the_library() {
         let mut shell = fresh("intercept");
-        let _ = Product::update(&mut shell, HostMessage::Product(Msg::Usage(dozer_panel_usage::Message::CollapseHover(true))));
-        assert!(shell.shell.panes().get(&shell::usage_id()).is_none(), "hover changes nothing");
-        let _ = Product::update(&mut shell, HostMessage::Product(Msg::Usage(dozer_panel_usage::Message::ToggleListCollapse)));
-        assert_eq!(shell.shell.panes().get(&shell::usage_id()).map(|d| d.collapsed), Some(true), "the library's toggle is routed to the shell");
+        let _ = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::Usage(dozer_panel_usage::Message::CollapseHover(true))),
+        );
+        assert!(
+            shell.shell.panes().get(&shell::usage_id()).is_none(),
+            "hover changes nothing"
+        );
+        let _ = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::Usage(dozer_panel_usage::Message::ToggleListCollapse)),
+        );
+        assert_eq!(
+            shell
+                .shell
+                .panes()
+                .get(&shell::usage_id())
+                .map(|d| d.collapsed),
+            Some(true),
+            "the library's toggle is routed to the shell"
+        );
     }
 
     fn send(shell: &mut ProductShell, m: Msg) {
@@ -815,18 +1011,31 @@ mod tests {
     }
 
     fn load_sample_rows(shell: &mut ProductShell) {
-        send(shell, Msg::Usage(crate::adapters::usage::sample_loaded_message()));
+        send(
+            shell,
+            Msg::Usage(crate::adapters::usage::sample_loaded_message()),
+        );
     }
 
     #[test]
     fn usage_layout_has_three_states() {
         let mut shell = fresh("layout3");
-        assert_eq!(shell.usage_layout(), UsageLayout::ContentOnly, "no data yet: nothing to pair");
+        assert_eq!(
+            shell.usage_layout(),
+            UsageLayout::ContentOnly,
+            "no data yet: nothing to pair"
+        );
         load_sample_rows(&mut shell);
         assert_eq!(shell.usage_layout(), UsageLayout::Paired);
-        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::TogglePane(shell::usage_id())),
+        );
         assert_eq!(shell.usage_layout(), UsageLayout::Collapsed);
-        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::TogglePane(shell::usage_id())),
+        );
         assert_eq!(shell.usage_layout(), UsageLayout::Paired);
     }
 
@@ -835,12 +1044,27 @@ mod tests {
     fn collapsed_without_data_is_content_only() {
         let dir = test_temp_dir("collapsed-nodata");
         let path = dir.join("shell.json");
-        std::fs::write(&path, r#"{ "panes": { "digger.usage": { "split": 0.35, "collapsed": true } } }"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{ "panes": { "digger.usage": { "split": 0.35, "collapsed": true } } }"#,
+        )
+        .unwrap();
         let mut shell = ProductShell::with_shell_path(path);
-        assert_eq!(shell.shell.panes().get(&shell::usage_id()).map(|d| d.collapsed), Some(true));
+        assert_eq!(
+            shell
+                .shell
+                .panes()
+                .get(&shell::usage_id())
+                .map(|d| d.collapsed),
+            Some(true)
+        );
         assert_eq!(shell.usage_layout(), UsageLayout::ContentOnly);
         load_sample_rows(&mut shell);
-        assert_eq!(shell.usage_layout(), UsageLayout::Collapsed, "the stored state shows up as soon as there is data");
+        assert_eq!(
+            shell.usage_layout(),
+            UsageLayout::Collapsed,
+            "the stored state shows up as soon as there is data"
+        );
     }
 
     /// 评审关注点 1、2、5:原生图表只占内容栏,且和 body 读同一个 `usage_layout()`。
@@ -849,16 +1073,40 @@ mod tests {
         use bytehost_chrome::PairRects;
         let content = Rect::new(693.0, 47.0, 448.0, 700.0);
         // 右区默认:内容在左、列表在右
-        let paired = PairRects { first: Rect::new(939.0, 47.0, 154.0, 700.0), second: Rect::new(693.0, 47.0, 286.0, 700.0), divider: Rect::new(979.0, 47.0, 8.0, 700.0) };
-        assert_eq!(usage_native_rect(UsageLayout::Paired, content, Some(paired)), paired.second, "only the content pane carries the chart");
+        let paired = PairRects {
+            first: Rect::new(939.0, 47.0, 154.0, 700.0),
+            second: Rect::new(693.0, 47.0, 286.0, 700.0),
+            divider: Rect::new(979.0, 47.0, 8.0, 700.0),
+        };
+        assert_eq!(
+            usage_native_rect(UsageLayout::Paired, content, Some(paired)),
+            paired.second,
+            "only the content pane carries the chart"
+        );
         // 无数据 / 收起:整个内容区,即便此刻还拿得到一份旧的配对矩形
-        assert_eq!(usage_native_rect(UsageLayout::ContentOnly, content, Some(paired)), content);
-        assert_eq!(usage_native_rect(UsageLayout::Collapsed, content, Some(paired)), content);
+        assert_eq!(
+            usage_native_rect(UsageLayout::ContentOnly, content, Some(paired)),
+            content
+        );
+        assert_eq!(
+            usage_native_rect(UsageLayout::Collapsed, content, Some(paired)),
+            content
+        );
         // 镜像(拖到左栏):列表在左、内容在右 —— 取的仍是 `second`,位置由骨架几何给出
-        let mirrored = PairRects { first: Rect::new(693.0, 47.0, 154.0, 700.0), second: Rect::new(855.0, 47.0, 286.0, 700.0), divider: Rect::new(847.0, 47.0, 8.0, 700.0) };
-        assert_eq!(usage_native_rect(UsageLayout::Paired, content, Some(mirrored)), mirrored.second);
+        let mirrored = PairRects {
+            first: Rect::new(693.0, 47.0, 154.0, 700.0),
+            second: Rect::new(855.0, 47.0, 286.0, 700.0),
+            divider: Rect::new(847.0, 47.0, 8.0, 700.0),
+        };
+        assert_eq!(
+            usage_native_rect(UsageLayout::Paired, content, Some(mirrored)),
+            mirrored.second
+        );
         // 没有配对矩形(该侧不是用量)时回落到内容区,不 panic
-        assert_eq!(usage_native_rect(UsageLayout::Paired, content, None), content);
+        assert_eq!(
+            usage_native_rect(UsageLayout::Paired, content, None),
+            content
+        );
     }
 
     #[tokio::test]
@@ -867,14 +1115,36 @@ mod tests {
         let _ = Product::view(&shell); // ContentOnly
         load_sample_rows(&mut shell);
         let _ = Product::view(&shell); // Paired
-        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::TogglePane(shell::usage_id())),
+        );
         let _ = Product::view(&shell); // Collapsed
-        send(&mut shell, Msg::Shell(ShellMsg::TogglePane(shell::usage_id())));
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::TogglePane(shell::usage_id())),
+        );
         // 拖到左栏(镜像)与放大态
-        send(&mut shell, Msg::Shell(ShellMsg::PanelPress { panel: shell::apps_id() }));
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::PanelPress {
+                panel: shell::apps_id(),
+            }),
+        );
         send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
-        send(&mut shell, Msg::Shell(ShellMsg::PanelPress { panel: shell::usage_id() }));
-        send(&mut shell, Msg::Shell(ShellMsg::RailDragMove { side: Side::Left, index: 0 }));
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::PanelPress {
+                panel: shell::usage_id(),
+            }),
+        );
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::RailDragMove {
+                side: Side::Left,
+                index: 0,
+            }),
+        );
         send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
         assert_eq!(shell.shell.side_of(&shell::usage_id()), Some(Side::Left));
         let _ = Product::view(&shell);
@@ -891,7 +1161,10 @@ mod tests {
             press(&mut shell, &panel);
             let _ = Product::view(&shell);
         }
-        let _ = Product::update(&mut shell, HostMessage::Product(Msg::Shell(ShellMsg::Maximize(Side::Left))));
+        let _ = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::Shell(ShellMsg::Maximize(Side::Left))),
+        );
         let _ = Product::view(&shell);
         let _ = Product::update(&mut shell, HostMessage::Product(Msg::Exit));
         let _ = Product::view(&shell);

@@ -19,11 +19,18 @@ fn a_message_from_an_old_generation_is_dropped() {
     let mut p = live_panel();
     let before = p.bridge.doc().text.clone();
     let v = p.bridge.doc().version;
-    let stale = page(&p, json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}));
+    let stale = page(
+        &p,
+        json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}),
+    );
     // the panel was closed and reopened: the epoch moved on
     p.epoch.fetch_add(1, Ordering::SeqCst);
     let _ = p.update(Message::Page(0, stale));
-    assert_eq!(p.bridge.doc().text, before, "a stale generation must never be applied");
+    assert_eq!(
+        p.bridge.doc().text,
+        before,
+        "a stale generation must never be applied"
+    );
     assert_eq!(p.bridge.doc().version, v);
 }
 
@@ -31,7 +38,10 @@ fn a_message_from_an_old_generation_is_dropped() {
 fn a_message_for_the_current_generation_is_applied() {
     let mut p = live_panel();
     let v = p.bridge.doc().version;
-    let edit = page(&p, json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}));
+    let edit = page(
+        &p,
+        json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}),
+    );
     let g = p.generation();
     let _ = p.update(Message::Page(g, edit));
     assert_eq!(p.bridge.doc().version, v + 1);
@@ -41,7 +51,10 @@ fn a_message_for_the_current_generation_is_applied() {
 fn a_message_is_dropped_when_there_is_no_webview() {
     let mut p = MarkdownPanel::with_mode(Mode::Normal);
     let v = p.bridge.doc().version;
-    let edit = page(&p, json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}));
+    let edit = page(
+        &p,
+        json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}),
+    );
     let _ = p.update(Message::Page(0, edit));
     assert_eq!(p.bridge.doc().version, v);
 }
@@ -82,7 +95,11 @@ fn a_refused_message_is_counted_and_shown_not_hidden() {
     let g = p.generation();
     let _ = p.update(Message::Page(g, "not json".into()));
     assert_eq!(p.rejects, 1);
-    assert!(p.last_reject.as_deref().is_some_and(|r| r.contains("unparsable")));
+    assert!(
+        p.last_reject
+            .as_deref()
+            .is_some_and(|r| r.contains("unparsable"))
+    );
 }
 
 #[test]
@@ -91,7 +108,10 @@ fn the_webview_agent_hook_is_refused_in_normal_operation() {
     let g = p.generation();
     let _ = p.update(Message::Page(g, page(&p, json!({"t": "ready"}))));
     let before = p.bridge.doc().text.clone();
-    let _ = p.update(Message::Page(g, page(&p, json!({"t": "agent", "op": "append", "text": "pwned"}))));
+    let _ = p.update(Message::Page(
+        g,
+        page(&p, json!({"t": "agent", "op": "append", "text": "pwned"})),
+    ));
     assert_eq!(p.bridge.doc().text, before);
     assert_eq!(p.rejects, 1);
 }
@@ -105,10 +125,27 @@ fn the_panel_opens_the_sample_chapter() {
 #[test]
 fn the_panel_owns_its_webview_table_and_names_no_other_panels() {
     // independence: the module depends on no other panel and on no application-host crate
-    for (name, src) in [("mod.rs", include_str!("mod.rs")), ("host.rs", include_str!("host.rs"))] {
+    for (name, src) in [
+        ("mod.rs", include_str!("mod.rs")),
+        ("host.rs", include_str!("host.rs")),
+    ] {
         let code = src.split("#[cfg(test)]").next().unwrap();
-        for banned in ["crate::apps", "crate::adapters", "digger_app_host", "bytehost_apps", "bytehost_client", "bytehost_panel", "crate::product"] {
-            assert!(!code.lines().filter(|l| !l.trim_start().starts_with("//")).any(|l| l.contains(banned)), "{name} must not depend on {banned}");
+        for banned in [
+            "crate::apps",
+            "crate::adapters",
+            "digger_app_host",
+            "bytehost_apps",
+            "bytehost_client",
+            "bytehost_panel",
+            "crate::product",
+        ] {
+            assert!(
+                !code
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("//"))
+                    .any(|l| l.contains(banned)),
+                "{name} must not depend on {banned}"
+            );
         }
     }
 }

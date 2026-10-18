@@ -56,7 +56,11 @@ impl ProjectTabs {
         };
         self.open.remove(at);
         if self.active == Some(id) {
-            self.active = if at > 0 { self.open.get(at - 1).copied() } else { self.open.first().copied() };
+            self.active = if at > 0 {
+                self.open.get(at - 1).copied()
+            } else {
+                self.open.first().copied()
+            };
         }
     }
 
@@ -92,7 +96,10 @@ impl ProjectTabs {
 
     /// 读盘。缺文件、读不出、不是 JSON 对象(含顶层数组:serde 会把 `[1,2]` 当位置序列塞进结构体)都回落为空状态。
     pub fn load(path: &Path) -> Loaded {
-        let empty = Loaded { tabs: Self::default(), save_blocked: false };
+        let empty = Loaded {
+            tabs: Self::default(),
+            save_blocked: false,
+        };
         let Ok(text) = std::fs::read_to_string(path) else {
             return empty;
         };
@@ -106,9 +113,15 @@ impl ProjectTabs {
             return empty;
         };
         if file.schema > SCHEMA_VERSION {
-            return Loaded { tabs: Self::default(), save_blocked: true };
+            return Loaded {
+                tabs: Self::default(),
+                save_blocked: true,
+            };
         }
-        Loaded { tabs: Self::sanitized(file.open, file.active), save_blocked: false }
+        Loaded {
+            tabs: Self::sanitized(file.open, file.active),
+            save_blocked: false,
+        }
     }
 
     /// 原子写盘:先写临时文件再改名,半截 JSON 不会被当成有效状态。
@@ -116,9 +129,16 @@ impl ProjectTabs {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let shape = FileShape { schema: SCHEMA_VERSION, open: self.open.clone(), active: self.active };
+        let shape = FileShape {
+            schema: SCHEMA_VERSION,
+            open: self.open.clone(),
+            active: self.active,
+        };
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&shape).map_err(std::io::Error::other)?)?;
+        std::fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(&shape).map_err(std::io::Error::other)?,
+        )?;
         std::fs::rename(&tmp, path)
     }
 }
@@ -128,7 +148,10 @@ mod tests {
     use super::*;
 
     fn tabs(open: &[i64], active: Option<i64>) -> ProjectTabs {
-        ProjectTabs { open: open.to_vec(), active }
+        ProjectTabs {
+            open: open.to_vec(),
+            active,
+        }
     }
 
     #[test]
@@ -180,7 +203,13 @@ mod tests {
         let path = dir.path().join("project_tabs.json");
         let t = tabs(&[4, 7], Some(7));
         t.save(&path).unwrap();
-        assert_eq!(ProjectTabs::load(&path), Loaded { tabs: t, save_blocked: false });
+        assert_eq!(
+            ProjectTabs::load(&path),
+            Loaded {
+                tabs: t,
+                save_blocked: false
+            }
+        );
         assert!(!path.with_extension("json.tmp").exists());
     }
 
@@ -188,11 +217,24 @@ mod tests {
     fn a_missing_or_garbage_file_loads_as_empty_and_may_be_overwritten() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("project_tabs.json");
-        assert_eq!(ProjectTabs::load(&path), Loaded { tabs: ProjectTabs::default(), save_blocked: false });
+        assert_eq!(
+            ProjectTabs::load(&path),
+            Loaded {
+                tabs: ProjectTabs::default(),
+                save_blocked: false
+            }
+        );
         for junk in ["not json", "[1,2]", "42", "null", "\"x\""] {
             std::fs::write(&path, junk).unwrap();
             let loaded = ProjectTabs::load(&path);
-            assert_eq!(loaded, Loaded { tabs: ProjectTabs::default(), save_blocked: false }, "{junk}");
+            assert_eq!(
+                loaded,
+                Loaded {
+                    tabs: ProjectTabs::default(),
+                    save_blocked: false
+                },
+                "{junk}"
+            );
         }
     }
 
@@ -202,7 +244,10 @@ mod tests {
         let path = dir.path().join("project_tabs.json");
         std::fs::write(&path, r#"{"open":[3,3,5],"active":9}"#).unwrap();
         let loaded = ProjectTabs::load(&path);
-        assert_eq!((loaded.tabs.open(), loaded.tabs.active()), (&[3, 5][..], Some(3)));
+        assert_eq!(
+            (loaded.tabs.open(), loaded.tabs.active()),
+            (&[3, 5][..], Some(3))
+        );
         std::fs::write(&path, "{}").unwrap();
         assert_eq!(ProjectTabs::load(&path).tabs, ProjectTabs::default());
     }
@@ -212,6 +257,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("project_tabs.json");
         std::fs::write(&path, r#"{"schema":99,"open":[1],"active":1}"#).unwrap();
-        assert_eq!(ProjectTabs::load(&path), Loaded { tabs: ProjectTabs::default(), save_blocked: true });
+        assert_eq!(
+            ProjectTabs::load(&path),
+            Loaded {
+                tabs: ProjectTabs::default(),
+                save_blocked: true
+            }
+        );
     }
 }

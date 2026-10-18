@@ -16,9 +16,18 @@ pub enum Mode {
 /// 自检页上报的内容(正常运行时永远不会出现)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Report {
-    Ready { engine: String },
-    Result { name: String, pass: bool, detail: String },
-    Info { name: String, detail: String },
+    Ready {
+        engine: String,
+    },
+    Result {
+        name: String,
+        pass: bool,
+        detail: String,
+    },
+    Info {
+        name: String,
+        detail: String,
+    },
     Done,
 }
 
@@ -51,7 +60,12 @@ impl Bridge {
     pub fn new(initial: &str, mode: Mode, nonce: impl Into<String>) -> Self {
         let mut doc = Doc::new();
         doc.load(initial);
-        Self { doc, mode, nonce: nonce.into(), stand_in_runs: 0 }
+        Self {
+            doc,
+            mode,
+            nonce: nonce.into(),
+            stand_in_runs: 0,
+        }
     }
 
     pub fn doc(&self) -> &Doc {
@@ -65,16 +79,24 @@ impl Bridge {
     /// 让替身 Agent 改文档,返回要推给页面的 `update`。没有可改的块或步骤失败时返回 `None`(文档不变)。
     pub fn stand_in(&mut self, what: StandIn) -> Option<EditorOutbound> {
         self.stand_in_runs += 1;
-        let text = format!("Agent 改写 #{}：这一段是 Agent 在你写作时改写的，用来检查输入法组合和撤销是否正常😀。", self.stand_in_runs);
+        let text = format!(
+            "Agent 改写 #{}：这一段是 Agent 在你写作时改写的，用来检查输入法组合和撤销是否正常😀。",
+            self.stand_in_runs
+        );
         let op = match what {
             StandIn::Append => AgentOp::Append { text },
             StandIn::RewriteParagraph(n) => {
-                let EditorOutbound::Blocks { blocks, .. } = self.doc.blocks_message() else { return None };
+                let EditorOutbound::Blocks { blocks, .. } = self.doc.blocks_message() else {
+                    return None;
+                };
                 let paragraphs: Vec<_> = blocks.iter().filter(|b| b.kind == "paragraph").collect();
                 if paragraphs.is_empty() {
                     return None;
                 }
-                AgentOp::ReplaceBlock { id: paragraphs[n % paragraphs.len()].id.clone(), text }
+                AgentOp::ReplaceBlock {
+                    id: paragraphs[n % paragraphs.len()].id.clone(),
+                    text,
+                }
             }
         };
         let mut patches = self.doc.agent_plan(&[Step { op, expect: None }]).ok()?;
@@ -82,7 +104,10 @@ impl Bridge {
     }
 
     fn reject(&self, reason: impl Into<String>) -> Handled {
-        Handled::Reply(EditorOutbound::Reject { reason: reason.into(), version: Some(self.doc.version) })
+        Handled::Reply(EditorOutbound::Reject {
+            reason: reason.into(),
+            version: Some(self.doc.version),
+        })
     }
 
     /// 处理一条上行消息。每条消息都有回答:不会有静默丢弃。
@@ -100,10 +125,15 @@ impl Bridge {
         match msg {
             EditorInbound::Ready { engine } => match self.mode {
                 Mode::Normal => Handled::Reply(self.doc.open_message()),
-                Mode::SelfTest => Handled::Report(Report::Ready { engine: engine.unwrap_or_default() }),
+                Mode::SelfTest => Handled::Report(Report::Ready {
+                    engine: engine.unwrap_or_default(),
+                }),
             },
             EditorInbound::Edit { base, changes } => {
-                let changes: Vec<(usize, usize, String)> = changes.into_iter().map(|Change { from, to, insert }| (from, to, insert)).collect();
+                let changes: Vec<(usize, usize, String)> = changes
+                    .into_iter()
+                    .map(|Change { from, to, insert }| (from, to, insert))
+                    .collect();
                 match self.doc.edit(base, &changes) {
                     Ok(()) => Handled::Reply(self.doc.blocks_message()),
                     Err(e) => self.reject(format!("{e:?}")),
@@ -113,20 +143,37 @@ impl Bridge {
                 self.doc.load(&text);
                 Handled::Reply(self.doc.blocks_message())
             }
-            EditorInbound::Agent { op, id, text, expect } => {
+            EditorInbound::Agent {
+                op,
+                id,
+                text,
+                expect,
+            } => {
                 let op = match op.as_str() {
                     "replace_block" => Some(AgentOp::ReplaceBlock { id, text }),
                     "insert_after" => Some(AgentOp::InsertAfter { id, text }),
                     "append" => Some(AgentOp::Append { text }),
                     _ => None,
                 };
-                Handled::Reply(match op.map(|op| self.doc.agent_plan(&[Step { op, expect }])) {
-                    Some(Ok(mut patches)) => self.doc.update_message(&patches.remove(0), "agent"),
-                    Some(Err((_, e))) => EditorOutbound::AgentError { reason: e.to_string(), stale: matches!(e, AgentError::Stale { .. }) },
-                    None => EditorOutbound::AgentError { reason: "unknown operation".into(), stale: false },
-                })
+                Handled::Reply(
+                    match op.map(|op| self.doc.agent_plan(&[Step { op, expect }])) {
+                        Some(Ok(mut patches)) => {
+                            self.doc.update_message(&patches.remove(0), "agent")
+                        }
+                        Some(Err((_, e))) => EditorOutbound::AgentError {
+                            reason: e.to_string(),
+                            stale: matches!(e, AgentError::Stale { .. }),
+                        },
+                        None => EditorOutbound::AgentError {
+                            reason: "unknown operation".into(),
+                            stale: false,
+                        },
+                    },
+                )
             }
-            EditorInbound::Result { name, pass, detail } => Handled::Report(Report::Result { name, pass, detail }),
+            EditorInbound::Result { name, pass, detail } => {
+                Handled::Report(Report::Result { name, pass, detail })
+            }
             EditorInbound::Info { name, detail } => Handled::Report(Report::Info { name, detail }),
             EditorInbound::Done {} => Handled::Report(Report::Done),
         }
@@ -168,7 +215,13 @@ mod tests {
     fn ready_is_answered_with_the_whole_document() {
         let mut b = normal();
         match reply(b.handle(&msg(json!({"t": "ready"})))) {
-            EditorOutbound::Open { text, version, blocks, len16, hash } => {
+            EditorOutbound::Open {
+                text,
+                version,
+                blocks,
+                len16,
+                hash,
+            } => {
                 assert_eq!(text, "# 标题\n\n第一段。\n\n第二段。\n");
                 assert_eq!(blocks.len(), 3);
                 assert_eq!(version, b.doc().version);
@@ -183,7 +236,9 @@ mod tests {
     fn an_edit_is_applied_and_answered_with_blocks() {
         let mut b = normal();
         let v = b.doc().version;
-        let r = reply(b.handle(&msg(json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}))));
+        let r = reply(b.handle(&msg(
+            json!({"t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}),
+        )));
         assert!(matches!(r, EditorOutbound::Blocks { version, .. } if version == v + 1));
         assert!(b.doc().text.starts_with("x# 标题"));
     }
@@ -237,22 +292,42 @@ mod tests {
             json!({"t": "info", "name": "x"}),
             json!({"t": "done"}),
         ] {
-            assert_eq!(reason(b.handle(&msg(m.clone()))), "not accepted outside selftest", "{m}");
+            assert_eq!(
+                reason(b.handle(&msg(m.clone()))),
+                "not accepted outside selftest",
+                "{m}"
+            );
         }
-        assert_eq!(b.doc().text, before, "a webview must not be able to rewrite blocks by id");
+        assert_eq!(
+            b.doc().text,
+            before,
+            "a webview must not be able to rewrite blocks by id"
+        );
     }
 
     #[test]
     fn the_host_can_drive_the_agent_stand_in_in_normal_operation() {
         let mut b = normal();
         let v = b.doc().version;
-        let up = b.stand_in(StandIn::RewriteParagraph(1)).expect("a paragraph exists");
-        assert!(matches!(up, EditorOutbound::Update { ref origin, version, .. } if origin == "agent" && version == v + 1), "{up:?}");
-        assert!(b.doc().text.contains("第一段。") && !b.doc().text.contains("第二段。"), "{:?}", b.doc().text);
+        let up = b
+            .stand_in(StandIn::RewriteParagraph(1))
+            .expect("a paragraph exists");
+        assert!(
+            matches!(up, EditorOutbound::Update { ref origin, version, .. } if origin == "agent" && version == v + 1),
+            "{up:?}"
+        );
+        assert!(
+            b.doc().text.contains("第一段。") && !b.doc().text.contains("第二段。"),
+            "{:?}",
+            b.doc().text
+        );
         assert!(b.stand_in(StandIn::Append).is_some());
         assert!(b.doc().text.trim_end().ends_with("😀。"));
         let mut empty = Bridge::new("# 只有标题\n", Mode::Normal, N);
-        assert!(empty.stand_in(StandIn::RewriteParagraph(0)).is_none(), "no paragraph, nothing to rewrite");
+        assert!(
+            empty.stand_in(StandIn::RewriteParagraph(0)).is_none(),
+            "no paragraph, nothing to rewrite"
+        );
         assert_eq!(empty.doc().text, "# 只有标题\n");
     }
 
@@ -260,16 +335,46 @@ mod tests {
     fn selftest_mode_accepts_the_agent_hook_and_reports() {
         let mut b = Bridge::new("甲\n\n乙\n", Mode::SelfTest, N);
         let id = b.doc().blocks_message();
-        let EditorOutbound::Blocks { blocks, .. } = id else { panic!() };
-        let r = reply(b.handle(&msg(json!({"t": "agent", "op": "replace_block", "id": blocks[1].id, "text": "丙"}))));
-        assert!(matches!(r, EditorOutbound::Update { ref origin, .. } if origin == "agent"), "{r:?}");
+        let EditorOutbound::Blocks { blocks, .. } = id else {
+            panic!()
+        };
+        let r = reply(b.handle(&msg(
+            json!({"t": "agent", "op": "replace_block", "id": blocks[1].id, "text": "丙"}),
+        )));
+        assert!(
+            matches!(r, EditorOutbound::Update { ref origin, .. } if origin == "agent"),
+            "{r:?}"
+        );
         assert_eq!(b.doc().text, "甲\n\n丙\n");
         let stale = reply(b.handle(&msg(json!({"t": "agent", "op": "replace_block", "id": blocks[0].id, "text": "x", "expect": "0000000000000000"}))));
-        assert!(matches!(stale, EditorOutbound::AgentError { stale: true, .. }), "{stale:?}");
-        assert!(matches!(reply(b.handle(&msg(json!({"t": "agent", "op": "nope"})))), EditorOutbound::AgentError { stale: false, .. }));
-        assert_eq!(b.handle(&msg(json!({"t": "result", "name": "T1", "pass": false, "detail": "d"}))), Handled::Report(Report::Result { name: "T1".into(), pass: false, detail: "d".into() }));
-        assert_eq!(b.handle(&msg(json!({"t": "done"}))), Handled::Report(Report::Done));
-        assert_eq!(b.handle(&msg(json!({"t": "ready", "engine": "cm"}))), Handled::Report(Report::Ready { engine: "cm".into() }));
+        assert!(
+            matches!(stale, EditorOutbound::AgentError { stale: true, .. }),
+            "{stale:?}"
+        );
+        assert!(matches!(
+            reply(b.handle(&msg(json!({"t": "agent", "op": "nope"})))),
+            EditorOutbound::AgentError { stale: false, .. }
+        ));
+        assert_eq!(
+            b.handle(&msg(
+                json!({"t": "result", "name": "T1", "pass": false, "detail": "d"})
+            )),
+            Handled::Report(Report::Result {
+                name: "T1".into(),
+                pass: false,
+                detail: "d".into()
+            })
+        );
+        assert_eq!(
+            b.handle(&msg(json!({"t": "done"}))),
+            Handled::Report(Report::Done)
+        );
+        assert_eq!(
+            b.handle(&msg(json!({"t": "ready", "engine": "cm"}))),
+            Handled::Report(Report::Ready {
+                engine: "cm".into()
+            })
+        );
     }
 
     #[test]
@@ -284,7 +389,14 @@ mod tests {
         for k in ["id", "kind", "level", "title", "how", "from", "to", "head"] {
             assert!(v["blocks"][0].get(k).is_some(), "block.{k}");
         }
-        let r = EditorOutbound::AgentError { reason: "r".into(), stale: true }.to_json();
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&r).unwrap(), json!({"t": "agent_error", "reason": "r", "stale": true}));
+        let r = EditorOutbound::AgentError {
+            reason: "r".into(),
+            stale: true,
+        }
+        .to_json();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&r).unwrap(),
+            json!({"t": "agent_error", "reason": "r", "stale": true})
+        );
     }
 }

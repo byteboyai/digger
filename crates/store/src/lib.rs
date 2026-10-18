@@ -18,7 +18,7 @@ mod projects;
 mod runner;
 mod service;
 
-pub use projects::ProjectHost;
 pub use ledger::{CompletionEvent, TaskUsageRecord, UsageLedger, UsageLedgerError};
+pub use projects::ProjectHost;
 pub use runner::{Clock, RunningTask, RunningTasks, SystemClock, TaskOutcome, TaskRunner};
 pub use service::{LedgerUsageService, UnavailableUsageService};

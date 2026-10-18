@@ -44,7 +44,11 @@ impl Listing {
     /// 对每个项目的路径做一次 `is_dir()`。这是阻塞的磁盘访问(项目在断开的网络盘上时可能很久),
     /// 所以只在后台阻塞线程池里调用,不进 `update`。
     pub fn scan(projects: Vec<ProjectInfo>) -> Self {
-        let missing = projects.iter().filter(|p| !Path::new(&p.path).is_dir()).map(|p| p.id).collect();
+        let missing = projects
+            .iter()
+            .filter(|p| !Path::new(&p.path).is_dir())
+            .map(|p| p.id)
+            .collect();
         Self { projects, missing }
     }
 }
@@ -96,7 +100,10 @@ impl ProjectsState {
         let loaded = ProjectTabs::load(&dir.join(paths::PROJECT_TABS_FILE));
         let (host, notice) = match ProjectHost::open(&dir.join(paths::PROJECTS_DB_FILE)) {
             Ok(host) => (Some(host), None),
-            Err(e) => (None, Some((NoticeKind::Unavailable, format!("项目功能不可用: {e}")))),
+            Err(e) => (
+                None,
+                Some((NoticeKind::Unavailable, format!("项目功能不可用: {e}"))),
+            ),
         };
         Self {
             host,
@@ -151,7 +158,9 @@ impl ProjectsState {
             async move {
                 let projects = service.list_projects().await.map_err(|e| e.to_string())?;
                 // 目录是否还在要 stat 磁盘,放到阻塞线程池里做,不占界面线程。
-                tokio::task::spawn_blocking(move || Listing::scan(projects)).await.map_err(|e| e.to_string())
+                tokio::task::spawn_blocking(move || Listing::scan(projects))
+                    .await
+                    .map_err(|e| e.to_string())
             },
             Message::Listed,
         )
@@ -163,7 +172,11 @@ impl ProjectsState {
                 self.clear_notice(NoticeKind::Open);
                 Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new().set_title("选择项目文件夹").pick_folder().await.map(|h| h.path().to_path_buf())
+                        rfd::AsyncFileDialog::new()
+                            .set_title("选择项目文件夹")
+                            .pick_folder()
+                            .await
+                            .map(|h| h.path().to_path_buf())
                     },
                     Message::FolderPicked,
                 )
@@ -175,7 +188,10 @@ impl ProjectsState {
                 };
                 let service = host.projects.clone();
                 let path = path.to_string_lossy().into_owned();
-                Task::perform(async move { service.open_project(path).await.map_err(|e| e.to_string()) }, Message::Opened)
+                Task::perform(
+                    async move { service.open_project(path).await.map_err(|e| e.to_string()) },
+                    Message::Opened,
+                )
             }
             Message::Opened(Ok(Some(info))) => {
                 self.clear_notice(NoticeKind::Open);
@@ -248,22 +264,54 @@ impl ProjectsState {
             let Some(project) = self.registry.iter().find(|p| p.id == *id) else {
                 continue;
             };
-            let label_color = if self.missing.contains(id) || self.tabs.active() != Some(*id) { dim } else { tokens.body };
-            let name = if self.missing.contains(id) { format!("{}(目录已不存在)", project.name) } else { project.name.clone() };
+            let label_color = if self.missing.contains(id) || self.tabs.active() != Some(*id) {
+                dim
+            } else {
+                tokens.body
+            };
+            let name = if self.missing.contains(id) {
+                format!("{}(目录已不存在)", project.name)
+            } else {
+                project.name.clone()
+            };
             tabs = tabs
-                .push(button(text(name).size(font::body()).color(label_color)).style(button::text).on_press(Message::Activate(*id)))
-                .push(button(text("×").size(font::body()).color(dim)).style(button::text).on_press(Message::Close(*id)));
+                .push(
+                    button(text(name).size(font::body()).color(label_color))
+                        .style(button::text)
+                        .on_press(Message::Activate(*id)),
+                )
+                .push(
+                    button(text("×").size(font::body()).color(dim))
+                        .style(button::text)
+                        .on_press(Message::Close(*id)),
+                );
         }
         if self.tabs.open().is_empty() {
             tabs = tabs.push(text("无项目").size(font::body()).color(dim));
         }
-        let plus = button(icons::view(IconKind::Plus, icon_size::rail(), dim)).style(button::text).on_press_maybe(self.host.as_ref().map(|_| Message::PickFolder));
-        let hint = if self.host.is_some() { "打开项目文件夹" } else { "项目功能不可用" };
-        tabs = tabs.push(tooltip(plus, iced::widget::container(text(hint).size(font::body())).padding(6).style(iced::widget::container::rounded_box), tooltip::Position::Bottom));
+        let plus = button(icons::view(IconKind::Plus, icon_size::rail(), dim))
+            .style(button::text)
+            .on_press_maybe(self.host.as_ref().map(|_| Message::PickFolder));
+        let hint = if self.host.is_some() {
+            "打开项目文件夹"
+        } else {
+            "项目功能不可用"
+        };
+        tabs = tabs.push(tooltip(
+            plus,
+            iced::widget::container(text(hint).size(font::body()))
+                .padding(6)
+                .style(iced::widget::container::rounded_box),
+            tooltip::Position::Bottom,
+        ));
         if let Some((_, full)) = &self.notice {
             // 顶栏只放截短的一行,全文在悬停提示里,免得长错误把"＋"和页签挤出顶栏。
-            let short = text(shorten(full, NOTICE_MAX_CHARS)).size(font::body()).color(tokens.gold);
-            let tip = iced::widget::container(text(full.clone()).size(font::body())).padding(6).style(iced::widget::container::rounded_box);
+            let short = text(shorten(full, NOTICE_MAX_CHARS))
+                .size(font::body())
+                .color(tokens.gold);
+            let tip = iced::widget::container(text(full.clone()).size(font::body()))
+                .padding(6)
+                .style(iced::widget::container::rounded_box);
             tabs = tabs.push(tooltip(short, tip, tooltip::Position::Bottom));
         }
         tabs.into()

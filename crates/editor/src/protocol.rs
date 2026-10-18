@@ -55,7 +55,14 @@ pub enum EditorInbound {
 impl EditorInbound {
     /// 只在自检模式下接受的消息;正常运行时同未知消息一样被拒绝。
     pub fn selftest_only(&self) -> bool {
-        matches!(self, Self::Load { .. } | Self::Agent { .. } | Self::Result { .. } | Self::Info { .. } | Self::Done {})
+        matches!(
+            self,
+            Self::Load { .. }
+                | Self::Agent { .. }
+                | Self::Result { .. }
+                | Self::Info { .. }
+                | Self::Done {}
+        )
     }
 }
 
@@ -85,15 +92,36 @@ pub struct BlockInfo {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum EditorOutbound {
     /// 握手的回答:初始文档。
-    Open { text: String, version: u64, hash: String, len16: usize, blocks: Vec<BlockInfo> },
+    Open {
+        text: String,
+        version: u64,
+        hash: String,
+        len16: usize,
+        blocks: Vec<BlockInfo>,
+    },
     /// 编辑被接受后的块列表。
-    Blocks { version: u64, hash: String, len16: usize, blocks: Vec<BlockInfo> },
+    Blocks {
+        version: u64,
+        hash: String,
+        len16: usize,
+        blocks: Vec<BlockInfo>,
+    },
     /// Agent 补丁:改动 + 结果版本与块。
-    Update { origin: String, changes: Vec<Change>, version: u64, hash: String, len16: usize, blocks: Vec<BlockInfo> },
+    Update {
+        origin: String,
+        changes: Vec<Change>,
+        version: u64,
+        hash: String,
+        len16: usize,
+        blocks: Vec<BlockInfo>,
+    },
     /// Agent 步骤没有应用(正常结果,不是故障)。
     AgentError { reason: String, stale: bool },
     /// 消息被拒绝(过期的 base、解析不了、未知、nonce 不对……)。
-    Reject { reason: String, version: Option<u64> },
+    Reject {
+        reason: String,
+        version: Option<u64>,
+    },
 }
 
 impl EditorOutbound {
