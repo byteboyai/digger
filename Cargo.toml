@@ -46,11 +46,11 @@ byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
 # 实现 `UsageService`;`dozer-panel-usage` 含公共 UI 与 bytehost Surface,只许宿主适配层
 # (`digger-desktop`)依赖。dozer 现有的 `v0.5.x` tag 是 App 发布 tag;库 crate 快照用
 # `libs-2026-10-18b` tag(ADR:升级 bytehost/byteui 时 dozer 与 digger 同日一起升)。
-dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18c" }
-dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18c" }
-dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18c" }
+dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
+dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
+dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
 # Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。
-dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18c" }
+dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-18d" }
 
 iced = { version = "0.14", default-features = false, features = ["tokio", "wgpu"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。
