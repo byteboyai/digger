@@ -76,6 +76,22 @@ impl ProjectTabs {
         }
     }
 
+    /// 把页签 `id` 插到 `index`(这是插入位,按"移走自己之后"的下标算);位置不变返回 `false`。
+    pub fn move_tab(&mut self, id: i64, index: usize) -> bool {
+        let Some(from) = self.open.iter().position(|t| *t == id) else {
+            return false;
+        };
+        let mut open = self.open.clone();
+        open.remove(from);
+        let to = index.min(open.len());
+        if to == from {
+            return false;
+        }
+        open.insert(to, id);
+        self.open = open;
+        true
+    }
+
     /// 切换当前页签;`id` 不在已开页签里返回 `false`,状态不变。
     pub fn activate(&mut self, id: i64) -> bool {
         if self.open.contains(&id) {
@@ -276,5 +292,22 @@ mod tests {
                 save_blocked: true
             }
         );
+    }
+
+    #[test]
+    fn moving_a_tab_keeps_the_others_in_order_and_the_active_one_unchanged() {
+        let mut t = tabs(&[1, 2, 3], Some(2));
+        assert!(t.move_tab(1, 2));
+        assert_eq!((t.open(), t.active()), (&[2, 3, 1][..], Some(2)));
+        assert!(t.move_tab(1, 0));
+        assert_eq!(t.open(), &[1, 2, 3][..]);
+    }
+
+    #[test]
+    fn moving_a_tab_to_where_it_already_is_is_a_no_op() {
+        let mut t = tabs(&[1, 2, 3], Some(1));
+        assert!(!t.move_tab(2, 1));
+        assert_eq!(t.open(), &[1, 2, 3][..]);
+        assert!(!t.move_tab(9, 0), "不在已开页签里:不动");
     }
 }

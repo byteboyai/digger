@@ -45,6 +45,8 @@ pub enum Msg {
     Markdown(crate::markdown::Message),
     /// 项目页签与注册表(顶栏页签行)。
     Projects(crate::projects::Message),
+    /// 每帧焦点探针:`view` 刚渲染完(库的 `text_input` 焦点态已写回),`id` 是渲染时聚焦的项目。
+    ProjectFocusFrame(i64),
     /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
@@ -854,7 +856,35 @@ impl Product<Msg> for ProductShell {
                 }
                 task
             }
+            Msg::ProjectFocusFrame(id) => {
+                let Some(project) = self
+                    .projects
+                    .current_project()
+                    .filter(|p| p.id == id)
+                    .cloned()
+                else {
+                    return Task::none();
+                };
+                // 库在 `view` 之后把 `text_input` 的真焦点态写进全局锁,这里取走并记账;
+                // 从真变假那一刻提交改名/描述(与 Dozer 的 `set_project_name_focused` 同义)。
+                let now = dozer_panel_project::take_name_edit_focused();
+                let was = self.project.name_edit_was_focused(project.id);
+                self.project.set_name_edit_focused(project.id, now);
+                if was && !now {
+                    self.project.blur_editors(&project);
+                }
+                Task::none()
+            }
             Msg::Project(m) => {
+                // 改名结果自带项目 id(不是异步 token):不依赖"当前聚焦项目",也不要求它还是当前页签。
+                if let dozer_panel_project::Message::NameRenamed(id, Ok(updated)) = &m {
+                    let same = self.project.focused_project() == Some(*id);
+                    self.projects.replace_registered(updated.clone());
+                    if same && self.panel_visible(&shell::project_id()) {
+                        self.activate_project_panel();
+                    }
+                    return Task::none();
+                }
                 let Some(project) = self.project.resolve_project(&m).and_then(|id| {
                     self.projects
                         .current_project()
@@ -987,7 +1017,29 @@ impl Product<Msg> for ProductShell {
             }
             return body.into();
         }
-        bytehost_chrome::view(&self.shell, self, &metrics_from_theme())
+        // 名称编辑框的"失焦保存"钩子:库的 `text_input` 焦点态只能借 Operation 在渲染时读到,
+        // Digger 没有逐帧原生循环,于是每帧派一个一次性消息,由 `update` 在两帧之间读回
+        // (同 Dozer 的 `CaptureNameEditFocus`,只是搭在 "消息→重绘→消息" 的循环上)。
+        let body: Element<'_, Msg> =
+            bytehost_chrome::view(&self.shell, self, &metrics_from_theme());
+        // 「修复项目」进度卡:进行中盖住整个窗口(不可关闭),全部完成后库才放行 `ScaffoldPopupClose`。
+        // Dozer 用独立原生窗口承载,Digger 用同一窗口里的整窗覆盖层——卡片本体是库的同一份。
+        let card: Option<Element<'_, Msg>> = self
+            .project
+            .focused_project()
+            .and_then(|id| self.project.scaffold_card(id))
+            .map(|card| {
+                container(card)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .center(Length::Fill)
+                    .padding(24)
+                    .into()
+            });
+        match card {
+            Some(card) => iced::widget::stack![body, card].into(),
+            None => body,
+        }
     }
 
     fn on_activated(&mut self, slot: bytehost_desktop::SurfaceSlot) {
@@ -1024,6 +1076,10 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
     }
 }
 
+/// 名称编辑框焦点探针的订阅数据(项目 id 作 key:切项目就换一条订阅)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct NameFocusProbe(i64);
+
 /// 订阅:窗口关闭请求、骨架需要的鼠标 / 缩放事件,以及仅在有动画时才开的 ~60fps 动画拍。
 pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     let events = iced::event::listen_with(|evt, _status, _id| {
@@ -1039,6 +1095,30 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         events,
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
     ];
+    // 名称编辑框的真焦点态只有渲染时(Operation)读得到:用一个 16ms 的订阅在帧与帧之间
+    // 把它取回来(同 Dozer 的 `CaptureNameEditFocus`,这里借订阅当逐帧钩子)。
+    if let Some(project) = shell.projects.current_project().map(|p| p.id)
+        && shell.panel_visible(&shell::project_id())
+    {
+        subs.push(iced::Subscription::run_with(
+            NameFocusProbe(project),
+            |probe| {
+                let project = probe.0;
+                iced::stream::channel(
+                    1,
+                    move |mut out: iced::futures::channel::mpsc::Sender<Msg>| async move {
+                        use iced::futures::SinkExt;
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                            if out.send(Msg::ProjectFocusFrame(project)).await.is_err() {
+                                break;
+                            }
+                        }
+                    },
+                )
+            },
+        ));
+    }
     if shell.shell.animating() {
         subs.push(
             iced::time::every(std::time::Duration::from_millis(16))
@@ -1450,6 +1530,46 @@ mod tests {
                 .map(|d| d.collapsed),
             Some(true),
             "the library's toggle is routed to the shell"
+        );
+    }
+
+    #[test]
+    fn a_successful_rename_updates_the_tab_title() {
+        use crate::projects::Message as P;
+        let dir = test_temp_dir("rename");
+        std::fs::create_dir(dir.join("old-name")).unwrap();
+        let old = dozer_model::ProjectInfo {
+            id: 7,
+            path: dir.join("old-name").to_string_lossy().into_owned(),
+            name: "old-name".into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        send(
+            &mut shell,
+            Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![
+                old.clone(),
+            ])))),
+        );
+        shell.projects.open_tab_for_test(old.id);
+        send(&mut shell, Msg::Projects(P::Activate(old.id)));
+        assert_eq!(shell.projects.current_project().unwrap().name, "old-name");
+
+        let mut renamed = old.clone();
+        renamed.name = "new-name".into();
+        send(
+            &mut shell,
+            Msg::Project(dozer_panel_project::Message::NameRenamed(
+                old.id,
+                Ok(renamed),
+            )),
+        );
+        assert_eq!(
+            shell.projects.current_project().unwrap().name,
+            "new-name",
+            "the registry is the only source of names, so the tab title follows it"
         );
     }
 

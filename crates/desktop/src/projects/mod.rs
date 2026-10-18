@@ -13,7 +13,7 @@ use byteui::interaction::icons::{self, IconKind};
 use byteui::theme::{color, font, icon_size};
 use digger_store::ProjectHost;
 use dozer_model::ProjectInfo;
-use iced::widget::{button, mouse_area, row, text, tooltip};
+use iced::widget::{button, container, mouse_area, row, text, tooltip};
 use iced::{Alignment, Element, Task};
 
 use crate::paths;
@@ -35,6 +35,12 @@ pub enum Message {
     HoverEnter(i64),
     /// 鼠标离开它。
     HoverLeave(i64),
+    /// 页签被按住(拖拽排序的起点)。
+    DragStart(i64),
+    /// 拖拽中光标的窗口坐标:算落点。
+    DragMove(iced::Point),
+    /// 松开:拖拽结束,取消页签标记。
+    DragEnd,
 }
 
 /// 一次注册表读取的结果:项目列表(最近优先)与"目录已不存在"的项目 id。
@@ -74,7 +80,10 @@ enum NoticeKind {
 const NOTICE_MAX_CHARS: usize = 48;
 
 /// "＋"不是页签:`hovered` 用这个 id 记它。
-pub const ADD_TAB_HOVER: i64 = -1;
+pub const TAB_SPACING: f32 = 6.0;
+/// 页签行自己(不是某张页签)的悬停标记:只用来区分"鼠标在行上",不参与拖窗让路。
+const ROW_HOVER: i64 = -2;
+const ADD_TAB_HOVER: i64 = -1;
 
 fn shorten(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -100,6 +109,13 @@ pub struct ProjectsState {
     missing: HashSet<i64>,
     /// 此刻悬停在顶栏可交互控件上的页签("＋"记为 [`ADD_TAB_HOVER`])。
     hovered: Option<i64>,
+    /// 正被按住拖动的页签(拖拽排序)。
+    dragging: Option<i64>,
+    /// 拖拽开始时各页签宽度(按标签字数估):落点用它们的中点换算。精确的像素级命中
+    /// 要等 iced 暴露 `operate` 之外的消息,眼下不值得为它引入一层自绘。
+    drag_row: Option<(f32, Vec<f32>)>,
+    /// 页签行左端在窗口里的 x(由产品在渲染时告知,来自顶栏几何)。
+    tab_row_left: f32,
     notice: Option<(NoticeKind, String)>,
 }
 
@@ -123,6 +139,9 @@ impl ProjectsState {
             registry: Vec::new(),
             missing: HashSet::new(),
             hovered: None,
+            dragging: None,
+            drag_row: None,
+            tab_row_left: 0.0,
             notice,
         }
     }
@@ -147,6 +166,14 @@ impl ProjectsState {
     #[cfg(test)]
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_ref().map(|(_, text)| text.as_str())
+    }
+
+    /// 换掉注册表快照里的一条(改名成功时用库返回的新 `ProjectInfo`)。
+    pub fn replace_registered(&mut self, info: dozer_model::ProjectInfo) {
+        match self.registry.iter_mut().find(|p| p.id == info.id) {
+            Some(slot) => *slot = info,
+            None => self.registry.insert(0, info),
+        }
     }
 
     /// 此刻是否有顶栏可交互控件被悬停。原生拖窗覆写读的是进程级原子量(由 [`Self::set_hovered`] 维护),
@@ -195,6 +222,56 @@ impl ProjectsState {
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
+        if let Message::DragStart(id) = msg {
+            self.dragging = Some(id);
+            // 页签行从左栏面板区左端开始;这里只用来把光标换算成"跨过几张页签",
+            // 不参与布局。
+            let widths = self
+                .tabs
+                .open()
+                .iter()
+                .filter_map(|id| self.registry.iter().find(|p| p.id == *id))
+                .map(|p| Self::tab_width(&p.name))
+                .collect();
+            self.drag_row = Some((self.tab_row_left, widths));
+            return Task::none();
+        }
+        if let Message::DragEnd = msg {
+            self.dragging = None;
+            self.drag_row = None;
+            return Task::none();
+        }
+        if let Message::DragMove(cursor) = msg {
+            let Some(from) = self.dragging else {
+                return Task::none();
+            };
+            if self.drag_row.is_none() {
+                // 拖拽开始那一帧还没渲染过:用渲染时记下的左端和当前页签宽度补上。
+                let widths = self
+                    .tabs
+                    .open()
+                    .iter()
+                    .filter_map(|id| self.registry.iter().find(|p| p.id == *id))
+                    .map(|p| Self::tab_width(&p.name))
+                    .collect();
+                self.drag_row = Some((self.tab_row_left, widths));
+            }
+            if let Some(to) = self.landing_index(from, cursor.x)
+                && self.tabs.move_tab(from, to)
+            {
+                self.save_tabs();
+                // 顺序变了,宽度表跟着换(名字与顺序都取自当前页签)。
+                let widths = self
+                    .tabs
+                    .open()
+                    .iter()
+                    .filter_map(|id| self.registry.iter().find(|p| p.id == *id))
+                    .map(|p| Self::tab_width(&p.name))
+                    .collect();
+                self.drag_row = Some((self.tab_row_left, widths));
+            }
+            return Task::none();
+        }
         if let Message::HoverEnter(id) = msg {
             self.set_hovered(Some(id));
             return Task::none();
@@ -267,7 +344,11 @@ impl ProjectsState {
                 Task::none()
             }
             // 已在函数开头处理(不落盘、不碰注册表):这里只是让穷尽匹配完整。
-            Message::HoverEnter(_) | Message::HoverLeave(_) => Task::none(),
+            Message::HoverEnter(_)
+            | Message::HoverLeave(_)
+            | Message::DragStart(_)
+            | Message::DragMove(_)
+            | Message::DragEnd => Task::none(),
             Message::Activate(id) => {
                 if self.tabs.activate(id) {
                     self.save_tabs();
@@ -280,6 +361,31 @@ impl ProjectsState {
                 Task::none()
             }
         }
+    }
+
+    /// 拖拽落点:光标落在第几张页签的右半边,就插到它后面(返回值是移走自己之后的
+    /// 下标,由 `ProjectTabs::move_tab` 用)。
+    fn landing_index(&self, from: i64, x: f32) -> Option<usize> {
+        let (left, widths) = self.drag_row.as_ref()?;
+        let at = self.tabs.open().iter().position(|t| *t == from)?;
+        let mut edge = *left;
+        let mut index = 0;
+        for width in widths {
+            if x > edge + width * 0.5 {
+                index += 1;
+            }
+            edge += width + TAB_SPACING;
+        }
+        Some(
+            index
+                .min(widths.len())
+                .saturating_sub(usize::from(index > at)),
+        )
+    }
+
+    /// 页签宽度估值(字号 × 字数 + 关闭按钮 + 内边距),只用来分"拖过了几张"。
+    fn tab_width(name: &str) -> f32 {
+        font::body() as f32 * 0.6 * name.chars().count() as f32 + 28.0
     }
 
     fn save_tabs(&mut self) {
@@ -343,10 +449,30 @@ impl ProjectsState {
                     .on_press(Message::Close(*id)),
             ]
             .align_y(Alignment::Center);
+            let tab: Element<'_, Message> = if self.dragging == Some(*id) {
+                use iced_widget::core::Border;
+                // 被拖动的页签画成"抬起"的样子,让拖拽有反馈。
+                container(tab)
+                    .padding([1, 2])
+                    .style(move |_t| iced::widget::container::Style {
+                        background: Some(tokens.panel.into()),
+                        border: Border {
+                            radius: 4.0.into(),
+                            width: 1.0,
+                            color: tokens.gold,
+                        },
+                        ..Default::default()
+                    })
+                    .into()
+            } else {
+                tab.into()
+            };
             tabs = tabs.push(
                 mouse_area(tab)
                     .on_enter(Message::HoverEnter(*id))
-                    .on_exit(Message::HoverLeave(*id)),
+                    .on_exit(Message::HoverLeave(*id))
+                    .on_press(Message::DragStart(*id))
+                    .on_move(Message::DragMove),
             );
         }
         if self.tabs.open().is_empty() {
@@ -380,7 +506,18 @@ impl ProjectsState {
                 .style(iced::widget::container::rounded_box);
             tabs = tabs.push(tooltip(short, tip, tooltip::Position::Bottom));
         }
-        tabs.into()
+        // 拖拽排序:拖拽中整行挂在 `mouse_area` 上,光标滑进页签间隙也能收到移动事件
+        // (单个页签的 `on_move` 一离开自己就断);松手结束拖拽。页签被拖出顺序之外时
+        // 由 `landing_index` 按"跨过几张页签"换算。`on_enter` 捎带行左端:整行第一次
+        // 悬停就能拿到自己的窗口坐标,不必另开一层自绘去量。
+        let row = mouse_area(tabs).on_enter(Message::HoverEnter(ROW_HOVER));
+        if self.dragging.is_some() {
+            row.on_move(Message::DragMove)
+                .on_release(Message::DragEnd)
+                .into()
+        } else {
+            row.into()
+        }
     }
 }
 

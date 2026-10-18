@@ -662,6 +662,20 @@ impl ProjectPanel {
         );
     }
 
+    /// 上一帧名称编辑框是否持有真焦点(每帧由产品写回,失焦时用来判断"从真变假")。
+    pub fn name_edit_was_focused(&self, project_id: i64) -> bool {
+        self.states
+            .get(&project_id)
+            .is_some_and(|s| s.name_edit_focused())
+    }
+
+    /// 记下这一刻名称编辑框的真焦点态(产品每帧调用)。
+    pub fn set_name_edit_focused(&mut self, project_id: i64, focused: bool) {
+        if let Some(state) = self.states.get_mut(&project_id) {
+            state.set_name_edit_focused_flag(focused);
+        }
+    }
+
     /// 名称/描述编辑框是否正在编辑。用于"编辑中点了面板别处就提交"的失焦兜底。
     pub fn is_editing(&self, project_id: i64) -> bool {
         self.states
@@ -719,6 +733,15 @@ impl ProjectPanel {
                 .height(Length::Fill)
                 .into(),
         }
+    }
+
+    /// 「修复项目」四步进度卡片(库的 `project_scaffold_card`);没有在跑时为 `None`。
+    /// Digger 没有独立原生弹窗层,这张卡片盖在整个窗口上(见 `product::view`),与 Dozer
+    /// 的 `platform::project_scaffold_overlay` 同一份内容,只是宿主不同。
+    pub fn scaffold_card<'a>(&'a self, project_id: i64) -> Option<Element<'a, Msg>> {
+        let state = self.states.get(&project_id)?;
+        state.scaffold_run.as_ref()?;
+        Some(dozer_panel_project::view::project_scaffold_card(state, "en").map(Msg::Project))
     }
 
     /// 「删除项目」三选一卡片(库的 `project_delete_card`);没有待确认的删除时为 `None`。
