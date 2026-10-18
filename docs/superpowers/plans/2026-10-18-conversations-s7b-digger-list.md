@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Digger 右栏出现会话面板(Agent 之后),配对布局:左块是当前项目的会话列表(搜索、Agent 筛选、分页、卡片),右块先放一个「审阅详情即将可用」的占位(真实详情是 S7c)。数据来自 `diggerd` / `digger.db`;Agent 回合结束时列表自动刷新;历史会话经一个**明确的按钮**导入,不静默复制。本期**不发布产品版本**。
+**Goal:** Digger 右栏出现会话面板(Agent 之后),配对布局:会话列表(搜索、Agent 筛选、分页、卡片)是配对的第一块,按右栏的约定渲染在内容块之后(即「内容 | 列表」,拖到左栏时镜像,与用量和 Dozer 的会话面板一致);内容块先放一个「审阅详情即将可用」的占位(真实详情是 S7c)。数据来自 `diggerd` / `digger.db`;Agent 回合结束时列表自动刷新;历史会话经一个**明确的按钮**导入,不静默复制。本期**不发布产品版本**。
 
 **Architecture:** 全部在 `digger-desktop`。`adapters/conversations.rs` 的 `ConversationsPanel` 持有 `HashMap<i64, WorkspaceState>`(每项目一份,库的状态)、从 `daemon::Daemon` 取的 `ConversationService` / `SummaryService` / `TranscriptService`(都是 `dozer_client::Client` 的实现,连 `diggerd`)、`LinkedTodos` 空实现、`ConversationsCapabilities::default()`(全关);消息 `Msg::Conversations(i64, dozer_panel_conversations::Message)` **带项目 id**(列表结果在项目不聚焦时照样到达)。`adapters/conversations_import.rs` 管历史导入的状态机与「已导入」标记。Agent 筛选下拉复用 S6d-2 的 `adapters/menu_overlay.rs`。S6d-2 里被忽略的 `AgentHostEvent::TurnEnded` 在这里接成列表刷新。
 
