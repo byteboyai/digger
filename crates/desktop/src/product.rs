@@ -45,7 +45,7 @@ pub enum Msg {
     Files(dozer_panel_files::Message),
     /// 文件系统监听:当前项目的工作区有增删改,文件树与 git 着色要跟进。
     FilesFsChanged(crate::adapters::files::FsChange),
-    /// 关掉「文件」面板的右键菜单(点空白 / Esc)。
+    /// 关掉「文件」面板的右键菜单 / 移动卡片 / 删除确认(点空白 / Esc)。
     FilesMenuDismiss,
     /// 「编辑器」面板的消息(ADR-013)。
     Markdown(crate::markdown::Message),
@@ -916,7 +916,10 @@ impl Product<Msg> for ProductShell {
                 }
                 task
             }
-            Msg::FilesMenuDismiss => self.files.close_menu(),
+            Msg::FilesMenuDismiss => {
+                let project_id = self.projects.current_project_id();
+                self.files.dismiss(project_id)
+            }
             Msg::FilesFsChanged(change) => {
                 if Some(change.project_id) == self.projects.current_project_id() {
                     self.files.fs_changed(&change)
@@ -1124,6 +1127,38 @@ impl Product<Msg> for ProductShell {
             Some(card) => iced::widget::stack![body, card].into(),
             None => body,
         };
+        // 「文件」面板的对话框(删除确认 / 移动重命名):居中卡片 + 半透明遮罩,
+        // 压在右键菜单之下、正文之上。
+        let body = if self.panel_visible(&shell::files_id()) {
+            let dialog = self.files.delete_confirm().map(|spec| {
+                let spec = byteui::feedback::dialog::ConfirmDialog {
+                    icon: spec.icon,
+                    title: spec.title,
+                    description: spec.description,
+                    cancel_label: spec.cancel_label,
+                    cancel_msg: Msg::Files(spec.cancel_msg),
+                    confirm_label: spec.confirm_label,
+                    confirm_msg: Msg::Files(spec.confirm_msg),
+                    close_msg: None,
+                    confirm_color: spec.confirm_color,
+                    content_spacing: spec.content_spacing,
+                };
+                centered_modal(
+                    byteui::feedback::dialog::confirm(spec),
+                    Msg::FilesMenuDismiss,
+                )
+            });
+            let move_card = self
+                .files
+                .move_card()
+                .map(|card| centered_modal(card, Msg::FilesMenuDismiss));
+            match dialog.or(move_card) {
+                Some(card) => iced::widget::stack![body, card].into(),
+                None => body,
+            }
+        } else {
+            body
+        };
         // 「文件」面板的右键菜单:盖在最上层,点空白或 Esc 关闭。
         match self.files.menu() {
             Some(menu) if self.panel_visible(&shell::files_id()) => {
@@ -1234,7 +1269,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         ));
     }
     // 右键菜单打开时订阅 Esc:关掉浮层(点空白走浮层自己的透明按下区)。
-    if shell.files.menu().is_some() {
+    if shell.files.has_modal() || shell.files.menu().is_some() {
         subs.push(iced::event::listen_with(|evt, _status, _id| {
             matches!(
                 evt,
@@ -1253,6 +1288,34 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         );
     }
     Subscription::batch(subs)
+}
+
+/// 面板内弹窗:整窗半透明遮罩 + 居中卡片。点遮罩关闭。
+fn centered_modal<'a>(card: Element<'a, Msg>, on_dismiss: Msg) -> Element<'a, Msg> {
+    let scrim: Element<'a, Msg> = iced_widget::mouse_area(
+        container(iced_widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_t: &iced_widget::Theme| container::Style {
+                background: Some(
+                    iced_widget::core::Color {
+                        a: 0.35,
+                        ..iced_widget::core::Color::BLACK
+                    }
+                    .into(),
+                ),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(on_dismiss)
+    .into();
+    let centered: Element<'a, Msg> = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center(Length::Fill)
+        .padding(24)
+        .into();
+    iced_widget::stack![scrim, centered].into()
 }
 
 /// 入口用:初始窗口尺寸 = 上次退出时保存的尺寸(没有就是默认尺寸)。

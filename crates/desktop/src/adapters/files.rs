@@ -271,11 +271,53 @@ impl FilesPanel {
         self.menu.as_ref()
     }
 
-    /// 关掉右键菜单(点空白 / Esc)。同时把状态同步给库,避免下次再开时
-    /// 库以为自己还开着而跳过重建条目。
-    pub fn close_menu(&mut self) -> iced::Task<Msg> {
+    /// 文件面板上此刻该显示的确认对话框(删除确认);没有就是 `None`。
+    /// 由产品叠加渲染 —— Digger 的弹窗是面板内的居中卡片,不是独立窗口。
+    pub fn delete_confirm(
+        &self,
+    ) -> Option<byteui::feedback::dialog::ConfirmDialog<dozer_panel_files::Message>> {
+        self.state
+            .as_ref()
+            .and_then(|s| dozer_panel_files::dialogs::delete_confirm_spec(s, "en"))
+    }
+
+    /// 移动/重命名卡片(库内已有的 `files_move_card`)。库在没有待办移动时返回空列。
+    /// 产品据此判断要不要出遮罩。
+    pub fn move_card(
+        &self,
+    ) -> Option<iced::Element<'_, Msg, iced_widget::Theme, iced_renderer::Renderer>> {
+        let state = self.state.as_ref()?;
+        state.pending_move.as_ref()?;
+        Some(dozer_panel_files::view::files_move_card(state, "en").map(Msg::Files))
+    }
+
+    /// 此刻是否有面板内弹窗(删除确认 / 移动卡片)。产品据此订阅 Esc。
+    pub fn has_modal(&self) -> bool {
+        let Some(state) = self.state.as_ref() else {
+            return false;
+        };
+        state.pending_move.is_some()
+            || state
+                .tree_delete_confirm
+                .as_ref()
+                .is_some_and(|t| !t.is_empty())
+    }
+
+    /// Esc / 取消:先关菜单,再退移动卡片,最后退删除确认(与 Dozer 的层级一致)。
+    pub fn dismiss(&mut self, project_id: Option<i64>) -> iced::Task<Msg> {
         if self.menu.take().is_some() {
-            return self.update(FilesMessage::ContextMenuClose, self.project_id);
+            return self.update(FilesMessage::ContextMenuClose, project_id);
+        }
+        // 库的取消分支是同步改状态(不派任务);避免 `iced::Task` 落空把
+        // 「按 Esc 但没轮询到」误判成没关。
+        if let Some(state) = self.state.as_mut() {
+            if state.pending_move.is_some() {
+                state.pending_move = None;
+                return iced::Task::none();
+            }
+            if state.tree_delete_confirm.take().is_some() {
+                return iced::Task::none();
+            }
         }
         iced::Task::none()
     }
@@ -614,6 +656,25 @@ mod tests {
         assert!(panel.menu().is_some_and(|m| m.is_empty()));
         panel.menu = None;
         assert!(panel.menu().is_none());
+    }
+
+    /// Esc 的层级:先关右键菜单,再退移动卡片;都关着时什么也不做。
+    #[test]
+    fn escape_closes_the_menu_before_the_dialogs() {
+        let mut panel = panel("esc-layers");
+        assert!(!panel.has_modal());
+        let dir = std::env::temp_dir().join(format!("digger-esc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        panel.set_project(Some(&project("esc", &dir)));
+        assert!(!panel.has_modal());
+        assert!(panel.delete_confirm().is_none());
+        panel.state.as_mut().expect("state").tree_delete_confirm =
+            Some(vec![(PathBuf::from("/tmp/a"), false)]);
+        assert!(panel.has_modal());
+        assert!(panel.delete_confirm().is_some());
+        let _ = panel.dismiss(None);
+        assert!(!panel.has_modal(), "delete confirm is dismissed");
+        assert!(panel.delete_confirm().is_none());
     }
 
     /// 能力四项全关:关掉的条目整条不出现。
