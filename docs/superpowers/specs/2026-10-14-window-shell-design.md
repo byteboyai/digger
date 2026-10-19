@@ -26,7 +26,7 @@ Digger 的窗口结构要和 Dozer **一模一样**。Dozer 里已有的 todo、
 | S3p | Project 实体、注册表、共享记忆 | 前置于 S3b;Dozer 的 Project 提成共享 `dozer-store-project`,Digger 用它打开项目文件夹并在顶栏显示页签(见 `2026-10-15-project-host-design.md`,ADR-014) |
 | S3 | 共享面板:todo | Dozer 先抽成库(约 4.3k 行),两边引用 |
 | S4 | 共享面板:对话、群聊、agent | 同上;agent 与外壳纠缠最深 |
-| S5 | Project 面板 + files | Project 身份、注册表、共享记忆已由 S3p 提供(ADR-014);S5 只做面板界面,从 Dozer 抽库共享。S5a(Project 面板)已完成;S5b(files 面板 + 预览/配对)待做 |
+| S5 | Project 面板 + files | Project 身份、注册表、共享记忆已由 S3p 提供(ADR-014);S5 只做面板界面,从 Dozer 抽库共享。S5a(Project 面板)、S5b-1(文件树,单栏)已完成;S5b-2(预览引擎)P1–P3 在 Dozer 已完成,Digger 的配对视图与接线(P4)待做 |
 
 S1 是其余所有子项目的前提:S2–S4 的面板要挂在它的配对视图里,S5 要把它的持久化拆成按项目一份。
 

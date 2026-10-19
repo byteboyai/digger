@@ -1,7 +1,7 @@
 # S5b-1 文件树:从 Dozer 抽成共享库,Digger 接入
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:已实现并合入 `main`(2026-10-19);文件树在 Digger 为单栏,双击文件交给系统默认应用打开。预览(配对视图)随 S5b-2 P4 接入;尚未发布版本
 - 路径:架构级(Dozer 新增共享 crate;Digger 新增一个面板与左栏图标;`dozer-panel-host` 增加一个跨面板命令)
 - 相关:`2026-10-18-project-panel-s5a-design.md`(S5a,抽库模板与 Dozer 侧门禁登记方式)、`2026-10-14-window-shell-design.md`(S1,S5 一行)、Dozer `2026-10-15-panel-todo-lib-design.md`(S3a)
 

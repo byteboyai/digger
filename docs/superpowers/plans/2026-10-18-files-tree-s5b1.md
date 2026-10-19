@@ -182,7 +182,7 @@
 - [ ] **Step 1:** `cargo build --workspace`、`cargo test --workspace`(记录通过数)、`cargo clippy --workspace --all-targets`(零告警)、`cargo fmt --check`、`bash scripts/check-shared-deps.sh && bash scripts/check-host-deps.sh && bash scripts/check-host-deps.sh --self-test && bash scripts/check-shell-regions.sh`、`Cargo.lock` 重复检查。
 - [ ] **Step 2: 真机回归**(隔离数据目录 `DIGGER_DATA_DIR`;只能截图,点击要人来做):左栏顺序 Project → 文件;树根是当前项目;展开/新建/重命名/删除确认/移动/复制粘贴/从 Finder 拖入;双击任意文件在系统默认应用打开;在 Finder 里增删文件后树自动更新、git 着色随之变化;右键菜单里没有文件历史/回滚/搜索/发送到 Agent;切换项目页签时树随之切换。逐项截图记录,任一项不符先停下,不要为了"过"而改验证。
 - [ ] **Step 3: 文档。** `2026-10-14-window-shell-design.md` 的 S5 行改为"S5a、S5b-1 已完成,S5b-2 预览引擎待做";`2026-10-18-files-tree-s5b1-design.md` 状态改"已实现"并补"实现结果";在设计 Q1 处记下"Markdown 面板打开指定文件"的排期结论。
-- [ ] **Step 4: 合并到 `main`(快进)、清理 worktree 与分支,** 不碰主工作区未提交的改动。
+- [x] **Step 4: 合并到 `main`(快进)、清理 worktree 与分支,** 不碰主工作区未提交的改动。
 - [ ] **Step 5: 发布新版本(项目硬性要求:每个面板迁移完成后,Dozer 与 Digger 各重新发布一个版本)。** 文件树面板迁移在两个产品里都落地、真机回归通过后:① Dozer 走它自己的发布流程(`scripts/build-macos-app.sh release`:升版本号 → 门禁 → 打包);② Digger 走 `bash scripts/release.sh`(门禁 → 升版本 → 打包 → 签名校验 → 压缩;不提交、不打 tag、不推送)。两个产物都要装到本机启动一次确认版本号与面板可用。**发布(含升版本、提交版本号、安装)是对外动作,先向用户确认再执行**;报告里写明两个新版本号与产物路径。
 - [ ] **Step 6: 汇报:** 各仓库测试通过数、依赖图结论、真机截图结论、D1–D6(并附 Step 5 的两个新版本号) 最终落地情况(尤其 D6 分支弹层是否降级)、Task 1 Step 3 发现的行为缺陷、哪些没验。
 
