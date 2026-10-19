@@ -51,6 +51,27 @@ if [ -f "$PACKAGING_DIR/AppIcon.icns" ]; then
   cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 fi
 
+# 预览宿主(dozer-panel-preview)的 web 资源以目录方式交付,不编译期内嵌:
+# flyfish 21 MB,内嵌会让二进制涨一大截,且 Dozer 现在就是资源目录。
+# 只拷第一批用到的三个目录——json-editor / tabular-host / plantuml-viewer
+# 属于能力关闭的类型,宿主根本不会创建(见 P3 计划 D3)。
+ASSETS_DIR=$(
+  cargo metadata --format-version 1 \
+    | jq -r '.packages[] | select(.name=="dozer-panel-preview") | .manifest_path' \
+    | head -n 1 | xargs dirname
+)/assets
+if [ ! -d "$ASSETS_DIR/flyfish" ]; then
+  echo "error: preview assets not found at '$ASSETS_DIR'" >&2
+  exit 1
+fi
+for dir in editor flyfish image-annotate; do
+  rm -rf "$APP_DIR/Contents/Resources/$dir"
+  cp -R "$ASSETS_DIR/$dir" "$APP_DIR/Contents/Resources/$dir"
+done
+# pdf / docx 渲染器第一批用不到(能力关闭),省 10 MB。
+rm -rf "$APP_DIR/Contents/Resources/flyfish/vendor/pdf" \
+       "$APP_DIR/Contents/Resources/flyfish/vendor/docx"
+
 # cargo 的链接期只对裸二进制做了 ad-hoc 签名,装进 bundle 后这个签名不覆盖
 # Info.plist/资源,且内容一变 ad-hoc identifier 就变;整体重签让本次构建自洽
 # (与 Dozer build-macos-app.sh 同因,见该脚本注释)。

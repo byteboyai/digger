@@ -133,6 +133,11 @@ impl Host {
         }
     }
 
+    /// 当前存活的句柄数(示例/自检用来钉住生命周期;产品可省)。
+    pub fn live_count(&self) -> usize {
+        VIEWS.with(|v| v.borrow().len())
+    }
+
     /// 销毁本宿主的全部句柄(窗口关闭时调用)。
     pub fn destroy_all(&self) {
         VIEWS.with(|v| v.borrow_mut().clear());
@@ -287,11 +292,33 @@ pub fn host_event(message: &IpcMessage) -> Option<&HostEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn host_event_only_matches_host_variant() {
         let msg = IpcMessage::ZoomIn;
         assert!(host_event(&msg).is_none());
+    }
+
+    /// Task 6:打包脚本按名字拷这三个目录,少一个宿主就整块白屏。
+    /// 断言的是**库源码树**的布局,与 `scripts/package-macos.sh` 的名单一一对应。
+    /// git 依赖检出在 `~/.cargo/git/checkouts/...`,所以只在本机源码树存在时检查
+    /// (CI 上跳过,打包脚本自己会用 `cargo metadata` 找同一目录并在缺失时报错)。
+    #[test]
+    fn library_assets_have_the_three_first_batch_dirs() {
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../dozer/crates/dozer-panel-preview/assets");
+        if !assets.is_dir() {
+            eprintln!("skip: 本机无 dozer 源码树");
+            return;
+        }
+        for dir in ["editor", "flyfish", "image-annotate"] {
+            assert!(
+                assets.join(dir).is_dir(),
+                "shared preview assets 缺 {dir}:{}",
+                assets.display()
+            );
+        }
     }
 
     /// 约定测试:库给的 Rendered host URL 不带归属绑定,`desired` 必须补上

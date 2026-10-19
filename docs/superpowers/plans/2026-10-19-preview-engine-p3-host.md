@@ -171,17 +171,21 @@
 - 库侧(Task 2/3):`assets::handle_protocol`、`host_script::preview_host_script`、`host_ipc::classify_ipc` 全部进 `dozer-panel-preview`;7 个命名空间资源 `git mv` 到库 `assets/`。`cargo test -p dozer-panel-preview --lib` **355 passed**,`clippy -D warnings` 干净。
 - Dozer 薄委托:`assets.rs` 先问库、`runtime.rs` IPC 闭包改 `classify_ipc`、`Message::Host` → `app/update.rs::host_event`。`dozer-app` bin 测试 **1329 passed / 2 ignored**。
 - 依赖闭包:`cargo tree -p dozer-panel-preview` 无 `wry`/`winit`/`dozer-app`/`dozer-client`/`dozer-core`/`dozerd`。
-- 发布:`feat/preview-host-lib` 已推 origin,新 tag **`libs-2026-10-19d`**(`e6684111`)。**不发布产品版本。**
+- 发布:`feat/preview-host-lib` 已推 origin,新 tag **`libs-2026-10-19e`**(`e6684111`)。**不发布产品版本。**
 - Digger(Task 7):`adapters/preview_native/{mod.rs,plan.rs}` + `examples/preview_smoke.rs`,`cargo test -p digger-desktop --bin digger` **165 passed**;三个门禁脚本全过。真机冒烟:Markdown / HTML / 源码三个 host 全部 `Ready`。
 
 **真机冒烟发现并修掉的两处(均已加测试):**
 1. 库生成的 Rendered host URL 不带 `proj/panel/tab/doc`。归属是**产品侧**职责(Dozer 在 `app.rs` 里追加)。Digger 的 `desired()` 现已补上,否则每条 host IPC 都被拒为 `Foreign("host URL 缺少归属查询串")`。
 2. `assets::serve_allowlisted_file` 精确比较、不做 canonicalize。`allow_file` 现已规范化入表,否则带 `..` 的路径在真机上 404。
 
+**Task 1 结果(2026-10-19 补):**
+- 协议应答黄金已补:`crates/dozer-panel-preview/tests/fixtures/preview_protocol_golden.txt`(13 行,含 7 个命名空间、白名单内/外文件、`..` 穿越、非本库 scheme;夹具根用 `<base>` 占位,机器无关)。库测试 355 → 356。
+- 注入脚本黄金早已存在(`preview_host_script_golden.txt`)。
+- **时点说明:** 黄金是在搬迁**之后**生成的快照,不是计划要求的"搬迁前生成";它能防后续回归,但不能证明搬迁本身字节不变。施工图 `2026-10-19-preview-p3-inventory.md` 仍未产出。
+
 **尚未完成(保持未勾选):**
-- Task 1:搬迁前的协议黄金与注入脚本黄金(`preview_protocol_golden.txt`、`preview_init_script_golden.txt`)与施工图 `2026-10-19-preview-p3-inventory.md` 未产出;测试总数守恒因此无法用黄金证明。
 - Task 4:页面事件作用到 `PreviewPane` 的库侧迁移未做(仍留在 `dozer-app`)。
 - Task 5:全量门禁(workspace clippy/fmt 有既有基线失败)与用户目测验收清单未做。
-- Task 6:Digger 打包态资源交付(`package-macos.sh` 从 `cargo metadata` 拷 `editor`/`flyfish`/`image-annotate`)未做,`bundled_assets_root` 的生产路径尚未在打包产物上验证。
-- Task 8:`preview_smoke` 只有"打开即同步",**没有**文件列表/关闭/放大/`live_count` 三个按钮、没有 `--selftest`、没有逐项真机验收(截图工具在本机不可用);Step 1 的复选框按"示例存在"勾选,但功能范围小于计划描述。
+- Task 6 已完成:`package-macos.sh` 用 `cargo metadata` 定位库的 `assets/`,拷 `editor`/`flyfish`/`image-annotate`,并剔除 `flyfish/vendor/{pdf,docx}`;`Resources` 从 24M 降到 13M,debug 打包成功。
+- Task 8 已完成:`preview_smoke` 有文件列表、关闭/放大(藏起)/全部销毁三个按钮、`live_count` 状态行,以及 `--selftest`(5 个夹具含 `空格 #1 中文.md`,断言建满后销毁归零,退出码 0/1)。**未做:** 计划里 `.py`/`.png`/`.svg`/`.json`/`.csv`/`.pdf` 的逐项真机目测(截图工具在本机不可用),以及"连续开关 50 次"。
 - Q2(`dozer://` 下页面 fetch 同命名空间 `__file__`)已在冒烟中**间接确认可用**(三个 host 的 `__file__` 请求返回 200/`Ready`)。
