@@ -19,7 +19,7 @@ use dozer_panel_project::adapter::PanelDisplay;
 use dozer_panel_project::{Message as ProjectMessage, WorkspaceState};
 use dozer_services::{BoxFuture, ServiceError, ServiceErrorKind, Services, TranscriptService};
 use iced::{Element, Length};
-use iced_widget::core::{Border, Padding};
+use iced_widget::core::Border;
 
 use crate::product::Msg;
 
@@ -34,6 +34,13 @@ pub struct ProjectPanel {
     tx: tokio::sync::mpsc::UnboundedSender<ProjectMessage>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<ProjectMessage>>,
 }
+
+/// 「删除项目」/「修复项目」卡片的产品参数:Digger 没有 agent 转录,隐藏"agent 缓存"档和"总结"行,文案里是 Digger。
+const CARD_OPTIONS: dozer_panel_project::view::CardOptions<'static> =
+    dozer_panel_project::view::CardOptions {
+        agent_history: false,
+        product: "Digger",
+    };
 
 /// 转录占位:Digger 没有 agent 转录,任何调用都是 `Unavailable`(库的 `RepairProject`
 /// 固定带转录服务,所以「修复项目」由宿主自己起,见 [`ProjectPanel::repair`])。
@@ -496,7 +503,7 @@ impl ProjectPanel {
         self.states.entry(project.id).or_insert_with(|| {
             WorkspaceState::new(
                 dozer_panel_project::meta::load_description(&path),
-                dozer_panel_project::links::load_or_discover(&path),
+                dozer_panel_project::links::load_or_discover_readonly(&path),
             )
         })
     }
@@ -746,14 +753,20 @@ impl ProjectPanel {
     pub fn scaffold_card<'a>(&'a self, project_id: i64) -> Option<Element<'a, Msg>> {
         let state = self.states.get(&project_id)?;
         state.scaffold_run.as_ref()?;
-        Some(dozer_panel_project::view::project_scaffold_card(state, "en").map(Msg::Project))
+        Some(
+            dozer_panel_project::view::project_scaffold_card(state, "en", CARD_OPTIONS)
+                .map(Msg::Project),
+        )
     }
 
     /// 「删除项目」三选一卡片(库的 `project_delete_card`);没有待确认的删除时为 `None`。
     pub fn delete_card<'a>(&'a self, project_id: i64) -> Option<Element<'a, Msg>> {
         let state = self.states.get(&project_id)?;
         state.delete_pending?;
-        Some(dozer_panel_project::view::project_delete_card(state, "en").map(Msg::Project))
+        Some(
+            dozer_panel_project::view::project_delete_card(state, "en", CARD_OPTIONS)
+                .map(Msg::Project),
+        )
     }
 
     /// 取走"待确认的删除层级"(库的 `delete_pending`)。产品点确认卡片时先取再关页签。
@@ -872,16 +885,6 @@ impl PanelDisplay<Msg> for ProjectPanel {
         .spacing(4)
         .into()
     }
-
-    fn header_padding(&self) -> Padding {
-        // 与 Dozer `workspace.json` 的 `project_pane.padding` 一致(8,随主题缩放)。
-        let s = byteui::theme::icon_size::scale();
-        Padding::new(8.0 * s)
-    }
-
-    fn tab_divider<'a>(&self) -> Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer> {
-        byteui::layout::divider::horizontal()
-    }
 }
 
 /// 把项目面板的后台结果接收端接成一条持续到进程结束的 iced 流。
@@ -932,6 +935,36 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let host = digger_store::ProjectHost::open(&dir.join("projects.db")).unwrap();
         ProjectPanel::new(Some(&host))
+    }
+
+    #[test]
+    fn building_a_projects_state_writes_nothing_into_the_project() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("README.md"), "# x").unwrap();
+        let info = ProjectInfo {
+            id: 1,
+            path: repo.path().to_string_lossy().into_owned(),
+            name: "x".into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let mut p = panel();
+        let state = p.state_of(&info);
+        assert!(
+            !state.links.docs.is_empty(),
+            "README is still discovered in memory"
+        );
+        let entries: Vec<_> = std::fs::read_dir(repo.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            [std::ffi::OsString::from("README.md")],
+            "no .dozer, no new files"
+        );
     }
 
     #[test]

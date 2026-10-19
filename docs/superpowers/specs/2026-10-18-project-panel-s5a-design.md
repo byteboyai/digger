@@ -145,3 +145,15 @@ Digger 没有对话转录。面板里依赖它的动作(打开项目时的转录
   2. 「修复项目」进度卡在 Digger 里没有宿主(Dozer 用独立原生窗口 `project_scaffold_overlay`)。现在用同一窗口里的整窗覆盖层承载库的 `project_scaffold_card`,整窗居中,关闭语义仍由库的 `all_done()` 把关。
   3. 页签拖拽排序此前未实现。现在按住页签拖动即换序并落盘(`project_tabs.json`);落点按页签宽度估算(iced 不暴露页签实测坐标)。
 - **验证**:`cargo test --workspace` 全绿(39/17/12/7/134/35/0/11/18/0/0/0,含 `results_are_deterministic`);`cargo clippy --workspace --all-targets` 仅有既有的 `block v0.1.6` future-incompat 提示;`cargo fmt --check` OK;`check-shared-deps.sh`、`check-host-deps.sh`(含 `--self-test`)、`check-shell-regions.sh` 全 ok。
+
+## 13. 审查修订与有意偏离(2026-10-19)
+
+两轮审查(Digger 宿主、Dozer 抽库)后的修订,Digger 钉 `libs-2026-10-19c`:
+
+- **修了**:Project 默认在左栏第一个(旧布局补到最前);打开项目不再写 `README.md`,也不再写 `.dozer/links.json`(库新增 `links::load_or_discover_readonly`,用户第一次增删链接才创建);「修复项目」由宿主起、不带转录;删除当前项目时布局切换与保存走同一条路径,被删项目的布局文件一并清掉;项目保存只更新全局 `shell.json` 的窗口大小;页签拖拽在行外松手会结束;删除卡与修复卡经 `CardOptions` 隐藏"agent 缓存"档与"总结"行,无转录时删除也不碰三家 agent 缓存目录;Dozer 库侧补回 remote 行缩进、统一英文文案来源。
+- **有意偏离 Dozer 的地方(一期不做,不是遗漏)**:
+  - D7 面板语言固定 `en`(Digger 一期无语言切换)。
+  - D8 面板头自写,无底部分割线,字号与高亮色取 Digger 主题。
+  - D9 链接右键直接移除,没有菜单浮层;添加文档只能选文件,选不了目录。
+  - D10 没有悬停动画、没有文本框右键复制/粘贴菜单、没有 toast(提示只写 stderr)。
+- **未修的小项**:Project 可见时 16ms 的名称焦点订阅(只在编辑时订阅需真机验证);页签宽度按字数估算,中文名偏窄。
