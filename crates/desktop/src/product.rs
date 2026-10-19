@@ -79,8 +79,11 @@ pub struct ProductShell {
     /// 窗口骨架状态(布局、选中、收起、放大、尺寸……)。
     shell: ShellModel,
     shell_path: PathBuf,
-    /// 非 `None` 表示磁盘上是**不支持的高版本**布局:内存默认布局仅用于显示,**禁止回写**该文件。
+    /// 非 `None` 表示全局 `shell.json` 是**不支持的高版本**写的:内存默认布局仅用于显示,**禁止回写**该文件。
+    /// 只在启动读全局文件时设定,换项目不会清掉它。
     shell_save_blocked: Option<String>,
+    /// 同上,针对**当前项目**自己的布局文件;换项目时重新判定。
+    project_shell_blocked: Option<String>,
     /// 「应用」面板的组合根(状态机 + 执行器 + 内嵌应用服务)。
     apps: crate::apps::AppsState,
     /// 「用量」面板适配(共享 `dozer-panel-usage` 库 + 注入的真实用量服务)。
@@ -222,6 +225,7 @@ impl ProductShell {
             shell: model,
             shell_path,
             shell_save_blocked,
+            project_shell_blocked: None,
             apps,
             usage,
             markdown,
@@ -261,21 +265,26 @@ impl ProductShell {
     }
 
     fn save_shell_scoped(&mut self, project_path: Option<PathBuf>) {
-        if let Some(note) = &self.shell_save_blocked {
-            self.boot_note = format!("布局未保存:{note}");
-            return;
-        }
         let Some(project_path) = project_path else {
+            if let Some(note) = &self.shell_save_blocked {
+                self.boot_note = format!("布局未保存:{note}");
+                return;
+            }
             if let Err(e) = bytehost_chrome::persist::save_atomic(&self.shell_path, &self.shell) {
                 self.boot_note = format!("布局保存失败:{e}");
             }
             return;
         };
-        if let Err(e) = bytehost_chrome::persist::save_atomic(&project_path, &self.shell) {
+        if let Some(note) = &self.project_shell_blocked {
+            self.boot_note = format!("布局未保存:{note}");
+        } else if let Err(e) = bytehost_chrome::persist::save_atomic(&project_path, &self.shell) {
             self.boot_note = format!("布局保存失败:{e}");
         }
-        // 窗口大小是窗口的属性,不是项目的:项目布局里也存了,但只有全局那份决定下次启动的窗口尺寸。
-        if let Err(e) = bytehost_chrome::persist::save_atomic(&self.shell_path, &self.shell) {
+        // 窗口大小是窗口的属性,不是项目的:只有全局那份决定下次启动的窗口尺寸,且**只改尺寸**,
+        // 其余字段(旧全局布局,新项目的初始值)字节不动。
+        if self.shell_save_blocked.is_none()
+            && let Err(e) = shell::save_window_size(&self.shell_path, &self.shell)
+        {
             self.boot_note = format!("窗口大小未保存:{e}");
         }
     }
@@ -285,7 +294,7 @@ impl ProductShell {
     fn load_project_shell(&mut self) {
         let project = self.current_project_shell_path().filter(|p| p.exists());
         // 项目文件是更高 schema 版本写的:照骨架的规矩用默认布局显示,但**不回写**它。
-        self.shell_save_blocked = project
+        self.project_shell_blocked = project
             .as_deref()
             .and_then(|p| self.project_save_blocked(p));
         let window = self.shell.window();
@@ -378,6 +387,22 @@ impl ProductShell {
         Task::none()
     }
 
+    /// 当前项目从 `before` 换成了现在这个(页签点击 / 关闭 / 删除 / 列表修剪都走这里):
+    /// 把**旧**项目的布局落到它自己的文件(`save_old`,已删除的项目不写),换上新项目的布局,
+    /// 并让 Project 面板跟到新项目。当前项目没变时什么都不做。
+    fn on_current_project_changed(&mut self, before: Option<i64>, save_old: bool) {
+        if before == self.projects.current_project_id() {
+            return;
+        }
+        if save_old && before.is_some() {
+            self.save_shell_for(before);
+        }
+        self.load_project_shell();
+        if self.panel_visible(&shell::project_id()) {
+            self.activate_project_panel();
+        }
+    }
+
     /// 把 Project 面板切到当前项目(切入面板 / 换项目页签时都走这里)。没有项目时什么都不做。
     fn activate_project_panel(&mut self) {
         let Some(project) = self.projects.current_project().cloned() else {
@@ -393,10 +418,12 @@ impl ProductShell {
         let Some(scope) = self.project.take_delete_pending(project.id) else {
             return;
         };
+        let before = self.projects.current_project_id();
         let close = self
             .projects
             .update(crate::projects::Message::Close(project.id));
         let _ = close;
+        self.on_current_project_changed(before, before != Some(project.id));
         let (project, tx) = (project.clone(), self.delete_tx.clone());
         self.project
             .delete_project(project, scope, move |project_id, deregistered, errors| {
@@ -842,18 +869,7 @@ impl Product<Msg> for ProductShell {
                 // (否则要等下一次切入才拉数据——用户刚打开的项目看着是空的)。
                 let before = self.projects.current_project_id();
                 let task = self.projects.update(m).map(Msg::Projects);
-                // 只有"当前项目"真的换了才换布局:打开/关闭非激活项目的页签不碰它。
-                let after = self.projects.current_project_id();
-                if before.is_some() && before != after {
-                    // 布局按项目一份:把**旧**项目的布局落到它自己的文件里。
-                    self.save_shell_for(before);
-                }
-                if before != after {
-                    self.load_project_shell();
-                    if self.panel_visible(&shell::project_id()) {
-                        self.activate_project_panel();
-                    }
-                }
+                self.on_current_project_changed(before, true);
                 task
             }
             Msg::ProjectFocusFrame(id) => {
@@ -905,6 +921,7 @@ impl Product<Msg> for ProductShell {
                     PM::LinkContextMenu { target, index } => self
                         .project
                         .update(Some(&project), PM::LinkRemove { target, index }),
+                    PM::RepairProject => self.project.repair(&project),
                     PM::DeleteProjectConfirm => {
                         self.project_delete_confirm(&project);
                         return Task::none();
@@ -965,9 +982,15 @@ impl Product<Msg> for ProductShell {
                 }
                 // 注册表已移除 → 页面上的页签也一并关掉(库只碰文件系统,不碰产品页签)。
                 if deregistered {
+                    let before = self.projects.current_project_id();
                     let close = self
                         .projects
                         .update(crate::projects::Message::Close(project_id));
+                    self.on_current_project_changed(before, before != Some(project_id));
+                    // 被删项目的布局文件不留孤儿。
+                    if let Some(path) = self.project_shell_path_for(project_id) {
+                        let _ = std::fs::remove_file(path);
+                    }
                     return Task::batch([
                         close.map(Msg::Projects),
                         self.projects.refresh().map(Msg::Projects),
@@ -1095,6 +1118,19 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         events,
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
     ];
+    // 页签拖拽中:在页签行外松手也要结束拖拽(行内松手由页签行自己的 `on_release` 管),
+    // 否则之后光标滑过页签行会接着重排并落盘。只在拖拽中订阅。
+    if shell.projects.is_dragging() {
+        subs.push(iced::event::listen_with(|evt, _status, _id| {
+            matches!(
+                evt,
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left
+                ))
+            )
+            .then_some(Msg::Projects(crate::projects::Message::DragEnd))
+        }));
+    }
     // 名称编辑框的真焦点态只有渲染时(Operation)读得到:用一个 16ms 的订阅在帧与帧之间
     // 把它取回来(同 Dozer 的 `CaptureNameEditFocus`,这里借订阅当逐帧钩子)。
     if let Some(project) = shell.projects.current_project().map(|p| p.id)

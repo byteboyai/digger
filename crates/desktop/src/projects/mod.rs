@@ -94,6 +94,9 @@ fn shorten(s: &str, max: usize) -> String {
     out
 }
 
+/// 拖拽时光标 x 的原点:`DragMove` 来自整行的 `mouse_area`,坐标相对页签行自己,第一张页签的左缘就是 0。
+const ROW_LEFT: f32 = 0.0;
+
 pub struct ProjectsState {
     /// `None`:数据库打不开,项目功能不可用(原因在 `notice`),**不**退回临时库。
     host: Option<ProjectHost>,
@@ -114,8 +117,6 @@ pub struct ProjectsState {
     /// 拖拽开始时各页签宽度(按标签字数估):落点用它们的中点换算。精确的像素级命中
     /// 要等 iced 暴露 `operate` 之外的消息,眼下不值得为它引入一层自绘。
     drag_row: Option<(f32, Vec<f32>)>,
-    /// 页签行左端在窗口里的 x(由产品在渲染时告知,来自顶栏几何)。
-    tab_row_left: f32,
     notice: Option<(NoticeKind, String)>,
 }
 
@@ -141,7 +142,6 @@ impl ProjectsState {
             hovered: None,
             dragging: None,
             drag_row: None,
-            tab_row_left: 0.0,
             notice,
         }
     }
@@ -149,6 +149,11 @@ impl ProjectsState {
     /// 项目/记忆服务的进程内装配(Project 面板直接用它,与注册表共享同一个数据库文件)。
     pub fn project_host(&self) -> Option<&ProjectHost> {
         self.host.as_ref()
+    }
+
+    /// 是否正按住某张页签拖动(产品据此决定要不要订阅全局鼠标释放)。
+    pub fn is_dragging(&self) -> bool {
+        self.dragging.is_some()
     }
 
     /// 当前页签对应的项目;注册表还没读回来、或没有页签时为 `None`。
@@ -233,7 +238,7 @@ impl ProjectsState {
                 .filter_map(|id| self.registry.iter().find(|p| p.id == *id))
                 .map(|p| Self::tab_width(&p.name))
                 .collect();
-            self.drag_row = Some((self.tab_row_left, widths));
+            self.drag_row = Some((ROW_LEFT, widths));
             return Task::none();
         }
         if let Message::DragEnd = msg {
@@ -254,7 +259,7 @@ impl ProjectsState {
                     .filter_map(|id| self.registry.iter().find(|p| p.id == *id))
                     .map(|p| Self::tab_width(&p.name))
                     .collect();
-                self.drag_row = Some((self.tab_row_left, widths));
+                self.drag_row = Some((ROW_LEFT, widths));
             }
             if let Some(to) = self.landing_index(from, cursor.x)
                 && self.tabs.move_tab(from, to)
@@ -268,7 +273,7 @@ impl ProjectsState {
                     .filter_map(|id| self.registry.iter().find(|p| p.id == *id))
                     .map(|p| Self::tab_width(&p.name))
                     .collect();
-                self.drag_row = Some((self.tab_row_left, widths));
+                self.drag_row = Some((ROW_LEFT, widths));
             }
             return Task::none();
         }
@@ -471,8 +476,7 @@ impl ProjectsState {
                 mouse_area(tab)
                     .on_enter(Message::HoverEnter(*id))
                     .on_exit(Message::HoverLeave(*id))
-                    .on_press(Message::DragStart(*id))
-                    .on_move(Message::DragMove),
+                    .on_press(Message::DragStart(*id)),
             );
         }
         if self.tabs.open().is_empty() {
@@ -507,9 +511,9 @@ impl ProjectsState {
             tabs = tabs.push(tooltip(short, tip, tooltip::Position::Bottom));
         }
         // 拖拽排序:拖拽中整行挂在 `mouse_area` 上,光标滑进页签间隙也能收到移动事件
-        // (单个页签的 `on_move` 一离开自己就断);松手结束拖拽。页签被拖出顺序之外时
-        // 由 `landing_index` 按"跨过几张页签"换算。`on_enter` 捎带行左端:整行第一次
-        // 悬停就能拿到自己的窗口坐标,不必另开一层自绘去量。
+        // (单个页签的 `on_move` 一离开自己就断,坐标系也与整行不同,所以页签自己不挂 `on_move`);
+        // 松手结束拖拽(行外松手由产品的全局鼠标释放订阅兜底)。页签被拖出顺序之外时
+        // 由 `landing_index` 按"跨过几张页签"换算。
         let row = mouse_area(tabs).on_enter(Message::HoverEnter(ROW_HOVER));
         if self.dragging.is_some() {
             row.on_move(Message::DragMove)

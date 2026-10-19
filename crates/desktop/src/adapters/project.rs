@@ -35,8 +35,8 @@ pub struct ProjectPanel {
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<ProjectMessage>>,
 }
 
-/// 转录占位:Digger 没有 agent 转录,任何调用都是 `Unavailable`(面板据此不弹"agent 历史"
-/// 步骤,也不做补录——见库 `spawn_scaffold_run` / `spawn_repair_run` 对 `transcript` 的处理)。
+/// 转录占位:Digger 没有 agent 转录,任何调用都是 `Unavailable`(库的 `RepairProject`
+/// 固定带转录服务,所以「修复项目」由宿主自己起,见 [`ProjectPanel::repair`])。
 struct NoTranscript;
 
 fn no_transcript() -> ServiceError {
@@ -504,7 +504,7 @@ impl ProjectPanel {
     /// 项目切入(面板变为可见 / 切到另一个项目页签):
     ///
     /// - 记住这次切入的项目(产品消息不带 id,按它路由);
-    /// - 写一份缺失的 `README.md`(Dozer 的 `ensure_project_readme` 同一规则);
+    /// - **不**写任何文件:打开项目不做静默脚手架,缺 README 等只在用户点「修复项目」时补;
     /// - 拉一次共享记忆列表(库的 `on_activate`);
     /// - 后台刷新 git 快照与磁盘占用。
     pub fn activate(&mut self, project: &ProjectInfo) {
@@ -513,7 +513,6 @@ impl ProjectPanel {
         };
         self.focus = Some(project.id);
         let path = PathBuf::from(&project.path);
-        self.ensure_readme(project);
         self.refresh_git(project);
         self.refresh_disk_usage(project);
         let tx = self.tx.clone();
@@ -538,24 +537,6 @@ impl ProjectPanel {
     /// 其余库消息一律按当前聚焦项目路由。
     pub fn resolve_project(&self, message: &ProjectMessage) -> Option<i64> {
         message.result_project().or(self.focus)
-    }
-
-    /// 与 Dozer 的 `ensure_project_readme` 同一条规则:项目里没有 `README.md` 就写一份
-    /// (标题 + 已保存的项目描述)。Digger 一期没有预览栏(S5b),所以不 reveal。
-    fn ensure_readme(&self, project: &ProjectInfo) {
-        let repo = Path::new(&project.path);
-        let readme = repo.join("README.md");
-        if readme.exists() {
-            return;
-        }
-        let mut content = format!("# {}\n\n", project.name);
-        if let Some(desc) = dozer_panel_project::meta::load_description(repo) {
-            content.push_str(&desc);
-            content.push('\n');
-        }
-        if let Err(e) = std::fs::write(&readme, content) {
-            eprintln!("digger: 项目 README 未创建: {e}"); // cli-output
-        }
     }
 
     /// 项目里的 git 快照(分支 / 脏标 / remote),后台跑完投回 `GitRefreshed`。
@@ -634,6 +615,30 @@ impl ProjectPanel {
             &services,
             &handle,
             emit,
+        );
+    }
+
+    /// 「修复项目」:库的 `RepairProject` 固定带转录服务、追加"agent 历史"一步,Digger 没有转录,
+    /// 所以宿主自己起这次修复:只跑脚手架步骤,"总结"一行直接标成"没有要补的"。
+    pub fn repair(&mut self, project: &ProjectInfo) {
+        let Some(handle) = self.handle.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let state = self.state_of(project);
+        let mut run = dozer_panel_project::ScaffoldRunState::pending(false);
+        run.backfill = dozer_panel_project::BackfillStepState::Done(
+            dozer_panel_project::BackfillProgress::default(),
+        );
+        state.scaffold_run = Some(run);
+        dozer_panel_project::spawn_repair_run(
+            PathBuf::from(&project.path),
+            project.id,
+            None,
+            &handle,
+            move |m| {
+                let _ = tx.send(m);
+            },
         );
     }
 

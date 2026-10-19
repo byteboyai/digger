@@ -108,8 +108,8 @@ pub fn defaults() -> Defaults {
     let (w, h) = byteui::theme::geometry::initial_window_size();
     Defaults {
         rails: [
-            vec![markdown_id(), info_id()],
-            vec![apps_id(), usage_id(), project_id()],
+            vec![project_id(), markdown_id(), info_id()],
+            vec![apps_id(), usage_id()],
         ],
         selected: [markdown_id(), usage_id()],
         left_width: 640.0,
@@ -140,13 +140,57 @@ pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
 }
 
 fn load_file(path: &Path) -> Loaded {
-    let json = std::fs::read_to_string(path).ok();
+    let json = std::fs::read_to_string(path)
+        .ok()
+        .map(|j| project_first_on_left(&j));
     persist::load(
         json.as_deref(),
         &all_panels(),
         &defaults(),
         &metrics_from_theme(),
     )
+}
+
+/// 旧布局文件里没有 Project 面板:读盘前把它放到左栏最前面(S5a D5)。骨架对"清单里有而文件里没有"
+/// 的面板只会追加到默认栏末尾,所以这一步在宿主做。文件已经提到它、或解析不了,原样返回。
+fn project_first_on_left(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_owned();
+    };
+    let wire = project_id();
+    let mentions = |side: &str| {
+        value[side]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|i| i.as_str() == Some(wire.as_str())))
+    };
+    if mentions("left") || mentions("right") {
+        return json.to_owned();
+    }
+    let Some(left) = value.get_mut("left").and_then(|l| l.as_array_mut()) else {
+        return json.to_owned();
+    };
+    left.insert(0, serde_json::Value::String(wire.as_str().to_owned()));
+    value.to_string()
+}
+
+/// 只把窗口大小写进全局布局文件,其余字段保持原样。文件还不存在时整份写(它之后作为新项目的初始布局)。
+/// 文件在但解析不了:不碰它(损坏的文件由读盘路径按默认值处理,这里不替用户改写)。
+pub fn save_window_size(path: &Path, model: &ShellModel) -> std::io::Result<()> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return persist::save_atomic(path, model);
+    };
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(());
+    };
+    let (w, h) = model.window();
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
+    object.insert("window_width".into(), serde_json::json!(w));
+    object.insert("window_height".into(), serde_json::json!(h));
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&value)?)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// 把一条骨架消息交给模型,度量与面板规则取产品的。
@@ -201,16 +245,32 @@ mod tests {
         assert_eq!(seen, want);
         assert_eq!(
             model.rail(Side::Left),
-            [markdown_id(), info_id()],
-            "content panels on the left, like Dozer"
+            [project_id(), markdown_id(), info_id()],
+            "project first, then the content panels, like Dozer"
         );
+        assert_eq!(model.rail(Side::Right), [apps_id(), usage_id()]);
+        assert_eq!(model.selected(Side::Left), &markdown_id());
+        assert_eq!(model.selected(Side::Right), &usage_id());
+        assert_eq!(d.left_width, 640.0);
+    }
+
+    #[test]
+    fn a_layout_that_already_places_the_project_panel_is_not_reordered() {
+        let dir = std::env::temp_dir().join(format!("digger-shell-placed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shell.json");
+        std::fs::write(
+            &path,
+            r#"{ "left": ["digger.info", "digger.markdown"], "right": ["digger.apps", "digger.usage", "digger.project"] }"#,
+        )
+        .unwrap();
+        let model = load(&path).into_model();
+        assert_eq!(model.rail(Side::Left), [info_id(), markdown_id()]);
         assert_eq!(
             model.rail(Side::Right),
             [apps_id(), usage_id(), project_id()]
         );
-        assert_eq!(model.selected(Side::Left), &markdown_id());
-        assert_eq!(model.selected(Side::Right), &usage_id());
-        assert_eq!(d.left_width, 640.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -246,12 +306,12 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [info_id(), markdown_id()],
-            "the user's order is kept"
+            [project_id(), info_id(), markdown_id()],
+            "the user's order is kept, the project panel lands first"
         );
         assert_eq!(
             model.rail(Side::Right),
-            [apps_id(), usage_id(), project_id()],
+            [apps_id(), usage_id()],
             "the new panels land on their default side"
         );
         assert_eq!(model.left_width(), 500.0);
@@ -418,6 +478,29 @@ mod tests {
     }
 
     #[test]
+    fn saving_the_window_size_leaves_every_other_global_field_alone() {
+        let dir = tmp_dir("window-size");
+        let global = dir.join("shell.json");
+        std::fs::write(
+            &global,
+            r#"{ "left": ["digger.info"], "right": ["digger.apps"], "left_width": 500.0, "window_width": 1.0, "window_height": 2.0 }"#,
+        )
+        .unwrap();
+        let model = defaults_layout();
+        save_window_size(&global, &model).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&global).unwrap()).unwrap();
+        assert_eq!(v["left"], serde_json::json!(["digger.info"]));
+        assert_eq!(v["left_width"], serde_json::json!(500.0));
+        assert_eq!(v["window_width"], serde_json::json!(model.window().0));
+        // 没有文件时整份写出。
+        let fresh = dir.join("fresh.json");
+        save_window_size(&fresh, &model).unwrap();
+        assert!(fresh.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn legacy_global_layout_seeds_a_project_without_losing_it() {
         let dir = tmp_dir("legacy");
         let global = dir.join("shell.json");
@@ -431,11 +514,11 @@ mod tests {
         let global_bytes = std::fs::read(&global).unwrap();
         let mut first = load_scoped(&global, Some(&project)).into_model();
         assert_eq!(first.left_width(), 500.0, "the user's width is kept");
-        assert_eq!(first.rail(Side::Left), [info_id(), markdown_id()]);
         assert_eq!(
-            first.rail(Side::Right),
-            [apps_id(), usage_id(), project_id()]
+            first.rail(Side::Left),
+            [project_id(), info_id(), markdown_id()]
         );
+        assert_eq!(first.rail(Side::Right), [apps_id(), usage_id()]);
         drag_left_width_to(&mut first, 744.0);
         persist::save_atomic(&project, &first).unwrap();
         assert_eq!(std::fs::read(&global).unwrap(), global_bytes);
