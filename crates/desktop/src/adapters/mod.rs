@@ -12,3 +12,9 @@ pub mod usage_native;
 
 /// 预览原生宿主(S5b-2 P3):清单 / 协议 / 注入脚本 / IPC 全走共享库。
 pub mod preview_native;
+
+/// 预览页签栏部件(页签 / 溢出入口 / 下拉 / 模式按钮)。
+pub mod tab_chrome;
+
+/// 预览面板的 `PanelDisplay<Msg>` 实现(库视图反过来要的展示能力)。
+pub mod preview_display;

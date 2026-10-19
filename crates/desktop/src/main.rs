@@ -17,6 +17,12 @@ use iced::{Element, Task};
 
 use product::{Msg, ProductShell};
 
+thread_local! {
+    /// 最近一次已知的窗口逻辑尺寸:只给 `PanelDisplay` 这类拿不到 `ProductShell` 的展示适配器用。
+    pub(crate) static CURRENT_WINDOW: std::cell::Cell<Option<(f32, f32)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 fn boot() -> (ProductShell, Task<Msg>) {
     product::boot()
 }

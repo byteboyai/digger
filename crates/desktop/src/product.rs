@@ -56,6 +56,12 @@ pub enum Msg {
     /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
+    /// 预览面板的库消息(S5b-2 P4):`Files` / `Project` 各自一份状态。
+    #[allow(dead_code)] // Task 8 起才由 `PreviewHub` 消费。
+    Preview(
+        dozer_panel_preview::ViewerPanel,
+        dozer_panel_preview::Message,
+    ),
     /// 一次「删除项目」后台结果:(项目 id, 是否已从注册表移除, 文件系统步骤的错误)。
     ProjectDeleteDone {
         project_id: i64,
@@ -480,6 +486,7 @@ impl ProductShell {
             self.files.set_window_probe(size, (x, y));
         }
         let out = shell::update(&mut self.shell, msg);
+        publish_panes(self.shell.panes());
         if out.persist {
             self.save_shell();
         }
@@ -831,6 +838,28 @@ fn open_in_system(path: &std::path::Path) {
     }
 }
 
+/// 某面板在骨架 `PaneStore` 里是否被收起(配对面板专有;无条目视为未收起)。
+/// 单独成自由函数是为了让 `PanelDisplay` 适配器不必拿到 `ProductShell`——
+/// 它只读**当前窗口**的布局,与 `ProductShell::pane_collapsed` 同源。
+pub(crate) fn pane_collapsed_of(panel: &PanelId) -> bool {
+    CURRENT_PANES.with(|p| {
+        p.borrow()
+            .as_ref()
+            .is_some_and(|s| s.get(panel).is_some_and(|d| d.collapsed))
+    })
+}
+
+thread_local! {
+    /// 当前窗口骨架的 `PaneStore` 快照(每帧 `view` 前由 `layout()` 刷新)。
+    static CURRENT_PANES: std::cell::RefCell<Option<bytehost_desktop::PaneStore>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 把当前窗口的分栏状态交给只读的展示适配器(`PanelDisplay` 拿不到 `&ProductShell`)。
+fn publish_panes(panes: &bytehost_desktop::PaneStore) {
+    CURRENT_PANES.with(|p| *p.borrow_mut() = Some(panes.clone()));
+}
+
 /// 每个已注册面板此刻的可见性(下标与 [`shell::all_panels`] 对齐)。
 fn visible_panels(shell: &ProductShell) -> Vec<bool> {
     shell::all_panels()
@@ -1062,6 +1091,9 @@ impl Product<Msg> for ProductShell {
                 }
                 Task::none()
             }
+            // 预览面板的库消息在 Task 7 接上 `PreviewHub` 前还不存在状态,先按 no-op 吞掉。
+            #[allow(unused_variables)]
+            Msg::Preview(_, _) => Task::none(),
             Msg::Lifecycle(phase) => {
                 let Some(mut driver) = self.lifecycle.take() else {
                     return Task::none();
@@ -1094,6 +1126,10 @@ impl Product<Msg> for ProductShell {
 
     fn view(&self) -> Element<'_, Msg> {
         use iced::widget::button;
+
+        // 展示适配器(`PanelDisplay`)拿不到 `&ProductShell`,每帧把分栏状态与窗口尺寸交给它。
+        publish_panes(self.shell.panes());
+        crate::CURRENT_WINDOW.with(|w| w.set(Some(self.shell.window())));
 
         if self.closing {
             let mut body = column![text("正在关闭 Digger…")].spacing(16).padding(20);

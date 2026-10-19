@@ -473,8 +473,7 @@ mod tests {
 
     #[test]
     fn legacy_layout_without_pair_state_loads_with_the_default_split() {
-        let dir =
-            std::env::temp_dir().join(format!("digger-shell-nopair-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("digger-shell-nopair-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("shell.json");
         std::fs::write(
