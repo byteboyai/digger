@@ -3,6 +3,7 @@
 //! 与 `dozer/crates/dozer-app/src/host_adapters/` 同型:共享库(`dozer-panel-usage`)
 //! 只定义窄接缝,产品侧提供实现。这里有 Usage 与 Project 两个面板的适配。
 
+pub mod files;
 pub mod project;
 pub mod usage;
 

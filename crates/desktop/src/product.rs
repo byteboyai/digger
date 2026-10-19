@@ -41,6 +41,8 @@ pub enum Msg {
     /// 「用量」面板的库消息(Task 20)。
     Usage(dozer_panel_usage::Message),
     NativeUsage(crate::adapters::usage_native::Event),
+    /// 「文件」面板的库消息(共享 `dozer-panel-files` 库)。
+    Files(dozer_panel_files::Message),
     /// 「编辑器」面板的消息(ADR-013)。
     Markdown(crate::markdown::Message),
     /// 项目页签与注册表(顶栏页签行)。
@@ -94,6 +96,8 @@ pub struct ProductShell {
     projects: crate::projects::ProjectsState,
     /// 「项目」面板适配(共享 `dozer-panel-project` 库 + 注入的项目/记忆服务)。
     project: crate::adapters::project::ProjectPanel,
+    /// 「文件」面板适配(共享 `dozer-panel-files` 库;四项能力 Digger 一期全关)。
+    files: crate::adapters::files::FilesPanel,
     /// 「删除项目」结果回流:库的后台任务在线程池里跑,结果经这里转成产品消息。
     delete_tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     /// 上面那条通道的接收端,`boot` 里取一次接成 iced 流(`None` = 已取走)。
@@ -166,6 +170,7 @@ impl ProductShell {
             (shell::apps_id(), "应用"),
             (shell::usage_id(), "用量"),
             (shell::project_id(), "项目"),
+            (shell::files_id(), "文件"),
         ] {
             catalog
                 .register(CatalogEntry {
@@ -211,6 +216,9 @@ impl ProductShell {
             .unwrap_or_else(paths::config_dir);
         let projects = crate::projects::ProjectsState::open_in(&data_dir);
         let project = crate::adapters::project::ProjectPanel::new(projects.project_host());
+        let files = crate::adapters::files::FilesPanel::new(
+            data_dir.join(dozer_panel_files::external_apps::CONFIG_FILE),
+        );
         let (delete_tx, delete_rx) = tokio::sync::mpsc::unbounded_channel();
         let delete_rx = std::sync::Mutex::new(Some(delete_rx));
         let lifecycle = crate::lifecycle_selftest::Driver::from_env();
@@ -231,6 +239,7 @@ impl ProductShell {
             markdown,
             projects,
             project,
+            files,
             delete_tx,
             delete_rx,
             lifecycle,
@@ -384,6 +393,10 @@ impl ProductShell {
             // 进入「项目」面板:当前项目的信息/文档/记忆一次拉齐(库的 on_activate)。
             self.activate_project_panel();
         }
+        if *panel == shell::files_id() {
+            // 进入「文件」面板:把树根挂到当前项目并拉一次 git 文件状态。
+            self.activate_files_panel();
+        }
         Task::none()
     }
 
@@ -401,6 +414,7 @@ impl ProductShell {
         if self.panel_visible(&shell::project_id()) {
             self.activate_project_panel();
         }
+        self.activate_files_panel();
     }
 
     /// 把 Project 面板切到当前项目(切入面板 / 换项目页签时都走这里)。没有项目时什么都不做。
@@ -409,6 +423,12 @@ impl ProductShell {
             return;
         };
         self.project.activate(&project);
+    }
+
+    /// 把「文件」面板的树根切到当前项目。没有项目时清空。
+    fn activate_files_panel(&mut self) {
+        let project = self.projects.current_project().cloned();
+        self.files.set_project(project.as_ref());
     }
 
     /// 「删除项目」二次确认卡片点"删除":先取走待确认的层级(库的 `delete_pending`),
@@ -649,6 +669,11 @@ impl ProductShell {
         }
     }
 
+    fn files_view(&self, area: &BodyArea) -> Element<'_, Msg> {
+        self.files
+            .view(Length::Fixed(area.rect.w), Border::default())
+    }
+
     fn markdown_view(&self) -> Element<'_, Msg> {
         // 条在上;下面留空,原生 webview 由 `sync_native` 摆在条的下方。
         column![
@@ -737,6 +762,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.usage" => self.usage_view(area),
             "digger.markdown" => self.markdown_view(),
             "digger.project" => self.project_view(area),
+            "digger.files" => self.files_view(area),
             _ => column![].into(),
         }
     }
@@ -862,6 +888,18 @@ impl Product<Msg> for ProductShell {
             Msg::NativeUsage(event) => {
                 self.usage.native.update(event);
                 Task::none()
+            }
+            Msg::Files(m) => {
+                let project_id = self.projects.current_project_id();
+                let task = self.files.update(m, project_id);
+                // Digger 一期无 Toast:提示落到 stderr,不静默吞掉。
+                for notice in self.files.take_notices() {
+                    eprintln!(
+                        "digger: files 面板/{:?}: {}",
+                        notice.level, notice.text.fallback
+                    ); // cli-output
+                }
+                task
             }
             Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
             Msg::Projects(m) => {
@@ -1187,6 +1225,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     shell
         .project
         .attach_handle(tokio::runtime::Handle::current());
+    shell.files.attach_handle(tokio::runtime::Handle::current());
     // 应用面板后台结果回流:一次性流出接收端,持续到进程结束(与窗口尺寸任务并行)。
     use iced::futures::StreamExt;
     let reply_task = match crate::apps::take_reply_receiver(&shell.apps.reply_receiver()) {
@@ -1225,6 +1264,11 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         Some(rx) => Task::stream(crate::adapters::project::receiver_stream(rx).map(Msg::Project)),
         None => Task::none(),
     };
+    // 「文件」面板的后台结果(git 文件状态)回流成 iced 流。
+    let files_task = match shell.files.take_receiver() {
+        Some(rx) => Task::stream(crate::adapters::files::receiver_stream(rx).map(Msg::Files)),
+        None => Task::none(),
+    };
     // 「删除项目」的后台结果回流(库的 `spawn_delete_project` 在结束回调里投递)。
     let delete_task = match shell.take_delete_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
@@ -1252,6 +1296,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             native_usage,
             markdown_task,
             project_task,
+            files_task,
             delete_task,
             lifecycle_task,
             Task::batch(initial),
@@ -1436,7 +1481,7 @@ mod tests {
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 5);
+        assert_eq!(shell.catalog.len(), 6);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,

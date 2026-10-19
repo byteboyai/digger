@@ -38,6 +38,11 @@ pub fn project_id() -> PanelId {
     id("digger.project")
 }
 
+/// 文件树面板(共享 `dozer-panel-files` 库):当前项目的文件树、新建/重命名/删除/拖拽移动。
+pub fn files_id() -> PanelId {
+    id("digger.files")
+}
+
 /// 产品的全部面板。落盘时清单里有而文件里没有的面板,会回到它的默认栏(新版本新增面板不会重置用户布局)。
 pub fn all_panels() -> Vec<PanelId> {
     vec![
@@ -46,6 +51,7 @@ pub fn all_panels() -> Vec<PanelId> {
         apps_id(),
         usage_id(),
         project_id(),
+        files_id(),
     ]
 }
 
@@ -57,6 +63,7 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
         "digger.apps" => ("应用", IconKind::LayoutList),
         "digger.usage" => ("用量", IconKind::BarChart3),
         "digger.project" => ("项目", IconKind::Briefcase),
+        "digger.files" => ("文件", IconKind::FolderTree),
         _ => return None,
     };
     Some(PanelMeta {
@@ -108,7 +115,7 @@ pub fn defaults() -> Defaults {
     let (w, h) = byteui::theme::geometry::initial_window_size();
     Defaults {
         rails: [
-            vec![project_id(), markdown_id(), info_id()],
+            vec![project_id(), files_id(), markdown_id(), info_id()],
             vec![apps_id(), usage_id()],
         ],
         selected: [markdown_id(), usage_id()],
@@ -142,7 +149,7 @@ pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
 fn load_file(path: &Path) -> Loaded {
     let json = std::fs::read_to_string(path)
         .ok()
-        .map(|j| project_first_on_left(&j));
+        .map(|j| files_after_project(&project_first_on_left(&j)));
     persist::load(
         json.as_deref(),
         &all_panels(),
@@ -170,6 +177,36 @@ fn project_first_on_left(json: &str) -> String {
         return json.to_owned();
     };
     left.insert(0, serde_json::Value::String(wire.as_str().to_owned()));
+    value.to_string()
+}
+
+/// 旧布局文件里没有 Files 面板:读盘前把它放到左栏里 Project 的后面(S5b-1 D1)。与
+/// [`project_first_on_left`] 同一手法——骨架只会把新面板追加到默认栏末尾,位置由宿主定。
+/// 文件已经提到它、没有 Project、或解析不了,原样返回。
+fn files_after_project(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_owned();
+    };
+    let wire = files_id();
+    let mentions = |side: &str| {
+        value[side]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|i| i.as_str() == Some(wire.as_str())))
+    };
+    if mentions("left") || mentions("right") {
+        return json.to_owned();
+    }
+    let project = project_id();
+    let Some(left) = value.get_mut("left").and_then(|l| l.as_array_mut()) else {
+        return json.to_owned();
+    };
+    let Some(at) = left
+        .iter()
+        .position(|i| i.as_str() == Some(project.as_str()))
+    else {
+        return json.to_owned();
+    };
+    left.insert(at + 1, serde_json::Value::String(wire.as_str().to_owned()));
     value.to_string()
 }
 
@@ -245,8 +282,8 @@ mod tests {
         assert_eq!(seen, want);
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), markdown_id(), info_id()],
-            "project first, then the content panels, like Dozer"
+            [project_id(), files_id(), markdown_id(), info_id()],
+            "project first, then files, then the content panels, like Dozer"
         );
         assert_eq!(model.rail(Side::Right), [apps_id(), usage_id()]);
         assert_eq!(model.selected(Side::Left), &markdown_id());
@@ -265,7 +302,11 @@ mod tests {
         )
         .unwrap();
         let model = load(&path).into_model();
-        assert_eq!(model.rail(Side::Left), [info_id(), markdown_id()]);
+        assert_eq!(
+            model.rail(Side::Left),
+            [info_id(), markdown_id(), files_id()],
+            "the file says where project lives, so files is appended to its default side"
+        );
         assert_eq!(
             model.rail(Side::Right),
             [apps_id(), usage_id(), project_id()]
@@ -306,8 +347,8 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), info_id(), markdown_id()],
-            "the user's order is kept, the project panel lands first"
+            [project_id(), files_id(), info_id(), markdown_id()],
+            "the user's order is kept, the project panel lands first and files right after it"
         );
         assert_eq!(
             model.rail(Side::Right),
@@ -316,6 +357,49 @@ mod tests {
         );
         assert_eq!(model.left_width(), 500.0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_follows_project_on_the_left_rail_by_default() {
+        let d = defaults();
+        assert_eq!(
+            &d.rails[0][..2],
+            &[project_id(), files_id()],
+            "files sits right after the project panel"
+        );
+        assert_eq!(d.selected[0], markdown_id(), "selection is unchanged");
+    }
+
+    #[test]
+    fn legacy_layout_without_files_gets_it_placed_after_project() {
+        let dir = std::env::temp_dir().join(format!("digger-shell-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shell.json");
+        std::fs::write(
+            &path,
+            r#"{ "left": ["digger.project", "digger.info", "digger.markdown"], "right": ["digger.apps", "digger.usage"] }"#,
+        )
+        .unwrap();
+        let model = load(&path).into_model();
+        assert_eq!(
+            model.rail(Side::Left),
+            [project_id(), files_id(), info_id(), markdown_id()],
+            "files lands right after the project panel, everything else keeps its order"
+        );
+        assert_eq!(model.rail(Side::Right), [apps_id(), usage_id()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_panel_is_single_pane() {
+        assert!(rules(&files_id()).is_none());
+    }
+
+    #[test]
+    fn files_panel_uses_the_icon_and_wire_name_and_takes_part_in_the_layout() {
+        assert_eq!(files_id().as_str(), "digger.files");
+        assert_eq!(meta(&files_id()).unwrap().icon, IconKind::FolderTree);
+        assert!(all_panels().contains(&files_id()));
     }
 
     #[test]
@@ -334,7 +418,7 @@ mod tests {
             byteui::theme::geometry::default_split_ratio()
         );
         assert_eq!(pane.min_first_px, list_min_width());
-        for p in [markdown_id(), info_id(), apps_id()] {
+        for p in [markdown_id(), info_id(), apps_id(), files_id()] {
             assert!(rules(&p).is_none(), "{p} stays a single-column panel in S2");
         }
     }
@@ -516,7 +600,7 @@ mod tests {
         assert_eq!(first.left_width(), 500.0, "the user's width is kept");
         assert_eq!(
             first.rail(Side::Left),
-            [project_id(), info_id(), markdown_id()]
+            [project_id(), files_id(), info_id(), markdown_id()]
         );
         assert_eq!(first.rail(Side::Right), [apps_id(), usage_id()]);
         drag_left_width_to(&mut first, 744.0);
