@@ -52,7 +52,20 @@ pub struct Host {
     assets_root: PathBuf,
     allowed: Arc<Mutex<AllowedFiles>>,
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
-    rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Event>>>,
+    rx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Event>>>>,
+}
+
+/// 句柄表是 `thread_local`,副本等价于同一宿主(共享白名单与回流通道),只为了
+/// 能搬进 `window::run` 的 `'static` 闭包做脚本注入。
+impl Clone for Host {
+    fn clone(&self) -> Self {
+        Self {
+            assets_root: self.assets_root.clone(),
+            allowed: Arc::clone(&self.allowed),
+            tx: self.tx.clone(),
+            rx: Arc::clone(&self.rx),
+        }
+    }
 }
 
 impl Host {
@@ -68,7 +81,7 @@ impl Host {
             assets_root: root,
             allowed: Arc::new(Mutex::new(AllowedFiles::new())),
             tx,
-            rx: Mutex::new(Some(rx)),
+            rx: Arc::new(Mutex::new(Some(rx))),
         }
     }
 
@@ -109,6 +122,22 @@ impl Host {
         with(webview_id, |view| {
             let _ = view.evaluate_script(&script);
         });
+    }
+
+    /// 这一帧建好页面后,把库排队的 host 命令(编辑器 / 表格 / PlantUML)取成
+    /// 可注入脚本。命令队列在库一侧,生成脚本同在库内,产品只负责 `eval`。
+    pub fn take_host_scripts(
+        &self,
+        state: &mut dozer_panel_preview::PreviewPanelState,
+        project_id: i64,
+        panel: ViewerPanel,
+    ) -> Vec<(usize, String)> {
+        state
+            .pane
+            .take_host_scripts(&self.live_ids(), project_id, panel)
+            .into_iter()
+            .map(|(id, script)| (id + id_offset(panel), script))
+            .collect()
     }
 
     pub fn take_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Event>> {
@@ -285,6 +314,18 @@ fn bounds(rect: LogicalRect) -> wry::Rect {
     }
 }
 
+/// `Files` 与 `Project` 是两个独立 `PreviewPane`,各自从 0 数 webview id;两边同进
+/// 一张句柄表,`Project` 侧统一加这个偏移(库的 editor binding 同款)。
+pub const PROJECT_PREVIEW_ID_OFFSET: usize = dozer_panel_preview::PROJECT_PREVIEW_ID_OFFSET;
+
+/// 某面板的 webview id 在共享句柄表里的偏移。
+pub fn id_offset(panel: ViewerPanel) -> usize {
+    match panel {
+        ViewerPanel::Project => PROJECT_PREVIEW_ID_OFFSET,
+        _ => 0,
+    }
+}
+
 /// 由库的期望清单 + 产品的矩形计算,得到可跨线程送进 `window::run` 的目标表。
 /// 在宿主线程之外调用(纯数据),避免把 `PreviewPane` 的借用带进 `'static` 闭包。
 pub fn desired(
@@ -312,8 +353,18 @@ pub fn desired(
             }
             spec
         })
+        .map(|mut spec| {
+            spec.id += id_offset(panel);
+            spec
+        })
         .filter_map(|spec| rect(&spec).map(|rect| (spec, rect)))
         .collect()
+}
+
+/// 一条预览 IPC 属于哪个预览面板(editor / rendered host 都带绑定;其余变体
+/// 不属于预览面板,返回 `None`)。
+pub fn panel_of(message: &IpcMessage) -> Option<ViewerPanel> {
+    host_event(message).and_then(HostEvent::panel)
 }
 
 /// 让 `HostEvent` 也能直接从 IPC 通道取出(便利函数,不改变分类语义)。

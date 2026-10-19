@@ -33,7 +33,11 @@ use crate::shell;
 
 use super::tab_chrome;
 
+/// 预览内容区的内边距(库的 `pane_style().padding` 与本文件的 `content_padding` 共用)。
+const PREVIEW_PADDING: f32 = 8.0;
+
 /// 预览面板的展示上下文:外观只跟 locale / 页签条可用宽度走。
+#[derive(Clone, Copy)]
 pub struct PreviewDisplay<'a> {
     pub locale: &'a str,
     /// 页签条此刻的可用宽度(逻辑像素):翻页窗口数学用,由骨架的配对几何给出。
@@ -46,6 +50,17 @@ impl PreviewDisplay<'_> {
     /// 溢出下拉的定位需要整个窗口的尺寸(库给的锚点是窗口坐标)。
     fn menu_window(&self) -> (f32, f32) {
         CURRENT_WINDOW.with(|w| w.get()).unwrap_or((1280.0, 800.0))
+    }
+
+    /// 配对里预览那一块的底色(分隔线两侧由产品给,必须与 `pane_style` 同值,
+    /// 否则竖线两边颜色会差一层)。
+    pub fn background() -> Color {
+        byteui::theme::color::current().panel
+    }
+
+    /// 预览内容区四周的内边距(库的 `view::pane` 用 `pane_style().padding`)。
+    pub fn content_padding() -> f32 {
+        PREVIEW_PADDING
     }
 
     fn collapsed(panel: ViewerPanel) -> bool {
@@ -79,9 +94,9 @@ impl PanelDisplay<Msg> for PreviewDisplay<'_> {
         // 与 Dozer 的 `theme::region::preview_pane()` 同值:8px 内边距、4px 间距、
         // 面板底色(区域外框由骨架画,Dozer 这一层也不再画边框)。
         PaneStyle {
-            padding: Padding::from(8.0),
+            padding: Padding::from(PREVIEW_PADDING),
             gap: 4.0,
-            background: Some(byteui::theme::color::current().panel),
+            background: Some(Self::background()),
         }
     }
 

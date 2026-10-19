@@ -14,7 +14,7 @@
 //! 库消息里带不了项目 id,调用方(`product.rs`)必须先按当前项目路由;这里再
 //! 用 `project_id` 做一次迟到消息过滤:项目对不上就整条丢弃,不 panic。
 //!
-//! 产品壳接线在 Task 8,当前仅单测构造本类型。
+//! 产品壳接线见 `product.rs`(`sync_native` / `body` / `Msg::Preview`)。
 #![allow(dead_code)]
 
 use std::path::PathBuf;
@@ -63,7 +63,12 @@ impl PreviewHub {
 
     /// 落盘根可注入(测试用临时目录,生产走 [`crate::paths::config_dir`])。
     pub fn with_config_dir(host: Host, config_dir: impl Into<PathBuf>) -> Self {
-        let config_dir = config_dir.into();
+        let persistence = Arc::new(DiggerPersistence::new(config_dir.into()));
+        Self::with_persistence(host, persistence)
+    }
+
+    /// 落盘根可注入,且与 `config_dir` 解耦(测试里画一次就是一次盘上写)。
+    pub fn with_persistence(host: Host, persistence: Arc<DiggerPersistence>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             files: None,
@@ -73,7 +78,7 @@ impl PreviewHub {
             safe_startup: true,
             tab_bar_px: (0.0, 0.0),
             locale: "en",
-            persistence: Arc::new(DiggerPersistence::new(config_dir)),
+            persistence,
             host,
             handle: None,
             tx,
@@ -110,22 +115,6 @@ impl PreviewHub {
                 ctx,
             )
         })
-    }
-
-    /// 建好原生页面后,把库里排队的编辑命令取走(产品在 `sync_native` 后调用)。
-    pub fn take_editor_commands(
-        &mut self,
-        panel: ViewerPanel,
-        project_id: i64,
-    ) -> Vec<(usize, dozer_panel_preview::EditorCommand)> {
-        if self.project_id != Some(project_id) {
-            return Vec::new();
-        }
-        let live = self.host.live_ids();
-        let state = self.panel_state_mut(panel);
-        state
-            .pane
-            .take_pending_editor_commands_for(&live, project_id, panel)
     }
 
     /// 处理一条库消息。项目对不上(切走了 / 删了)就丢掉。
@@ -211,6 +200,34 @@ impl PreviewHub {
         }
     }
 
+    /// 当前项目里某一面板待注入的 host 命令(编辑器 / 表格 / PlantUML)。
+    /// 产品在 `sync_native` 建好页面后调用,再逐个 `eval` 到对应的 webview。
+    pub fn host_scripts(&mut self, panel: ViewerPanel, project_id: i64) -> Vec<(usize, String)> {
+        if self.project_id != Some(project_id) {
+            return Vec::new();
+        }
+        // 先取 id 快照,再拿状态的可变借用(两者都借 `self`)。库按面板各自数
+        // id,共享句柄表里 `Project` 侧带偏移,脚本注入前换算回池内 key。
+        let live = self.host.live_ids();
+        let Some(state) = self.state_mut(panel) else {
+            return Vec::new();
+        };
+        let offset = crate::adapters::preview_native::id_offset(panel);
+        state
+            .pane
+            .take_host_scripts(&live, project_id, panel)
+            .into_iter()
+            .map(|(id, script)| (id + offset, script))
+            .collect()
+    }
+
+    fn state_mut(&mut self, panel: ViewerPanel) -> Option<&mut PreviewPanelState> {
+        match panel {
+            ViewerPanel::Project => self.project.as_mut(),
+            _ => self.files.as_mut(),
+        }
+    }
+
     /// 库里记录的"启动已就绪"。
     pub fn finish_startup(&mut self) {
         self.safe_startup = false;
@@ -220,9 +237,28 @@ impl PreviewHub {
         self.handle = Some(handle);
     }
 
-    /// 页签条可用宽度(逻辑像素),由配对几何每帧写回。
+    /// 页签条可用宽度(逻辑像素),由配对几何写回;沿用既有宽度时改的是
+    /// `iced` 侧的状态,只有变了才值得重绘。
     pub fn set_tab_bar_width(&mut self, files: f32, project: f32) {
         self.tab_bar_px = (files, project);
+    }
+
+    /// 某面板页签条的可用宽度(建 `PreviewDisplay` 时读)。
+    pub fn tab_bar_px(&self, panel: ViewerPanel) -> f32 {
+        match panel {
+            ViewerPanel::Project => self.tab_bar_px.1,
+            _ => self.tab_bar_px.0,
+        }
+    }
+
+    /// 宿主副本(`sync` / 脚本注入属于宿主线程操作)。
+    pub fn host(&self) -> &Host {
+        &self.host
+    }
+
+    /// 宿主句柄的共享副本(注入脚本要进 `window::run` 的 `'static` 闭包)。
+    pub fn host_sender(&self) -> Host {
+        self.host.clone()
     }
 
     pub fn take_receiver(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Msg>> {
@@ -419,6 +455,17 @@ fn behavior_of(_panel: ViewerPanel) -> PanelBehavior {
         persist_tabs: true,
         materialize_suspended: true,
     }
+}
+
+/// 把预览状态层的回流接成一条持续到进程结束的 iced 流(库效果 / 后台结果)。
+pub fn receiver_stream(
+    rx: tokio::sync::mpsc::UnboundedReceiver<Msg>,
+) -> impl iced::futures::Stream<Item = Msg> {
+    iced::futures::stream::unfold(Some(rx), |maybe| async move {
+        let mut rx = maybe?;
+        let next = rx.recv().await?;
+        Some((next, Some(rx)))
+    })
 }
 
 /// 落盘实现:`<config>/preview_state/<project_id>.json` + `<config>/preview_recovery`。

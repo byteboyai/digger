@@ -57,13 +57,6 @@ pub fn usage_ledger_path() -> PathBuf {
     config_dir().join("usage_ledger.json")
 }
 
-/// 预览页签的落盘目录:`<config>/digger/preview_state/<project_id>.json`
-/// (恢复文件在同一 config 下的 `preview_recovery/`,由库的 `recovery_dir` 决定)。
-#[allow(dead_code)]
-pub fn preview_state_dir() -> PathBuf {
-    config_dir().join("preview_state")
-}
-
 /// 日志目录。
 pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")

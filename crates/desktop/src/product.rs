@@ -18,6 +18,8 @@ use bytehost_core::{LogicalRect, PanelId, PanelMeta as CatalogEntry};
 use bytehost_desktop::{HostMessage, Product, route_lifecycle};
 use byteui::interaction::icons::{self, IconKind};
 use byteui::theme::{color, font, icon_size};
+use dozer_panel_preview::ViewerPanel;
+use dozer_panel_preview::view::ViewCtx;
 
 use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Size, Subscription, Task, window};
@@ -29,6 +31,16 @@ use crate::{paths, shell};
 const APPS_HEADER_HEIGHT: f32 = 96.0;
 /// 用量面板自己的原生头部(标题 + 加载态)的高度:图表 webview 摆在它下面。
 const USAGE_HEADER_HEIGHT: f32 = 80.0;
+/// 预览的展示上下文:Digger 面板外观是常量(无悬停动画 D2、列表恒在左 D3)。
+const PREVIEW_DISPLAY: crate::adapters::preview_display::PreviewDisplay<'static> =
+    crate::adapters::preview_display::PreviewDisplay {
+        locale: "en",
+        tab_bar_px: 0.0,
+        list_on_left: true,
+    };
+
+/// 预览页签条右侧三颗模式按钮的估算占宽(按钮边长 + 与页签组之间的间距,Dozer 同款)。
+const PREVIEW_CHROME_RESERVE_PX: f32 = 32.0 * 3.0 + 4.0 * 3.0;
 
 /// 产品消息。**不进入**宿主 enum(宿主只认 `HostMessage<M>`)。
 #[derive(Debug, Clone)]
@@ -57,11 +69,12 @@ pub enum Msg {
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
     /// 预览面板的库消息(S5b-2 P4):`Files` / `Project` 各自一份状态。
-    #[allow(dead_code)] // Task 8 起才由 `PreviewHub` 消费。
     Preview(
         dozer_panel_preview::ViewerPanel,
         dozer_panel_preview::Message,
     ),
+    /// 预览原生页面的回传(库已分类的 host IPC / 建页失败)。
+    PreviewEvent(crate::adapters::preview_native::Event),
     /// 一次「删除项目」后台结果:(项目 id, 是否已从注册表移除, 文件系统步骤的错误)。
     ProjectDeleteDone {
         project_id: i64,
@@ -79,6 +92,8 @@ pub enum Msg {
     /// 双击顶栏空白处:缩放窗口(系统标题栏没了,这个手势要自己补)。
     ZoomToggle,
     ShutdownFinished(Result<(), String>),
+    /// 无副作用的一次消息(把工作让给后面排队的任务)。
+    Noop,
     ForceExit,
     CloseRequested,
     Exit,
@@ -108,6 +123,9 @@ pub struct ProductShell {
     project: crate::adapters::project::ProjectPanel,
     /// 「文件」面板适配(共享 `dozer-panel-files` 库;四项能力 Digger 一期全关)。
     files: crate::adapters::files::FilesPanel,
+    /// 预览状态层(S5b-2 P4):Files / Project 两个面板各一份库状态 + 原生宿主。
+    /// 在 `boot` 里装上;纯逻辑测试可以不要(没有预览就没有页签可开)。
+    preview: Option<crate::adapters::preview::PreviewHub>,
     /// 「删除项目」结果回流:库的后台任务在线程池里跑,结果经这里转成产品消息。
     delete_tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     /// 上面那条通道的接收端,`boot` 里取一次接成 iced 流(`None` = 已取走)。
@@ -140,6 +158,19 @@ fn logical(r: Rect) -> LogicalRect {
 /// 测试里跟着全局 `shell.json` 走,免得测试互相覆盖、也不碰真实配置目录。
 fn project_shell_path_of(root: &Path, id: i64) -> PathBuf {
     root.join("shell-projects").join(format!("{id}.json"))
+}
+
+/// 配对预览块里原生 webview 的屏幕矩形:整块 − 页签条(含分隔线)− 内容区内边距,
+/// 与库的 `view::pane`(`tab_bar` + `tab_divider` + `content.padding(region.padding)`)同口径。
+fn preview_webview_rect(slot: Rect) -> Rect {
+    let inset = crate::adapters::preview_display::PreviewDisplay::content_padding();
+    let top = byteui::theme::geometry::preview_chrome_top_px() + inset;
+    Rect::new(
+        slot.x + inset,
+        slot.y + top,
+        (slot.w - inset * 2.0).max(1.0),
+        (slot.h - top - inset).max(1.0),
+    )
 }
 
 /// 向下缩 `top` 像素(面板自己的头部占掉的高度)。
@@ -250,6 +281,7 @@ impl ProductShell {
             projects,
             project,
             files,
+            preview: None,
             delete_tx,
             delete_rx,
             lifecycle,
@@ -419,6 +451,16 @@ impl ProductShell {
         }
         if save_old && before.is_some() {
             self.save_shell_for(before);
+        }
+        // D4:切走项目即销毁该项目的预览(页面、白名单、库状态一起丢)。
+        let current = self.projects.current_project().cloned();
+        if let Some(preview) = self.preview.as_mut() {
+            preview.set_current_project(current.as_ref());
+            if let Some(old) = before
+                && old != self.projects.current_project_id().unwrap_or(old)
+            {
+                preview.forget_project(old);
+            }
         }
         self.load_project_shell();
         if self.panel_visible(&shell::project_id()) {
@@ -595,7 +637,97 @@ impl ProductShell {
             )
         }
         .map(Msg::Markdown);
-        Task::batch([apps_task, usage_task, markdown_task])
+        let preview_tasks = self.sync_preview_native(&rects, closing);
+        Task::batch([
+            apps_task,
+            usage_task,
+            markdown_task,
+            Task::batch(preview_tasks),
+        ])
+    }
+
+    /// 预览面板的原生页面:配对第二块(预览)的位置 = 骨架算好的 slot 再扣掉页签条 +
+    /// 内容区自己画出来的内边距(与库的 `view::pane` 同口径,见 [`preview_webview_rect`])。
+    /// 面板不可见 / 没有当前项目 / 正在关闭时清单为空,宿主销毁全部页面(D4)。
+    ///
+    /// 返回要等窗口线程建好页面之后再回投的注入任务:新建的句柄在 `window::run`
+    /// 闭包里才出现,同一轮 `evaluate_script` 打不进还不存在的页面。
+    fn sync_preview_native(
+        &mut self,
+        rects: &bytehost_chrome::ShellRects,
+        closing: bool,
+    ) -> Vec<Task<Msg>> {
+        let (Some(project), Some(window)) = (
+            self.projects
+                .current_project()
+                .cloned()
+                .filter(|_| !closing),
+            self.window,
+        ) else {
+            return Vec::new();
+        };
+        let Some(mut preview) = self.preview.take() else {
+            return Vec::new();
+        };
+        let tasks = Self::preview_native_tasks(&mut preview, &self.shell, rects, &project, window);
+        self.preview = Some(preview);
+        tasks
+    }
+
+    fn preview_native_tasks(
+        preview: &mut crate::adapters::preview::PreviewHub,
+        shell: &ShellModel,
+        rects: &bytehost_chrome::ShellRects,
+        project: &dozer_model::ProjectInfo,
+        window: window::Id,
+    ) -> Vec<Task<Msg>> {
+        let mut desired: Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> = Vec::new();
+        let mut tab_bar = (0.0_f32, 0.0_f32);
+        for panel in [ViewerPanel::Files, ViewerPanel::Project] {
+            let id = match panel {
+                ViewerPanel::Project => shell::project_id(),
+                _ => shell::files_id(),
+            };
+            let Some(side) = shell.side_of(&id) else {
+                continue;
+            };
+            if shell.selected(side) != &id || rects.content(side).is_none() {
+                continue;
+            }
+            let Some(slot) = shell::pair_rects(shell, side).map(|p| p.second) else {
+                continue;
+            };
+            let rect = logical(preview_webview_rect(slot));
+            desired.extend(preview.desired(panel, project, |_| Some(rect)));
+            // 页签条可用宽度:预览块真实宽度减三颗按钮与间距(Dozer 同款估算)。
+            let avail = (slot.w - PREVIEW_CHROME_RESERVE_PX).max(0.0);
+            match panel {
+                ViewerPanel::Project => tab_bar.1 = avail,
+                _ => tab_bar.0 = avail,
+            }
+        }
+        preview.set_tab_bar_width(tab_bar.0, tab_bar.1);
+        // 建 / 挪 / 销毁在窗口线程内同步完成;注入排在同一闭包里、紧随其后。
+        let host = preview.host().clone();
+        let _: Task<Msg> = window::run(window, move |w| host.sync(w, &desired)).discard();
+        let mut scripts = Vec::new();
+        for panel in [ViewerPanel::Files, ViewerPanel::Project] {
+            scripts.extend(preview.host_scripts(panel, project.id));
+        }
+        if scripts.is_empty() {
+            return Vec::new();
+        }
+        let host = preview.host_sender();
+        vec![Task::stream(iced::futures::stream::once(async move {
+            // 让出这一帧:建页面的 `window::run` 先排队执行。
+            tokio::task::yield_now().await;
+            let _ = window::run(window, move |_| {
+                for (webview_id, script) in scripts {
+                    host.push_script(webview_id, script);
+                }
+            });
+            Msg::Noop
+        }))]
     }
 
     fn info_view(&self) -> Element<'_, Msg> {
@@ -661,14 +793,28 @@ impl ProductShell {
 
     fn project_view(&self, area: &BodyArea) -> Element<'_, Msg> {
         let current = self.projects.current_project();
-        // 整个面板区域接一记"按下":编辑中点到别处就提交(见 `Msg::ProjectPointerDown`)。
-        let body: Element<'_, Msg> = iced::widget::mouse_area(self.project.view(
+        // 配对的第一块是项目信息列(D3:列表在左、预览在右)。列宽取骨架算好的 slot 宽度;
+        // 列表收起时 `pair_view` 只渲染预览,宽度用整个内容区也无妨。
+        let list_w = area.pair.map(|p| p.first.w).unwrap_or(area.rect.w);
+        // 整个列表区域接一记"按下":编辑中点到别处就提交(见 `Msg::ProjectPointerDown`)。
+        let list: Element<'_, Msg> = iced::widget::mouse_area(self.project.view(
             current,
-            Length::Fixed(area.rect.w),
+            Length::Fixed(list_w),
             Border::default(),
         ))
         .on_press(Msg::ProjectPointerDown)
         .into();
+        let tokens = color::current();
+        let body: Element<'_, Msg> = pair_view(
+            area,
+            list,
+            self.preview_pane(ViewerPanel::Project),
+            Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
+            tokens.panel,
+            // 预览区背景与 Dozer 的 `theme::region::preview_pane()` 同值(见 `PreviewDisplay::pane_style`),
+            // 分隔线两侧因此是两种底色。
+            crate::adapters::preview_display::PreviewDisplay::background(),
+        );
         // 删除确认是覆盖在面板上的三选一卡片(库的 `project_delete_card`),有才盖。
         let overlay: Option<Element<'_, Msg>> = current
             .and_then(|p| self.project.delete_card(p.id))
@@ -686,8 +832,53 @@ impl ProductShell {
     }
 
     fn files_view(&self, area: &BodyArea) -> Element<'_, Msg> {
-        self.files
-            .view(Length::Fixed(area.rect.w), Border::default())
+        let tokens = color::current();
+        let list_w = area.pair.map(|p| p.first.w).unwrap_or(area.rect.w);
+        pair_view(
+            area,
+            self.files.view(Length::Fixed(list_w), Border::default()),
+            self.preview_pane(ViewerPanel::Files),
+            Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
+            tokens.panel,
+            crate::adapters::preview_display::PreviewDisplay::background(),
+        )
+    }
+
+    /// 配对第二块:预览面板本体(库的 `view::pane`)。没有当前项目 / 预览层还没装上时
+    /// 给一块空面板,配对几何不变。
+    /// D3:在右半边的预览里打开一个路径(文件树双击 / Project 文档链接)。
+    /// 没有当前项目时什么都不做(预览本来就按项目存)。
+    fn preview_open(&mut self, panel: ViewerPanel, path: &Path) -> Task<Msg> {
+        let Some(project) = self.projects.current_project().cloned() else {
+            return Task::none();
+        };
+        if let Some(preview) = self.preview.as_mut() {
+            preview.open(panel, &project, path.to_path_buf(), None);
+        }
+        self.sync_native()
+    }
+
+    fn preview_pane(&self, panel: ViewerPanel) -> Element<'_, Msg> {
+        let (Some(preview), Some(current)) =
+            (self.preview.as_ref(), self.projects.current_project())
+        else {
+            return iced::widget::Space::new().into();
+        };
+        let Some(state) = preview.state(panel, current.id) else {
+            return iced::widget::Space::new().into();
+        };
+        dozer_panel_preview::view::pane(
+            &state.pane,
+            state.tab_first,
+            state.error.as_ref(),
+            panel,
+            &PREVIEW_DISPLAY,
+            &ViewCtx {
+                project: Some(current),
+            },
+            Length::Fill,
+            Border::default(),
+        )
     }
 
     fn markdown_view(&self) -> Element<'_, Msg> {
@@ -827,17 +1018,6 @@ fn load_usage_ledger(
     }
 }
 
-/// 用系统默认应用打开一个路径(文档链接)。失败只记日志:用户还能从别的入口打开。
-fn open_in_system(path: &std::path::Path) {
-    #[cfg(target_os = "macos")]
-    let opener = "open";
-    #[cfg(not(target_os = "macos"))]
-    let opener = "xdg-open";
-    if let Err(e) = std::process::Command::new(opener).arg(path).spawn() {
-        eprintln!("digger: 打开 {} 失败: {e}", path.display()); // cli-output
-    }
-}
-
 /// 某面板在骨架 `PaneStore` 里是否被收起(配对面板专有;无条目视为未收起)。
 /// 单独成自由函数是为了让 `PanelDisplay` 适配器不必拿到 `ProductShell`——
 /// 它只读**当前窗口**的布局,与 `ProductShell::pane_collapsed` 同源。
@@ -902,6 +1082,7 @@ impl Product<Msg> for ProductShell {
                 Task::batch([resized, guard])
             }
             Msg::Shell(m) => self.on_shell(m),
+            Msg::Noop => Task::none(),
             Msg::ZoomToggle => self
                 .window
                 .map(window::toggle_maximize)
@@ -931,9 +1112,13 @@ impl Product<Msg> for ProductShell {
                 let project_id = self.projects.current_project_id();
                 let task = self.files.update(m, project_id);
                 // 库把"只有产品做得到"的事放进队列:右键菜单落到 iced 浮层,
-                // 打开文件交给系统默认应用;选目录暂时无入口(能力已关)。
+                // 双击文件进预览(D3);选目录暂时无入口(能力已关)。
                 let _ = self.files.take_requests();
+                let mut task = task;
                 for request in self.files.take_host_requests() {
+                    if let Some(path) = crate::adapters::files::FilesPanel::open_path(&request) {
+                        task = Task::batch([task, self.preview_open(ViewerPanel::Files, path)]);
+                    }
                     let _ = self.files.handle_host_request(&request);
                 }
                 // Digger 一期无 Toast:提示落到 stderr,不静默吞掉。
@@ -1008,8 +1193,8 @@ impl Product<Msg> for ProductShell {
                     PM::ToolbarHover(..) => {}
                     // 文本编辑框的复制/粘贴菜单:一期不做(与其它面板一致)。
                     PM::TextInputMenuOpen(..) => {}
-                    // 没有预览栏(S5b):点文档用系统默认应用打开。
-                    PM::OpenLink(path) => open_in_system(&path),
+                    // D3:项目文档链接在右半边的预览里打开(预览失败仍可用系统应用打开)。
+                    PM::OpenLink(path) => return self.preview_open(ViewerPanel::Project, &path),
                     // 右键菜单:一期只有"移除",不做浮层,直接落到库的 `LinkRemove`。
                     PM::LinkContextMenu { target, index } => self
                         .project
@@ -1091,9 +1276,37 @@ impl Product<Msg> for ProductShell {
                 }
                 Task::none()
             }
-            // 预览面板的库消息在 Task 7 接上 `PreviewHub` 前还不存在状态,先按 no-op 吞掉。
-            #[allow(unused_variables)]
-            Msg::Preview(_, _) => Task::none(),
+            Msg::PreviewEvent(event) => match event {
+                crate::adapters::preview_native::Event::Ipc { message, .. } => {
+                    let Some(event) =
+                        crate::adapters::preview_native::host_event(&message).cloned()
+                    else {
+                        return Task::none();
+                    };
+                    let Some(panel) = event.panel() else {
+                        return Task::none();
+                    };
+                    Task::done(Msg::Preview(
+                        panel,
+                        dozer_panel_preview::Message::Host(event),
+                    ))
+                }
+                crate::adapters::preview_native::Event::BuildFailed { webview_id, error } => {
+                    eprintln!("digger: 预览页面 {webview_id} 构建失败: {error}"); // cli-output
+                    Task::none()
+                }
+            },
+            Msg::Preview(panel, message) => {
+                // 库消息不带项目 id:先按**此刻**的当前项目路由,库里再按项目 id 丢掉迟到消息。
+                let Some(project_id) = self.projects.current_project_id() else {
+                    return Task::none();
+                };
+                if let Some(preview) = self.preview.as_mut() {
+                    preview.dispatch(panel, project_id, message);
+                }
+                // 页签状态变了:原生页面的清单 / 编辑命令要在同一帧里跟上。
+                self.sync_native()
+            }
             Msg::Lifecycle(phase) => {
                 let Some(mut driver) = self.lifecycle.take() else {
                     return Task::none();
@@ -1378,6 +1591,16 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         .project
         .attach_handle(tokio::runtime::Handle::current());
     shell.files.attach_handle(tokio::runtime::Handle::current());
+    // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
+    // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
+    shell.preview = Some(crate::adapters::preview::PreviewHub::new(
+        crate::adapters::preview_native::Host::new(dozer_panel_preview::assets::from_lib_source()),
+    ));
+    if let Some(preview) = shell.preview.as_mut() {
+        preview.attach_handle(tokio::runtime::Handle::current());
+        preview.set_current_project(shell.projects.current_project());
+        preview.finish_startup();
+    }
     // 应用面板后台结果回流:一次性流出接收端,持续到进程结束(与窗口尺寸任务并行)。
     use iced::futures::StreamExt;
     let reply_task = match crate::apps::take_reply_receiver(&shell.apps.reply_receiver()) {
@@ -1421,6 +1644,18 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         Some(rx) => Task::stream(crate::adapters::files::receiver_stream(rx).map(Msg::Files)),
         None => Task::none(),
     };
+    // 预览面板的后台结果 / host 回流(库的 `run_effect` 回投 `Message`)。
+    let preview_task = match shell.preview.as_mut().and_then(|p| p.take_receiver()) {
+        Some(rx) => Task::stream(crate::adapters::preview::receiver_stream(rx)),
+        None => Task::none(),
+    };
+    // 预览原生页面回传(host IPC / 建页失败):每条转成产品消息,再按宿主分类。
+    let preview_native_task = match shell.preview.as_ref().map(|p| p.host().take_receiver()) {
+        Some(Some(rx)) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::PreviewEvent(event), rx))
+        })),
+        _ => Task::none(),
+    };
     // 文件系统监听的事件回流(当前项目的增删改 → 树与 git 着色跟进)。
     let fs_task = match shell.files.take_fs_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
@@ -1456,6 +1691,8 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             markdown_task,
             project_task,
             files_task,
+            preview_task,
+            preview_native_task,
             fs_task,
             delete_task,
             lifecycle_task,
@@ -1498,6 +1735,45 @@ mod tests {
                 panel: panel.clone(),
             })),
         );
+    }
+
+    /// Review Focus 2:预览 webview 矩形是配对的第二块,下移页签条 + 内容区内边距,左右内缩同值。
+    #[test]
+    fn preview_rect_is_the_second_block_below_the_chrome() {
+        let slot = Rect::new(600.0, 120.0, 400.0, 500.0);
+        let inset = crate::adapters::preview_display::PreviewDisplay::content_padding();
+        let chrome = byteui::theme::geometry::preview_chrome_top_px();
+        let rect = preview_webview_rect(slot);
+        assert_eq!(rect.x, 600.0 + inset);
+        assert_eq!(rect.y, 120.0 + chrome + inset);
+        assert_eq!(rect.w, 400.0 - inset * 2.0);
+        assert_eq!(rect.h, 500.0 - chrome - inset * 2.0);
+    }
+
+    /// 只有被骨架选中、且在配对里的面板才该有预览块。
+    #[test]
+    fn the_pair_rects_exist_only_for_the_selected_paired_panels() {
+        let d = shell::defaults();
+        let mut shell =
+            ShellModel::new(d.rails.clone(), d.selected.clone(), d.left_width, d.window).unwrap();
+        let files_side = shell.side_of(&shell::files_id()).expect("文件面板在布局里");
+        let _ = shell::update(
+            &mut shell,
+            ShellMsg::PanelPress {
+                panel: shell::files_id(),
+            },
+        );
+        assert!(shell::pair_rects(&shell, files_side).is_some());
+        // 选中同侧的另一块(非配对)面板后,该侧不再是配对的可渲染状态。
+        let other = [shell::info_id(), shell::apps_id()]
+            .into_iter()
+            .find(|id| shell.side_of(id) == Some(files_side))
+            .expect("同侧总还有别的面板");
+        let _ = shell::update(&mut shell, ShellMsg::PanelPress { panel: other });
+        let chosen = shell
+            .side_of(&shell::files_id())
+            .is_some_and(|side| shell.selected(side) == &shell::files_id());
+        assert!(!chosen);
     }
 
     #[test]
