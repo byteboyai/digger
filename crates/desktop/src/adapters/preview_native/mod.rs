@@ -124,11 +124,7 @@ impl Host {
                     });
                     record(id, rect, visible, url);
                 }
-                Op::Destroy { id } => {
-                    VIEWS.with(|v| {
-                        v.borrow_mut().remove(&id);
-                    });
-                }
+                Op::Destroy { id } => forget(id),
             }
         }
     }
@@ -159,7 +155,6 @@ impl Host {
         let root = self.assets_root.clone();
         let tx = self.tx.clone();
         let webview_id = spec.id;
-        let initial_url = spec.url.clone();
         let visible = spec.visible || spec.park_offscreen;
         let built = wry::WebViewBuilder::new()
             .with_bounds(bounds(rect))
@@ -167,7 +162,7 @@ impl Host {
             .with_clipboard(true)
             .with_download_started_handler(|_, _| false)
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-            .with_navigation_handler(move |url| url == initial_url || url == "about:blank")
+            .with_navigation_handler(|url| navigation_allowed(&url))
             .with_initialization_script(&script)
             .with_ipc_handler(move |request| {
                 let message = classify_ipc(&context, &request.into_body());
@@ -179,9 +174,6 @@ impl Host {
             .with_custom_protocol("dozer".into(), move |_id, request| {
                 let allowed = allowed.lock().expect("allowed 锁");
                 let uri = request.uri().to_string();
-                if std::env::var_os("DIGGER_PREVIEW_TRACE").is_some() {
-                    eprintln!("preview asset: {uri}"); // cli-output
-                }
                 let reply = dozer_panel_preview::assets::handle_protocol(&root, &allowed, &uri)
                     .unwrap_or_else(dozer_panel_preview::assets::not_found);
                 wry::http::Response::builder()
@@ -233,6 +225,24 @@ fn record(id: usize, rect: LogicalRect, visible: bool, url: Option<String>) {
         entry.rect = rect;
         entry.visible = visible;
     });
+}
+
+/// 销毁一个句柄并把它从记账里抹掉。只删 `VIEWS` 会让 `LIVE` 留着旧项:同 id 的清单项再出现时
+/// `plan` 看到"已存在"只发 `Update`,而句柄早没了,webview 永远建不回来。
+fn forget(id: usize) {
+    VIEWS.with(|v| {
+        v.borrow_mut().remove(&id);
+    });
+    LIVE.with(|l| {
+        l.borrow_mut().remove(&id);
+    });
+}
+
+/// 预览页面允许发生的导航:库的 `dozer://` 协议(含程序化 `load_url`:重载、主题、语言变化都会换 URL),
+/// 以及 HTML 隔离宿主内部的 `about:blank` / `about:srcdoc` iframe。其余(http/https/file…)一律拒绝。
+/// wry 对所有导航动作都调用这个处理器,不区分主 frame 与子 frame。
+fn navigation_allowed(url: &str) -> bool {
+    url.starts_with("dozer://") || url == "about:blank" || url == "about:srcdoc"
 }
 
 fn with(id: usize, f: impl FnOnce(&wry::WebView)) {
@@ -293,6 +303,61 @@ pub fn host_event(message: &IpcMessage) -> Option<&HostEvent> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn navigation_policy_allows_the_protocol_and_srcdoc_but_nothing_external() {
+        for ok in [
+            "dozer://editor/index.html?p=%2Ftmp%2Fa.py",
+            "dozer://flyfish/host.html?p=x&_r=2",
+            "dozer://html/host.html",
+            "about:blank",
+            "about:srcdoc",
+        ] {
+            assert!(navigation_allowed(ok), "{ok}");
+        }
+        for bad in [
+            "https://example.com",
+            "http://localhost:1",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "dozer.evil://x",
+            "",
+        ] {
+            assert!(!navigation_allowed(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_destroyed_id_is_created_again_not_updated() {
+        let rect = LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let spec = PreviewWebviewSpec {
+            id: 77,
+            url: "dozer://editor/index.html".into(),
+            visible: true,
+            editor_binding: None,
+            reserve: None,
+            loading_generation: None,
+            park_offscreen: false,
+        };
+        let desired = vec![(spec, rect)];
+        record(77, rect, true, Some("dozer://editor/index.html".into()));
+        assert!(
+            plan(&snapshot(), &desired).is_empty(),
+            "unchanged and live: nothing to do"
+        );
+        forget(77);
+        assert!(!snapshot().contains_key(&77));
+        assert!(matches!(
+            plan(&snapshot(), &desired).as_slice(),
+            [Op::Create { .. }]
+        ));
+    }
 
     #[test]
     fn host_event_only_matches_host_variant() {

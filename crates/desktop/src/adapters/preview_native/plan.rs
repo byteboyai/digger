@@ -89,7 +89,6 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dozer_panel_preview::ViewerPanel;
 
     fn rect(x: f64, y: f64, w: f64, h: f64) -> LogicalRect {
         LogicalRect {
