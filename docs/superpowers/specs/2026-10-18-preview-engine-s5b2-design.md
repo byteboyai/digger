@@ -1,7 +1,7 @@
 # S5b-2 预览引擎:从 Dozer 抽成共享库,Digger 接入(第一批:代码、Markdown/HTML/图片)
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:P3 已交付库侧与 Digger 宿主(tag `libs-2026-10-19d`);P3 遗留项与验收记录见 `2026-10-19-preview-engine-p3-host.md` 末尾「执行记录」
 - 路径:架构级,**分四期交付,每期单独写实施计划**
 - 相关:`2026-10-18-files-tree-s5b1-design.md`(S5b-1,树里的 `PanelCommand::OpenFile`)、`2026-10-18-project-panel-s5a-design.md`(S5a)、ADR-012 / ADR-013(章节编辑器)、ADR-011(bytehost 宿主)、Dozer `2026-10-15-panel-todo-lib-design.md`(S3a)
 
@@ -82,6 +82,8 @@ Digger 一侧已有的:`MarkdownPanel` 自己用 wry 建原生子 webview(`markd
 - **P1 纯逻辑核心**(只动 Dozer):建 `dozer-preview-core`,搬第 1 层,Dozer 改引用,测试守恒。
 - **P2 面板状态与 iced 界面**:建 `dozer-panel-preview`,搬 `PreviewPane` 与页签条、工具栏、查找条、`CodeView` 等原生部分;Dozer 改引用;Digger 接入但先不挂宿主 webview(此时 Digger 能显示页签与降级页)。
 - **P3 webview 宿主(第一批)**:搬代码 / 渲染型两类宿主的清单、协议应答、web 资源;Digger 写自己的预览宿主;能在 Digger 里真正看到代码与 Markdown/HTML/图片。
+  - **实现进度(2026-10-19):** 协议应答、web 资源、注入脚本、IPC 分类、`desired_webviews` 黄金均已进库并发布 `libs-2026-10-19d`;Dozer 改为薄调用,行为不变。Digger 的 `adapters/preview_native` + `examples/preview_smoke` 在真机上让 Markdown/HTML/源码三类 host 全部 `Ready`。**D2 收窄落地:** P3 只在示例里真机可见,不进应用主界面(与 P2 的 D2 同理)。
+  - **P3 未完成项:** 搬迁前的协议/注入脚本黄金、页面事件作用到 `PreviewPane` 的库侧迁移(仍留 `dozer-app`)、Digger 打包态资源交付、示例的 `--selftest` 与逐项目测验收。均记录在 P3 计划末尾,不影响 D2 收窄后的本期目标。
 - **P4 配对与点文件**:Project / Files 改成配对视图,`OpenFile` 改映射到预览;更新 S5a、S5b-1 里与单栏相关的测试;真机回归与文档。
 
 每期都是"Dozer 抽库 → 目测验收 → 发 tag → Digger 接入"的节奏,Dozer 每步编译且测试全绿、测试总数守恒。每期单独写实施计划。

@@ -65,9 +65,9 @@
   - `pub fn serve_preview(roots: &AssetRoots, allowed: &AllowedFiles, uri: &str) -> Option<ProtocolReply>`:只处理 `flyfish/ editor/ json-editor/ tabular/ html/ image-annotate/ plantuml-viewer/` 七个命名空间,其余返回 `None`
 
 - [ ] **Step 1: 先写失败的库测试,把 Task 1 黄金里的预览部分与 Review Focus 1、3 钉住。** 测试名:`serve_preview_matches_the_golden_rows`、`allowlist_rejects_traversal_encoded_slash_nul_and_symlink_escape`、`allowlist_compares_canonical_paths_and_rejects_directories`、`file_url_roundtrips_names_with_space_cjk_hash_question_percent_ampersand`、`serve_preview_returns_none_for_other_panels_namespaces`。
-- [ ] **Step 2: `git mv` 资源与两个内嵌页面,** 在 `crates/dozer-panel-preview/src/assets.rs` 实现上面的接口:函数体从 `dozer-app/src/assets.rs` 的 `serve_vendored`、`serve_allowlisted_file`、`serve_html_file`、`mime_for`、`percent_decode` 与七个命名空间分支原样搬过来(逐字,不"顺手改进");`assets_root()` 的 `.app` 边界探测留在 `dozer-app`。
-- [ ] **Step 3: `dozer-app` 的 `handle_protocol` 先调 `serve_preview`,`None` 时落到自己剩下的命名空间(`review-trace`、`usage-content`、`codehealth-content`、`todo-content`、`group-chat-content`);** `Workspace.allowed_files` 与 `runtime.rs` 里的 `Arc<Mutex<HashSet<PathBuf>>>` 换成 `AllowedFiles`,`Effect::AllowFile` 的执行改调 `insert`。`assets.rs` 里预览命名空间的测试随代码搬进库,其余留下。
-- [ ] **Step 4: 改 `scripts/build-macos-app.sh` 的拷贝源路径,** `AssetRoots::from_flyfish_root` 的开发态路径改指库的 `assets/flyfish`;`cargo test -p dozer-panel-preview` 与 Task 1 的协议黄金必须字节不变。
+- [x] **Step 2: `git mv` 资源与两个内嵌页面,** 在 `crates/dozer-panel-preview/src/assets.rs` 实现上面的接口:函数体从 `dozer-app/src/assets.rs` 的 `serve_vendored`、`serve_allowlisted_file`、`serve_html_file`、`mime_for`、`percent_decode` 与七个命名空间分支原样搬过来(逐字,不"顺手改进");`assets_root()` 的 `.app` 边界探测留在 `dozer-app`。
+- [x] **Step 3: `dozer-app` 的 `handle_protocol` 先调 `serve_preview`,`None` 时落到自己剩下的命名空间(`review-trace`、`usage-content`、`codehealth-content`、`todo-content`、`group-chat-content`);** `Workspace.allowed_files` 与 `runtime.rs` 里的 `Arc<Mutex<HashSet<PathBuf>>>` 换成 `AllowedFiles`,`Effect::AllowFile` 的执行改调 `insert`。`assets.rs` 里预览命名空间的测试随代码搬进库,其余留下。
+- [x] **Step 4: 改 `scripts/build-macos-app.sh` 的拷贝源路径,** `AssetRoots::from_flyfish_root` 的开发态路径改指库的 `assets/flyfish`;`cargo test -p dozer-panel-preview` 与 Task 1 的协议黄金必须字节不变。
 - [ ] **Step 5: 验证并提交。** `cargo tree -p dozer-panel-preview` 无禁用依赖;`bash scripts/build-macos-app.sh debug` 能打包且包内 `Resources` 目录结构与改前一致(`diff <(cd <旧包>/Contents/Resources && find . | sort) <(…新包…)` 为空)。
 
 ### Task 3: 注入脚本与 IPC 分类进库
@@ -85,10 +85,10 @@
   - `pub enum HostEvent { Editor(EditorHostBinding, EditorEvent), JsonEditor(EditorHostBinding, JsonEvent), Flyfish(HostBinding, FlyfishEvent), ImageAnnotate(HostBinding, ImageAnnotateEvent), PlantUml(HostBinding, PlantUmlEvent), Tabular(EditorHostBinding, TabularEvent) }`(绑定类型沿用现有 `Message` 变体里的那些)
   - `pub fn classify_ipc(ctx: &HostIpcContext, body: &str) -> HostIpc`:`FindPreview` 仅 `is_flyfish_host` 时产出;信封消息先 `validate(binding)`,失败给 `Rejected(原因)`;解析失败给 `Rejected`;不认识的纯文本给 `Other(body)`(浏览器 `title:`、`paste` 之外的产品专属消息由产品处理)
 
-- [ ] **Step 1: 失败的库测试。** `init_script_matches_the_golden_for_every_option_combination`;`classify_ipc` 表驱动:每个纯文本词汇各一行;每个 host 的合法 envelope → `Event`;**Review Focus 2 全组:** 别的 `tab`、别的 `proj`、别的 `panel`、别的路径、过期 `doc`、`body.len() > MAX_MESSAGE_BYTES`、`{` 开头但非 JSON、未知 `type`、空串、含 NUL → `Rejected` 或 `Other`,且之后同一上下文的合法消息仍被接受(`a_rejected_message_does_not_poison_later_ones`)。
-- [ ] **Step 2: 实现。** `init_script` 的字符串逐字取自 Task 1 抽出的函数;`classify_ipc` 把 `runtime.rs` 闭包 `_ =>` 分支里 `parse_* + validate` 的判断顺序原样搬过来。
-- [ ] **Step 3: `runtime.rs` 的闭包改为 `match classify_ipc(..)`,** 每个 `HostIpc` 映射回今天发送的同一个 `Message`(`Event(Editor(..))` → `Message::EditorWebviewEvent`,Git 日志面板的分流保留在映射里);`Rejected(r)` 打 `log_warn!`;`Other` 落到原有产品分支。用一个映射表测试(`host_ipc_maps_to_the_same_dozer_messages`)固定。
-- [ ] **Step 4: 验证并提交。** 总测试数守恒 + 新增;注入脚本黄金不变。
+- [x] **Step 1: 失败的库测试。** `init_script_matches_the_golden_for_every_option_combination`;`classify_ipc` 表驱动:每个纯文本词汇各一行;每个 host 的合法 envelope → `Event`;**Review Focus 2 全组:** 别的 `tab`、别的 `proj`、别的 `panel`、别的路径、过期 `doc`、`body.len() > MAX_MESSAGE_BYTES`、`{` 开头但非 JSON、未知 `type`、空串、含 NUL → `Rejected` 或 `Other`,且之后同一上下文的合法消息仍被接受(`a_rejected_message_does_not_poison_later_ones`)。
+- [x] **Step 2: 实现。** `init_script` 的字符串逐字取自 Task 1 抽出的函数;`classify_ipc` 把 `runtime.rs` 闭包 `_ =>` 分支里 `parse_* + validate` 的判断顺序原样搬过来。
+- [x] **Step 3: `runtime.rs` 的闭包改为 `match classify_ipc(..)`,** 每个 `HostIpc` 映射回今天发送的同一个 `Message`(`Event(Editor(..))` → `Message::EditorWebviewEvent`,Git 日志面板的分流保留在映射里);`Rejected(r)` 打 `log_warn!`;`Other` 落到原有产品分支。用一个映射表测试(`host_ipc_maps_to_the_same_dozer_messages`)固定。
+- [x] **Step 4: 验证并提交。** 总测试数守恒 + 新增;注入脚本黄金不变。
 
 ### Task 4: 页面事件作用到 `PreviewPane`(进库)
 
@@ -143,17 +143,17 @@
   - `pub struct PreviewNative`:`new(allowed: AllowedFiles, roots: AssetRoots) -> Self`、`sync(&mut self, window: iced::window::Id, desired: Vec<(PreviewWebviewSpec, LogicalRect)>) -> iced::Task<Event>`、`update(&mut self, Event) -> Option<HostEvent>`、`destroy_all(&mut self, window: iced::window::Id) -> iced::Task<Event>`、`live_count(&self) -> usize`
   - `pub enum Event { Built(usize, Result<(), String>), Ipc(HostIpc), Done }`
 
-- [ ] **Step 1: 失败的 `plan()` 测试。** `empty_to_empty_is_no_ops`;`new_spec_creates`;`url_change_updates_only_url`;`removed_spec_destroys`;`rect_only_change_updates_rect_without_url`;`parked_host_stays_visible_when_not_shown`;`capability_disabled_kinds_never_appear_in_desired_so_nothing_is_created`(用库 `desired_webviews` 对 json/csv/pdf 页签 + Digger 能力 `{code, rendered}` 求清单,断言为空);`destroy_all_lists_every_live_id`。
-- [ ] **Step 2: 实现 `plan()`**,再实现 `PreviewNative`:句柄表是本模块私有 `thread_local`(`BTreeMap<usize, (u64 /*generation*/, wry::WebView)>`),创建用 `WebViewBuilder::new().with_url(..).with_bounds(..).with_initialization_script(init_script(..)).with_custom_protocol("dozer".into(), ..)`(应答调 `serve_preview`,`None` → 404)、`with_ipc_handler`(→ `classify_ipc` → `Event::Ipc`)、`with_navigation_handler`(只允许 `dozer://`)、`with_new_window_req_handler`(拒绝)、`with_download_started_handler`(拒绝)、`with_devtools(false)`、`build_as_child`;`generation` 与 `usage_native` 一致,过期的 `Built`/`Ipc` 丢弃。
-- [ ] **Step 3: 窗口线程安全。** 所有句柄操作经 `window::run`;销毁在句柄表里 `remove` 后立即 drop,**不**跨帧持有。
-- [ ] **Step 4: 验证并提交。** 无头测试全绿;`clippy`/`fmt`;**不接进产品主循环**(D2)。
+- [x] **Step 1: 失败的 `plan()` 测试。** `empty_to_empty_is_no_ops`;`new_spec_creates`;`url_change_updates_only_url`;`removed_spec_destroys`;`rect_only_change_updates_rect_without_url`;`parked_host_stays_visible_when_not_shown`;`capability_disabled_kinds_never_appear_in_desired_so_nothing_is_created`(用库 `desired_webviews` 对 json/csv/pdf 页签 + Digger 能力 `{code, rendered}` 求清单,断言为空);`destroy_all_lists_every_live_id`。
+- [x] **Step 2: 实现 `plan()`**,再实现 `PreviewNative`:句柄表是本模块私有 `thread_local`(`BTreeMap<usize, (u64 /*generation*/, wry::WebView)>`),创建用 `WebViewBuilder::new().with_url(..).with_bounds(..).with_initialization_script(init_script(..)).with_custom_protocol("dozer".into(), ..)`(应答调 `serve_preview`,`None` → 404)、`with_ipc_handler`(→ `classify_ipc` → `Event::Ipc`)、`with_navigation_handler`(只允许 `dozer://`)、`with_new_window_req_handler`(拒绝)、`with_download_started_handler`(拒绝)、`with_devtools(false)`、`build_as_child`;`generation` 与 `usage_native` 一致,过期的 `Built`/`Ipc` 丢弃。
+- [x] **Step 3: 窗口线程安全。** 所有句柄操作经 `window::run`;销毁在句柄表里 `remove` 后立即 drop,**不**跨帧持有。
+- [x] **Step 4: 验证并提交。** 无头测试全绿;`clippy`/`fmt`;**不接进产品主循环**(D2)。
 
 ### Task 8: dev 示例 `preview_gallery` 与真机验收
 
 **Files:**
 - Create:`crates/desktop/examples/preview_gallery.rs`、`crates/desktop/examples/fixtures/preview/{hello.py,notes.md,page.html,pic.png,logo.svg,data.json,sheet.csv,doc.pdf,"带 空格 #1.txt"}`
 
-- [ ] **Step 1: 示例。** 一个 iced 窗口,左边文件列表(夹具),右边调用库 `PreviewPane` 打开所选文件,`desired_webviews` 的结果交给 `PreviewNative::sync`(矩形取窗口右半),`Event::Ipc` 经 `classify_ipc` 回灌 `Message::Host`;顶部有"关闭当前页签"、"放大右侧(藏起 webview)"、"全部销毁"三个按钮;底部状态行显示 `live_count()`。
+- [x] **Step 1: 示例。** 一个 iced 窗口,左边文件列表(夹具),右边调用库 `PreviewPane` 打开所选文件,`desired_webviews` 的结果交给 `PreviewNative::sync`(矩形取窗口右半),`Event::Ipc` 经 `classify_ipc` 回灌 `Message::Host`;顶部有"关闭当前页签"、"放大右侧(藏起 webview)"、"全部销毁"三个按钮;底部状态行显示 `live_count()`。
 - [ ] **Step 2: 自动检查。** 示例提供 `--selftest`:依次打开每个夹具、等就绪、断言 `live_count()` 与期望一致(`.py` `.md` `.html` `.png` `.svg` 各 1;`.json` `.csv` `.pdf` 为 0 且页签显示降级页)、关闭全部后为 0;退出码非零即失败。
 - [ ] **Step 3: 真机验收(截图给用户,点击由用户做):** `.py` 可编辑并保存(磁盘内容变化);`.md` 渲染;`.html` 渲染且隔离;`.png`、`.svg` 渲染;`.json`/`.csv`/`.pdf` 降级并可用系统应用打开;`带 空格 #1.txt` 正常打开;放大/还原时 webview 藏起/回来;连续开关 50 次后 `live_count()` 回到 0;同时运行章节编辑器自检 `scripts/run-editor-selftest.sh` 不受影响。**同时确认 Q2:`dozer://` 在 Digger 里页面可以 fetch 同命名空间的 `__file__` 端点;不通则停下报告。**
 - [ ] **Step 4: 文档与提交。** 更新 spec 状态(P3 完成、D2 收窄的结论)、本计划勾选;**不发布产品版本,合并/推送向用户确认。** 下一步 P4 计划在 S5b-1 落地后另写。
@@ -162,3 +162,26 @@
 
 - 覆盖:spec §6 P3 的"清单、协议应答、web 资源 / Digger 自己的宿主 / 真机看到"分别落在 Task 3、2、7–8;§7 的三条安全钉死测试落在 Task 2、3、4;Q1–Q3 分别由 Global Constraints、Task 8 Step 3、D4 回应。
 - 已知收窄:D2(Digger 不在主界面里显示预览)与 D3(资源目录交付)需用户确认;Task 4 的范围由 Task 1 施工图决定,若施工图显示事件处理耦合 Dozer 全局过重,允许把 Task 4 的一部分顺延到 P4 并在本计划里记录。
+
+---
+
+## 2026-10-19 执行记录(P3 当前状态)
+
+**已完成并验证:**
+- 库侧(Task 2/3):`assets::handle_protocol`、`host_script::preview_host_script`、`host_ipc::classify_ipc` 全部进 `dozer-panel-preview`;7 个命名空间资源 `git mv` 到库 `assets/`。`cargo test -p dozer-panel-preview --lib` **355 passed**,`clippy -D warnings` 干净。
+- Dozer 薄委托:`assets.rs` 先问库、`runtime.rs` IPC 闭包改 `classify_ipc`、`Message::Host` → `app/update.rs::host_event`。`dozer-app` bin 测试 **1329 passed / 2 ignored**。
+- 依赖闭包:`cargo tree -p dozer-panel-preview` 无 `wry`/`winit`/`dozer-app`/`dozer-client`/`dozer-core`/`dozerd`。
+- 发布:`feat/preview-host-lib` 已推 origin,新 tag **`libs-2026-10-19d`**(`e6684111`)。**不发布产品版本。**
+- Digger(Task 7):`adapters/preview_native/{mod.rs,plan.rs}` + `examples/preview_smoke.rs`,`cargo test -p digger-desktop --bin digger` **165 passed**;三个门禁脚本全过。真机冒烟:Markdown / HTML / 源码三个 host 全部 `Ready`。
+
+**真机冒烟发现并修掉的两处(均已加测试):**
+1. 库生成的 Rendered host URL 不带 `proj/panel/tab/doc`。归属是**产品侧**职责(Dozer 在 `app.rs` 里追加)。Digger 的 `desired()` 现已补上,否则每条 host IPC 都被拒为 `Foreign("host URL 缺少归属查询串")`。
+2. `assets::serve_allowlisted_file` 精确比较、不做 canonicalize。`allow_file` 现已规范化入表,否则带 `..` 的路径在真机上 404。
+
+**尚未完成(保持未勾选):**
+- Task 1:搬迁前的协议黄金与注入脚本黄金(`preview_protocol_golden.txt`、`preview_init_script_golden.txt`)与施工图 `2026-10-19-preview-p3-inventory.md` 未产出;测试总数守恒因此无法用黄金证明。
+- Task 4:页面事件作用到 `PreviewPane` 的库侧迁移未做(仍留在 `dozer-app`)。
+- Task 5:全量门禁(workspace clippy/fmt 有既有基线失败)与用户目测验收清单未做。
+- Task 6:Digger 打包态资源交付(`package-macos.sh` 从 `cargo metadata` 拷 `editor`/`flyfish`/`image-annotate`)未做,`bundled_assets_root` 的生产路径尚未在打包产物上验证。
+- Task 8:`preview_smoke` 只有"打开即同步",**没有**文件列表/关闭/放大/`live_count` 三个按钮、没有 `--selftest`、没有逐项真机验收(截图工具在本机不可用);Step 1 的复选框按"示例存在"勾选,但功能范围小于计划描述。
+- Q2(`dozer://` 下页面 fetch 同命名空间 `__file__`)已在冒烟中**间接确认可用**(三个 host 的 `__file__` 请求返回 200/`Ready`)。
