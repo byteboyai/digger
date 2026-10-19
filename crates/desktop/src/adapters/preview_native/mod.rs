@@ -19,12 +19,13 @@ mod plan;
 pub use plan::{LiveView, Op, plan};
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use bytehost_core::LogicalRect;
+use dozer_panel_preview::assets::AllowedFiles;
 use dozer_panel_preview::host_ipc::{HostEvent, IpcContext, IpcMessage, classify_ipc};
 use dozer_panel_preview::host_script::{HostScriptOptions, preview_host_script};
 use dozer_panel_preview::{PreviewWebviewSpec, ViewerPanel};
@@ -49,7 +50,7 @@ pub enum Event {
 /// 产品可注入的上下文:资源根 + 允许读取的绝对路径 + IPC 回流通道。
 pub struct Host {
     assets_root: PathBuf,
-    allowed: Arc<Mutex<HashSet<PathBuf>>>,
+    allowed: Arc<Mutex<AllowedFiles>>,
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
     rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Event>>>,
 }
@@ -65,7 +66,7 @@ impl Host {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             assets_root: root,
-            allowed: Arc::new(Mutex::new(HashSet::new())),
+            allowed: Arc::new(Mutex::new(AllowedFiles::new())),
             tx,
             rx: Mutex::new(Some(rx)),
         }

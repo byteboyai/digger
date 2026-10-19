@@ -82,14 +82,24 @@ pub fn list_min_width() -> f32 {
 }
 
 /// 面板的配对规则。S2 起用量是"内容 | agent 列表"配对,与 Dozer 的用量一致:列表是第一块,默认渲染在内容之后
-/// (所以在右栏时是"内容 | 列表",拖到左栏镜像成"列表 | 内容"),可拖窄收起。其余面板仍是单栏。
+/// (所以在右栏时是"内容 | 列表",拖到左栏镜像成"列表 | 内容"),可拖窄收起。
+///
+/// S5b-2 P4 起 Project 与 Files 也是配对:左边列表、右边预览(D3),所以两者的默认侧是 `Side::Left`
+/// ——配对的第一块(列表)默认渲染在前,预览在后(右)。列表可拖窄收起,收起后预览独占整块。
 pub fn rules(panel: &PanelId) -> Option<PanelRules> {
     match panel.as_str() {
-        // 一期单栏:配对(预览)留给 S5b。
         "digger.usage" => Some(PanelRules {
             default_side: Side::Right,
             pane: Some(PaneRules {
                 spec: PaneSpec::new(false, true),
+                default_split: byteui::theme::geometry::default_split_ratio(),
+                min_first_px: list_min_width(),
+            }),
+        }),
+        "digger.project" | "digger.files" => Some(PanelRules {
+            default_side: Side::Left,
+            pane: Some(PaneRules {
+                spec: PaneSpec::new(true, true),
                 default_split: byteui::theme::geometry::default_split_ratio(),
                 min_first_px: list_min_width(),
             }),
@@ -391,11 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn files_panel_is_single_pane() {
-        assert!(rules(&files_id()).is_none());
-    }
-
-    #[test]
     fn files_panel_uses_the_icon_and_wire_name_and_takes_part_in_the_layout() {
         assert_eq!(files_id().as_str(), "digger.files");
         assert_eq!(meta(&files_id()).unwrap().icon, IconKind::FolderTree);
@@ -403,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_usage_panel_is_a_pair_and_it_matches_dozers_usage_pane() {
+    fn only_usage_project_and_files_are_pairs_and_usage_matches_dozers_usage_pane() {
         let r = rules(&usage_id()).expect("usage has rules");
         assert_eq!(
             r.default_side,
@@ -418,9 +423,74 @@ mod tests {
             byteui::theme::geometry::default_split_ratio()
         );
         assert_eq!(pane.min_first_px, list_min_width());
-        for p in [markdown_id(), info_id(), apps_id(), files_id()] {
-            assert!(rules(&p).is_none(), "{p} stays a single-column panel in S2");
+        for p in [markdown_id(), info_id(), apps_id()] {
+            assert!(rules(&p).is_none(), "{p} stays a single-column panel");
         }
+    }
+
+    #[test]
+    fn project_and_files_are_pairs_with_the_list_first() {
+        for panel in [project_id(), files_id()] {
+            let r = rules(&panel).unwrap_or_else(|| panic!("{panel} is a pair"));
+            assert_eq!(
+                r.default_side,
+                Side::Left,
+                "{panel} lives on the left by default, like Dozer"
+            );
+            let pane = r.pane.expect("{panel} has a pane");
+            // 列表是第一块、默认在前;可拖窄收起。
+            assert_eq!(pane.spec, PaneSpec::new(true, true));
+            assert_eq!(
+                pane.default_split,
+                byteui::theme::geometry::default_split_ratio()
+            );
+            assert_eq!(pane.min_first_px, list_min_width());
+        }
+    }
+
+    #[test]
+    fn the_left_pair_puts_the_list_first_and_the_preview_second() {
+        let d = defaults();
+        let model = ShellModel::new(
+            d.rails.clone(),
+            [project_id(), usage_id()],
+            d.left_width,
+            (1200.0, 800.0),
+        )
+        .unwrap();
+        let p = pair_rects(&model, Side::Left).expect("project is a pair");
+        assert!(
+            p.first.x < p.second.x,
+            "the list is to the left of the preview"
+        );
+        let gap = p.second.x - p.first.right();
+        assert!(
+            gap >= 0.0 && gap <= metrics_from_theme().divider_width + 8.0,
+            "only the divider and the two inner margins sit between the two blocks (gap {gap})"
+        );
+        assert!(p.first.w > 0.0 && p.second.w > 0.0);
+    }
+
+    #[test]
+    fn legacy_layout_without_pair_state_loads_with_the_default_split() {
+        let dir =
+            std::env::temp_dir().join(format!("digger-shell-nopair-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shell.json");
+        std::fs::write(
+            &path,
+            r#"{ "left": ["digger.project", "digger.files", "digger.markdown", "digger.info"], "right": ["digger.apps", "digger.usage"], "selected_left": "digger.files" }"#,
+        )
+        .unwrap();
+        let model = load(&path).into_model();
+        assert_eq!(model.rail(Side::Left)[..2], [project_id(), files_id()]);
+        assert_eq!(model.selected(Side::Left), &files_id());
+        let p = pair_rects(&model, Side::Left).expect("files is a pair");
+        assert!(
+            p.first.w > 0.0 && p.second.w > 0.0,
+            "an old file without pane state uses the default split"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
