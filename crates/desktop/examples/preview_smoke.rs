@@ -25,32 +25,95 @@ const TOP_BAR: f64 = 48.0;
 const STATUS_BAR: f64 = 26.0;
 const WINDOW: iced::Size = iced::Size::new(1100.0, 760.0);
 
-/// 自检用的夹具。`.py`/`.md`/`.html` 是真正会建 webview 的类型;`.json`/`.csv`
+/// 自检用的夹具(随仓库提交,示例不再依赖 `../dozer` 源码树)。
+/// `.py`/`.md`/`.html`/`.png` 是真正会建 webview 的类型;`.json`/`.csv`/`.pdf`
 /// 在 Digger 的能力下走原生降级页,不应产生句柄。
+fn fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/fixtures/preview")
+}
+
 fn fixtures() -> Vec<(PathBuf, &'static str)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
-    let dozer = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../dozer");
+    let dir = fixture_dir();
     [
-        (
-            "docs/superpowers/specs/2026-10-18-preview-engine-s5b2-design.md",
-            "md",
-        ),
-        ("README.md", "md"),
-        (
-            "../dozer/crates/dozer-panel-preview/assets/html_host.html",
-            "html",
-        ),
+        ("hello.py", "py"),
+        ("notes.md", "md"),
+        ("page.html", "html"),
+        ("pic.png", "png"),
+        ("logo.svg", "svg"),
+        ("data.json", "json"),
+        ("sheet.csv", "csv"),
+        ("doc.pdf", "pdf"),
+        ("带 空格 #1.txt", "txt"),
     ]
     .iter()
-    .map(|(p, kind)| (root.join(p), *kind))
-    .chain(std::iter::once((
-        dozer.join("crates/dozer-panel-preview/assets/flyfish/host.html"),
-        "html",
-    )))
-    .filter(|(p, _)| p.exists())
+    .map(|(name, kind)| (dir.join(name), *kind))
     .collect()
+}
+
+/// 示例的**开发态** `assets/` 目录。与产品同一份规则(库的源码树 / 打包态
+/// `Contents/Resources`),只是示例先按 `Cargo.lock` 钉住的 git 检出解析,
+/// 免得 `CARGO_MANIFEST_DIR` 指向 Digger 时退回到错误的路径。
+fn assets_dir() -> PathBuf {
+    if let Some(root) = std::env::var_os("DIGGER_PREVIEW_ASSETS") {
+        return PathBuf::from(root);
+    }
+    match dozer_panel_preview::assets::bundle_resources_root(
+        &std::env::current_exe().unwrap_or_default(),
+    ) {
+        Some(resources) => resources,
+        None => git_assets_dir(),
+    }
+}
+
+fn asset_roots() -> PathBuf {
+    assets_dir().join("flyfish")
+}
+
+/// `dozer-panel-preview` 的 `assets/` 目录:从本仓 `Cargo.lock` 的 `source`
+/// 取 git 检查点 sha,再到 `~/.cargo/git/checkouts/<仓库>-<hash>/` 下找同名检出。
+fn git_assets_dir() -> PathBuf {
+    git_assets_root().unwrap_or_else(|| {
+        dozer_panel_preview::assets::from_lib_source()
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default()
+    })
+}
+
+fn git_assets_root() -> Option<PathBuf> {
+    let lock =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
+            .ok()?;
+    let sha = lock
+        .split("name = \"dozer-panel-preview\"")
+        .nth(1)?
+        .lines()
+        .find_map(|line| line.strip_prefix("source = "))?
+        .rsplit_once('#')?
+        .1
+        .trim_end_matches('"')
+        .to_string();
+    let short = &sha[..7.min(sha.len())];
+    let mut checkouts: Vec<_> = std::fs::read_dir(cargo_home()?.join("git/checkouts"))
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|dir| {
+            dir.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("dozer-"))
+        })
+        .collect();
+    checkouts.sort();
+    checkouts.into_iter().find_map(|dir| {
+        let root = dir.join(short).join("crates/dozer-panel-preview/assets");
+        root.is_dir().then_some(root)
+    })
+}
+
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
 }
 
 /// 名字里带空格、`#`、中日文的夹具:走 `file URL → dozer:// → 白名单` 全程,
@@ -96,10 +159,7 @@ fn build() -> (App, Task<Msg>) {
     for (path, _) in &list {
         pane.open_path_provisional(path.clone());
     }
-    let host = preview_native::Host::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../dozer/crates/dozer-panel-preview/assets/flyfish"
-    ));
+    let host = preview_native::Host::new(asset_roots());
     // 预览里的编辑器要能读回原文件(保存/冲突检测走同一白名单)。
     for tab in pane.tabs() {
         if let TabKind::File(path) = &tab.kind {
@@ -332,17 +392,14 @@ fn main() -> iced::Result {
 /// 汇报。这样 `window::run` 与产品同路径。
 fn selftest() -> iced::Result {
     eprintln!("selftest: 启动"); // cli-output
-    let mut list = fixtures();
-    if let Some(awkward) = awkward_fixture() {
-        list.push(awkward);
+    let list = fixtures();
+    if let Err(reason) = selftest_preconditions(&list) {
+        eprintln!("selftest: FAIL {reason}"); // cli-output
+        std::process::exit(1);
     }
-    assert!(!list.is_empty(), "selftest: 没有可用夹具");
 
     let mut pane = PreviewPane::default();
-    let host = preview_native::Host::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../dozer/crates/dozer-panel-preview/assets/flyfish"
-    ));
+    let host = preview_native::Host::new(asset_roots());
     for (path, _) in &list {
         host.allow_file(path);
         pane.open_path_provisional(path.clone());
@@ -358,6 +415,7 @@ fn selftest() -> iced::Result {
         state: PreviewPanelState::new(pane),
         list,
         ready: std::collections::BTreeSet::new(),
+        live_at_startup: 0,
         deadline: Instant::now() + Duration::from_secs(30),
         failure: None,
     };
@@ -396,6 +454,41 @@ fn selftest() -> iced::Result {
     .run()
 }
 
+/// 自检的前置条件。**缺夹具 / 缺资源一律算失败**,不再"找不到就跳过"——
+/// 跳过会让一条永远不成立的回归在 CI 里保持绿色。
+fn selftest_preconditions(list: &[(PathBuf, &'static str)]) -> Result<(), String> {
+    let dir = fixture_dir();
+    let absent: Vec<_> = list
+        .iter()
+        .map(|(path, _)| path)
+        .filter(|path| !path.is_file())
+        .map(|path| path.display().to_string())
+        .collect();
+    if !absent.is_empty() {
+        return Err(format!("夹具缺失({}):{absent:?}", dir.display()));
+    }
+    let root = assets_dir();
+    let missing = missing_assets(&root);
+    if !missing.is_empty() {
+        return Err(format!("资源根 {} 缺 {missing:?}", root.display()));
+    }
+    Ok(())
+}
+
+/// 示例进程里资源根的检查(产品侧是 `preview_assets::missing_in`,两边同一份名单)。
+#[allow(dead_code)]
+fn missing_assets(root: &std::path::Path) -> Vec<String> {
+    let dirs = ["editor", "flyfish", "image-annotate"]
+        .into_iter()
+        .filter(|dir| !root.join(dir).is_dir())
+        .map(|dir| format!("{dir}/"));
+    let files = ["flyfish/host.html"]
+        .into_iter()
+        .filter(|file| !root.join(file).is_file())
+        .map(str::to_string);
+    dirs.chain(files).collect()
+}
+
 fn selftest_update(app: &mut SelfTest, msg: Msg) -> Task<Msg> {
     app.update(msg)
 }
@@ -412,6 +505,8 @@ struct SelfTest {
     state: PreviewPanelState,
     list: Vec<(PathBuf, &'static str)>,
     ready: std::collections::BTreeSet<usize>,
+    /// 第 0 步通过时的句柄数,第 2 步要证明"关掉全部页签就回到 0"。
+    live_at_startup: usize,
     deadline: Instant,
     failure: Option<String>,
 }
@@ -477,27 +572,70 @@ impl SelfTest {
         if actual != expected {
             return Task::none();
         }
-        if self.step == 0 {
-            // 句柄数相等只证明 Create 执行了;还要至少收到一条 host IPC,
-            // 才证明协议应答 + 注入脚本 + classify_ipc 整条通路是通的。
-            if self.ready.is_empty() {
+        match self.step {
+            0 => {
+                // 句柄数相等只证明 Create 执行了;还要至少收到一条 host IPC,
+                // 才证明协议应答 + 注入脚本 + classify_ipc 整条通路是通的。
+                if self.ready.is_empty() {
+                    return Task::none();
+                }
+                if actual != Self::first_batch_handles() {
+                    self.failure = Some(format!(
+                        "第 0 步句柄数 {actual} != 首批期望 {}(.md/.svg/.pdf/.html/.png 各 1;.py/.json/.csv/.txt 不建 webview)",
+                        Self::first_batch_handles()
+                    ));
+                    return Task::none();
+                }
+                eprintln!("selftest: 第 0 步 ok(live={actual})"); // cli-output
+                self.live_at_startup = actual;
+                self.step = 1;
+                // 关掉全部页签(不是直接销毁句柄):走库的 `close_by_id` 链路,
+                // 期望清单随即变空,宿主在下一帧 `sync` 里销毁。
+                let ids: Vec<_> = self.state.pane.tabs().iter().map(|tab| tab.id).collect();
+                for id in ids {
+                    self.state.pane.close_by_id(id);
+                }
                 return Task::none();
             }
-            eprintln!("selftest: 第 0 步 ok(live={actual})"); // cli-output
-            self.step = 1;
-            self.host.destroy_all();
-            return Task::done(Msg::Resized(iced::Size::new(
-                self.size.0 as f32,
-                self.size.1 as f32,
-            )));
-        }
-        if self.step == 1 {
-            eprintln!("selftest: 第 1 步 ok(全部销毁后 live=0)"); // cli-output
-            self.step = 2;
-            return Task::none();
+            1 => {
+                eprintln!("selftest: 第 1 步 ok(关掉全部页签后 live=0)"); // cli-output
+                self.step = 2;
+                self.ready.clear();
+                // 重新打开同一批夹具,验证"关掉再开"仍然每个各一个 webview。
+                for (path, _) in &self.list {
+                    self.state.pane.open_path_provisional(path.clone());
+                }
+                return Task::none();
+            }
+            2 => {
+                if self.ready.is_empty() {
+                    return Task::none();
+                }
+                if actual != self.live_at_startup {
+                    self.failure = Some(format!(
+                        "第 2 步重开后 live={actual} != {}(首次 {})",
+                        Self::first_batch_handles(),
+                        self.live_at_startup
+                    ));
+                    return Task::none();
+                }
+                eprintln!("selftest: 第 2 步 ok(重开后 live={actual})"); // cli-output
+                self.step = 3;
+                self.host.destroy_all();
+                return Task::none();
+            }
+            _ => {}
         }
         eprintln!("selftest: PASS"); // cli-output
         std::process::exit(0);
+    }
+
+    /// 首批夹具里真正建 webview 的数量:`.py`(原生编辑器,不建宿主)之外
+    /// 的渲染型各一——`.md` / `.svg` / `.pdf`(flyfish)、`.html`(隔离渲染)、
+    /// `.png`(image-annotate),共 5 个。`.json` / `.csv` 在 Digger 的能力下
+    /// 是原生降级页,`.txt` 走原生编辑器,都不建宿主。
+    fn first_batch_handles() -> usize {
+        5
     }
 
     fn expected_handles(&self) -> usize {

@@ -1593,8 +1593,16 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     shell.files.attach_handle(tokio::runtime::Handle::current());
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
+    // 缺资源时宿主只会整块白屏:启动即点名报出,与 selftest 同一份名单。
+    let missing = crate::preview_assets::missing_in(&crate::preview_assets::assets_dir());
+    if !missing.is_empty() {
+        eprintln!(
+            "digger: 预览资源根 {} 缺 {missing:?}(预览面板会白屏)",
+            crate::preview_assets::assets_dir().display()
+        ); // cli-output
+    }
     shell.preview = Some(crate::adapters::preview::PreviewHub::new(
-        crate::adapters::preview_native::Host::new(dozer_panel_preview::assets::from_lib_source()),
+        crate::adapters::preview_native::Host::new(crate::preview_assets::roots()),
     ));
     if let Some(preview) = shell.preview.as_mut() {
         preview.attach_handle(tokio::runtime::Handle::current());

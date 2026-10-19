@@ -72,6 +72,19 @@ done
 rm -rf "$APP_DIR/Contents/Resources/flyfish/vendor/pdf" \
        "$APP_DIR/Contents/Resources/flyfish/vendor/docx"
 
+# 宿主按名字读的目录与入口(与 crates/desktop/src/preview_assets.rs 的名单一致):
+# dozer:// 应答把 404 静默落成白屏,所以打包时就点名报错。
+for dir in editor flyfish image-annotate; do
+  if [ ! -d "$APP_DIR/Contents/Resources/$dir" ]; then
+    echo "error: preview resource '$dir/' missing from the bundle" >&2
+    exit 1
+  fi
+done
+if [ ! -f "$APP_DIR/Contents/Resources/flyfish/host.html" ]; then
+  echo "error: preview resource 'flyfish/host.html' missing from the bundle" >&2
+  exit 1
+fi
+
 # cargo 的链接期只对裸二进制做了 ad-hoc 签名,装进 bundle 后这个签名不覆盖
 # Info.plist/资源,且内容一变 ad-hoc identifier 就变;整体重签让本次构建自洽
 # (与 Dozer build-macos-app.sh 同因,见该脚本注释)。

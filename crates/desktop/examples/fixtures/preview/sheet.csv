@@ -1,0 +1,5 @@
+name,kind,note
+hello.py,code,编辑并保存
+notes.md,markdown,渲染
+page.html,html,隔离渲染
+pic.png,image,图片查看

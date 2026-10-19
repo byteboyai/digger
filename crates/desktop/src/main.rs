@@ -8,6 +8,7 @@ mod apps;
 mod lifecycle_selftest;
 mod markdown;
 mod paths;
+mod preview_assets;
 mod product;
 mod projects;
 mod shell;
