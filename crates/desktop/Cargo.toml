@@ -34,6 +34,7 @@ dozer-services.workspace = true
 dozer-panel-usage.workspace = true
 # 同源 Project 面板库(S5a):与其适配层一起接入「项目」面板。
 dozer-panel-project.workspace = true
+dozer-panel-files.workspace = true
 dozer-panel-host.workspace = true
 bytegit.workspace = true
 
