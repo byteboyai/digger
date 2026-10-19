@@ -220,7 +220,7 @@
 - [x] **Step 5: 发布新版本(项目硬性要求:每个面板迁移完成后,Dozer 与 Digger 各重新发布一个版本)。** Project 面板迁移在两个产品里都落地、真机回归通过后:① Dozer 走它自己的发布流程(`scripts/build-macos-app.sh release`:升版本号 → 门禁 → 打包);② Digger 走 `bash scripts/release.sh`(门禁 → 升版本 → 打包 → 签名校验 → 压缩;不提交、不打 tag、不推送)。两个产物都要装到本机启动一次确认版本号与面板可用。**发布(含升版本、提交版本号、安装)是对外动作,先向用户确认再执行**;报告里写明两个新版本号与产物路径。
 
    **结果(2026-10-18):** Digger `0.1.2`(`target/aarch64-apple-darwin/bundle/macos/Digger-0.1.2-macos-arm64.zip`,提交 `8f13247`);Dozer `0.5.298`(`target/aarch64-apple-darwin/bundle/macos/Dozer AI Coder.app`,提交 `2b94060b`)。两者都装到 `/Applications` 并启动确认版本号。Dozer 首次发布被打包前的 `check-i18n.sh` 拦下(`diff_content.rs` 里一句存量中文未迁移),补提交 `11b9faae` 后才通过——这是本轮的额外修复,与 S5a 功能无关。
-- [ ] **Step 6: 汇报:** 各仓库测试通过数、依赖图结论、真机截图结论、D1–D7(并附 Step 5 的两个新版本号) 的最终落地情况、哪些没验。
+- [x] **Step 6: 汇报:** 各仓库测试通过数、依赖图结论、真机截图结论、D1–D7(并附 Step 5 的两个新版本号) 的最终落地情况、哪些没验。
 
 ---
 
