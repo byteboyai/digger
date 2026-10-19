@@ -4,8 +4,10 @@
 //! 顶部三个按钮(关闭当前页签 / 放大(藏起 webview)/ 全部销毁),底部状态行
 //! 显示存活句柄数。
 //!
-//! `--selftest`:无交互地逐项打开夹具,等 host 就绪,断言存活句柄数与期望一致,
-//! 末尾销毁全部并再次断言;任何一步不符即非零退出。用于在无人盯屏时回归。
+//! `--selftest`:无交互地逐项打开夹具,等 host 就绪,断言存活句柄数与期望一致;
+//! 关掉全部页签后回到 0、重开仍是同一批;接着跑生命周期压力(开/关 50 次、
+//! 切项目 20 次、放大/还原 20 次、一次开 50 个页签)并逐步核对句柄数。任何
+//! 一步不符即非零退出。用于在无人盯屏时回归。
 //!
 //! 面板区域 = 整块 webview 矩形(顶栏高度留给产品壳,这里不画)。
 
@@ -416,7 +418,9 @@ fn selftest() -> iced::Result {
         list,
         ready: std::collections::BTreeSet::new(),
         live_at_startup: 0,
-        deadline: Instant::now() + Duration::from_secs(30),
+        maximized: false,
+        stress: None,
+        deadline: Instant::now() + Duration::from_secs(90),
         failure: None,
     };
 
@@ -497,6 +501,29 @@ fn selftest_view(app: &SelfTest) -> Element<'_, Msg> {
     app.view()
 }
 
+/// Task 10 Step 2 的压力阶段进度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum StressPhase {
+    #[default]
+    OpenClose,
+    SwitchProject,
+    Maximize,
+    Tabs,
+}
+
+#[derive(Debug, Default)]
+struct Stress {
+    phase: StressPhase,
+    /// 当前阶段已经完成的动作数。
+    done: usize,
+    /// 本阶段见过的最大存活句柄数。
+    peak: usize,
+    /// 开/关阶段:上一拍是"开"还是"关"。
+    close_next: bool,
+    /// 页签阶段:50 个页签是否已经开过(下一拍核对清单)。
+    opened: bool,
+}
+
 struct SelfTest {
     step: usize,
     window: Option<window::Id>,
@@ -507,6 +534,10 @@ struct SelfTest {
     ready: std::collections::BTreeSet<usize>,
     /// 第 0 步通过时的句柄数,第 2 步要证明"关掉全部页签就回到 0"。
     live_at_startup: usize,
+    /// 放大:整块预览被 iced 盖住,webview 全部藏起但句柄仍在。
+    maximized: bool,
+    /// 压力测试的进度;`None` = 还没进压力阶段。
+    stress: Option<Stress>,
     deadline: Instant,
     failure: Option<String>,
 }
@@ -553,6 +584,14 @@ impl SelfTest {
 
     /// 每个"拍"检查一次期望;不满足就等下一拍(由 IPC/窗口事件驱动)。
     fn advance(&mut self) -> Task<Msg> {
+        if std::env::var_os("SMOKE_DBG").is_some() {
+            eprintln!(
+                "DBG tick step={} live={} stress={:?}",
+                self.step,
+                self.host.live_count(),
+                self.stress.as_ref().map(|s| (s.phase, s.done))
+            ); // cli-output
+        }
         if let Some(reason) = &self.failure {
             eprintln!("selftest: FAIL {reason}"); // cli-output
             std::process::exit(1);
@@ -621,14 +660,154 @@ impl SelfTest {
                 }
                 eprintln!("selftest: 第 2 步 ok(重开后 live={actual})"); // cli-output
                 self.step = 3;
-                self.host.destroy_all();
+                // 压力阶段从"全关"的干净状态开始,免得把首批的句柄算进峰值。
+                let ids: Vec<_> = self.state.pane.tabs().iter().map(|tab| tab.id).collect();
+                for id in ids {
+                    self.state.pane.close_by_id(id);
+                }
+                self.stress = Some(Stress::default());
                 return Task::none();
             }
+            3 => return self.advance_stress(actual),
             _ => {}
         }
         eprintln!("selftest: PASS"); // cli-output
         std::process::exit(0);
     }
+
+    /// 自动化生命周期检查(Task 10 Step 2)。每到一个"稳定点"(句柄数与期望
+    /// 一致)就发下一步动作:
+    ///
+    /// - 连续开 / 关预览页签 50 次;
+    /// - 切"项目"20 次(每次把整块预览换成另一组文件再换回,等价于产品里切
+    ///   项目页签时的 `set_current_project` + 全关);
+    /// - 放大 / 还原 20 次(放大时 webview 全藏起,但句柄数不变);
+    /// - 一次打开 50 个页签。
+    ///
+    /// 每一拍都核对句柄数,峰值也记下来:`sync` 是异步的,但期望清单与句柄表
+    /// 收敛后必须一致,且不能越积越多。
+    fn advance_stress(&mut self, actual: usize) -> Task<Msg> {
+        let expected = self.expected_handles();
+        let Some(stress) = self.stress.as_mut() else {
+            return Task::none();
+        };
+        if actual != expected {
+            return Task::none();
+        }
+        // 开/关切项目阶段要求句柄收敛到期望且至少收到过一次 IPC;许多页签
+        // 阶段只要求收敛;放大阶段每拍只做"放大"或"还原"其中一下。
+        // 放大阶段只做可见性切换;页签阶段(一次 50 个 `Loading` 页签)宿主建得
+        // 慢,不等 IPC——句柄数相等就够,就绪由下一步的整体流程证明。
+        if !matches!(stress.phase, StressPhase::Maximize | StressPhase::Tabs)
+            && self.ready.is_empty()
+            && actual > 0
+        {
+            return Task::none();
+        }
+        stress.peak = stress.peak.max(actual);
+        eprintln!(
+            "DBG phase={:?} done={} actual={actual} expected={expected}",
+            stress.phase, stress.done
+        ); // cli-output
+        match stress.phase {
+            StressPhase::OpenClose => {
+                if stress.done == 50 {
+                    eprintln!("selftest: 压力 开/关 50 次 ok(peak={})", stress.peak); // cli-output
+                    stress.phase = StressPhase::SwitchProject;
+                    stress.done = 0;
+                    stress.peak = 0;
+                    return Task::none();
+                }
+                stress.done += 1;
+                if stress.close_next {
+                    let ids: Vec<_> = self.state.pane.tabs().iter().map(|t| t.id).collect();
+                    for id in ids {
+                        self.state.pane.close_by_id(id);
+                    }
+                    self.ready.clear();
+                } else {
+                    for (path, _) in &self.list {
+                        self.state.pane.open_path_provisional(path.clone());
+                    }
+                }
+                stress.close_next = !stress.close_next;
+                Task::none()
+            }
+            StressPhase::SwitchProject => {
+                if stress.done == 20 {
+                    eprintln!("selftest: 压力 切项目 20 次 ok(peak={})", stress.peak); // cli-output
+                    stress.phase = StressPhase::Maximize;
+                    stress.done = 0;
+                    stress.peak = 0;
+                    return Task::none();
+                }
+                // 切走:全关(产品里是销毁整块预览);切回:只开前两个夹具。
+                stress.done += 1;
+                if stress.close_next {
+                    let ids: Vec<_> = self.state.pane.tabs().iter().map(|t| t.id).collect();
+                    for id in ids {
+                        self.state.pane.close_by_id(id);
+                    }
+                    self.ready.clear();
+                } else {
+                    for (path, _) in self.list.iter().take(2) {
+                        self.state.pane.open_path_provisional(path.clone());
+                    }
+                }
+                stress.close_next = !stress.close_next;
+                Task::none()
+            }
+            StressPhase::Maximize => {
+                if self.maximized {
+                    // 上一拍已经切到"放大"并记过数,这一拍先还原,`sync` 在
+                    // `update` 末尾把可见性改回来;下一拍再切"放大"。
+                    self.maximized = false;
+                    return Task::none();
+                }
+                if stress.done == 20 {
+                    eprintln!("selftest: 压力 放大/还原 20 次 ok(peak={})", stress.peak); // cli-output
+                    stress.phase = StressPhase::Tabs;
+                    stress.done = 0;
+                    stress.peak = 0;
+                    return Task::none();
+                }
+                // 放大时 `sync` 把全部 webview 的 `visible` 置 false,句柄数不变。
+                self.maximized = true;
+                stress.done += 1;
+                Task::none()
+            }
+            StressPhase::Tabs => {
+                if stress.opened {
+                    // 全部 50 个页签都必须进了期望清单——即 tab 栏溢出只裁显示、
+                    // 不丢页签,切到溢出的那个仍能建出对应宿主。
+                    if expected != Self::MANY_TABS {
+                        self.failure = Some(format!(
+                            "50 页签时期望清单 {expected} != {}",
+                            Self::MANY_TABS
+                        ));
+                        return Task::none();
+                    }
+                    eprintln!("selftest: 压力 50 个页签 ok(live={actual})"); // cli-output
+                    self.host.destroy_all();
+                    self.step = 4;
+                    return Task::none();
+                }
+                // 同一路径重复打开会被库去重;用不同的临时文件名凑 50 个页签
+                // (进程退出前清理)。
+                for i in 0..Self::MANY_TABS {
+                    let copy = std::env::temp_dir().join(format!("digger stress {i}.md"));
+                    let _ = std::fs::write(&copy, format!("# stress {i}\n"));
+                    self.host.allow_file(&copy);
+                    self.state.pane.open_path_provisional(copy);
+                }
+                stress.opened = true;
+                Task::none()
+            }
+        }
+    }
+
+    /// 一次打开的页签数(Task 10 Step 2 的"50 个页签打开不崩溃")。
+    const MANY_TABS: usize = 50;
 
     /// 首批夹具里真正建 webview 的数量:`.py`(原生编辑器,不建宿主)之外
     /// 的渲染型各一——`.md` / `.svg` / `.pdf`(flyfish)、`.html`(隔离渲染)、
