@@ -183,9 +183,14 @@
 - 注入脚本黄金早已存在(`preview_host_script_golden.txt`)。
 - **时点说明:** 黄金是在搬迁**之后**生成的快照,不是计划要求的"搬迁前生成";它能防后续回归,但不能证明搬迁本身字节不变。施工图 `2026-10-19-preview-p3-inventory.md` 仍未产出。
 
+**Task 6 结果(2026-10-19 补):**
+- `package-macos.sh` 用 `cargo metadata` 定位库的 `assets/`,拷 `editor`/`flyfish`/`image-annotate`,并剔除 `flyfish/vendor/{pdf,docx}`;`Resources` 从 24M 降到 13M,debug 打包成功。另加测试钉住三个目录存在。
+
+**Task 8 结果(2026-10-19 补):**
+- `preview_smoke` 有文件列表、关闭/放大(藏起)/全部销毁三个按钮、`live_count` 状态行,以及 `--selftest`(5 个夹具含 `空格 #1 中文.md`,断言建满后销毁归零,退出码 0/1)。**未做:** 计划里 `.py`/`.png`/`.svg`/`.json`/`.csv`/`.pdf` 的逐项真机目测(截图工具在本机不可用),以及"连续开关 50 次"。
+
+**Q2:** `dozer://` 下页面 fetch 同命名空间 `__file__` 已在冒烟中**间接确认可用**(host 的 `__file__` 请求返回 200 且页面 `Ready`)。
+
 **尚未完成(保持未勾选):**
-- Task 4:页面事件作用到 `PreviewPane` 的库侧迁移未做(仍留在 `dozer-app`)。
+- Task 4:页面事件作用到 `PreviewPane` 的库侧迁移未做(仍留在 `dozer-app`)。**已决定顺延到 P4。**
 - Task 5:全量门禁(workspace clippy/fmt 有既有基线失败)与用户目测验收清单未做。
-- Task 6 已完成:`package-macos.sh` 用 `cargo metadata` 定位库的 `assets/`,拷 `editor`/`flyfish`/`image-annotate`,并剔除 `flyfish/vendor/{pdf,docx}`;`Resources` 从 24M 降到 13M,debug 打包成功。
-- Task 8 已完成:`preview_smoke` 有文件列表、关闭/放大(藏起)/全部销毁三个按钮、`live_count` 状态行,以及 `--selftest`(5 个夹具含 `空格 #1 中文.md`,断言建满后销毁归零,退出码 0/1)。**未做:** 计划里 `.py`/`.png`/`.svg`/`.json`/`.csv`/`.pdf` 的逐项真机目测(截图工具在本机不可用),以及"连续开关 50 次"。
-- Q2(`dozer://` 下页面 fetch 同命名空间 `__file__`)已在冒烟中**间接确认可用**(三个 host 的 `__file__` 请求返回 200/`Ready`)。
