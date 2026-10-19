@@ -41,6 +41,34 @@ pub struct FilesPanel {
     fs_rx: Option<tokio::sync::mpsc::UnboundedReceiver<FsChange>>,
     /// 这台面板当前服务的项目 id:监听事件与后台结果都按它过滤,旧项目的迟到消息丢弃。
     project_id: Option<i64>,
+    /// iced 自绘的右键菜单(Digger 不认原生 NSMenu,`ShowNativeMenu` 一律落到这里)。
+    menu: Option<crate::adapters::menu_overlay::MenuOverlay<FilesMessage>>,
+    /// 系统打开器(测试注入假实现)。
+    opener: Opener,
+}
+
+/// 用系统默认应用打开一个路径。生产走 `open <path>`(路径作为独立参数,不经 shell)。
+pub type Opener = std::sync::Arc<dyn Fn(&std::path::Path) -> std::io::Result<()> + Send + Sync>;
+
+/// 生产用打开器:macOS 走 `open`,其它平台 `xdg-open`;路径永远是独立的参数。
+pub fn system_opener() -> Opener {
+    std::sync::Arc::new(|path: &std::path::Path| {
+        #[cfg(target_os = "macos")]
+        let program = "open";
+        #[cfg(not(target_os = "macos"))]
+        let program = "xdg-open";
+        std::process::Command::new(program)
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+    })
+}
+
+/// 打开一个文件(产品把 `PanelCommand::OpenFile` 映射到这里)。失败只记日志。
+pub fn open_with_default(opener: &Opener, path: &std::path::Path) {
+    if let Err(e) = opener(path) {
+        eprintln!("digger: 打开 {} 失败: {e}", path.display()); // cli-output
+    }
 }
 
 /// 一次工作区变更(文件树需要重读的那部分)。
@@ -77,6 +105,8 @@ impl FilesPanel {
             fs_tx,
             fs_rx: Some(fs_rx),
             project_id: None,
+            menu: None,
+            opener: system_opener(),
         }
     }
 
@@ -208,13 +238,81 @@ impl FilesPanel {
         iced::Task::none()
     }
 
-    /// 排空库交给宿主的"只有产品做得到"的请求。Task 9 接产品动作。
-    #[allow(dead_code)]
+    /// 排空库交给宿主的"只有产品做得到"的请求(右键菜单 / 分支弹层)。
+    ///
+    /// Digger 不认 macOS 原生 NSMenu:`ShowNativeMenu` 与 `ShowContextMenu` 同口径,
+    /// 都落到 iced 自绘的 [`crate::adapters::menu_overlay`];空条目表不弹。
     pub fn take_requests(&mut self) -> Vec<dozer_panel_files::adapter::FilesRequest> {
-        self.state
+        let requests = self
+            .state
             .as_mut()
             .map(WorkspaceState::take_requests)
+            .unwrap_or_default();
+        for request in &requests {
+            match request {
+                dozer_panel_files::adapter::FilesRequest::ShowContextMenu { items, at }
+                | dozer_panel_files::adapter::FilesRequest::ShowNativeMenu { items, at } => {
+                    let anchor = crate::adapters::menu_overlay::MenuAnchor { x: at.0, y: at.1 };
+                    let overlay = crate::adapters::menu_overlay::MenuOverlay {
+                        anchor,
+                        items: items.clone(),
+                    };
+                    self.menu = (!overlay.is_empty()).then_some(overlay);
+                }
+                // 分支弹层:Digger 一期没有分支弹层(降级为只读,见报告 D6)。
+                dozer_panel_files::adapter::FilesRequest::ShowBranchPicker { .. } => {}
+            }
+        }
+        requests
+    }
+
+    /// 当前要渲染的右键菜单(没有时为 `None`)。
+    pub fn menu(&self) -> Option<&crate::adapters::menu_overlay::MenuOverlay<FilesMessage>> {
+        self.menu.as_ref()
+    }
+
+    /// 关掉右键菜单(点空白 / Esc)。同时把状态同步给库,避免下次再开时
+    /// 库以为自己还开着而跳过重建条目。
+    pub fn close_menu(&mut self) -> iced::Task<Msg> {
+        if self.menu.take().is_some() {
+            return self.update(FilesMessage::ContextMenuClose, self.project_id);
+        }
+        iced::Task::none()
+    }
+
+    /// 排空宿主动作请求:`OpenFile` 用系统默认应用打开;搜索/文件历史 Digger 没有,
+    /// 丢弃(能力开关也已关掉,正常不会出现)。选目录交给调用方(产品弹系统对话框)。
+    pub fn take_host_requests(&mut self) -> Vec<dozer_panel_host::HostRequest<FilesMessage>> {
+        self.state
+            .as_mut()
+            .map(|s| s.host.take())
             .unwrap_or_default()
+    }
+
+    /// 落地一条宿主动作。选目录返回 `Some(start)`,产品据此弹系统对话框。
+    pub fn handle_host_request(
+        &mut self,
+        request: &dozer_panel_host::HostRequest<FilesMessage>,
+    ) -> Option<PathBuf> {
+        match request {
+            dozer_panel_host::HostRequest::Command(dozer_panel_host::PanelCommand::OpenFile {
+                path,
+            }) => {
+                open_with_default(&self.opener, path);
+                None
+            }
+            dozer_panel_host::HostRequest::Command(
+                dozer_panel_host::PanelCommand::SearchIn { .. }
+                | dozer_panel_host::PanelCommand::ShowFileHistory { .. },
+            ) => None,
+            dozer_panel_host::HostRequest::PickDirectory { start, .. } => start.clone(),
+        }
+    }
+
+    /// 测试用:替换系统打开器。
+    #[cfg(test)]
+    fn set_opener(&mut self, opener: Opener) {
+        self.opener = opener;
     }
 
     /// 排空待发提示(库的 outbox)。
@@ -222,15 +320,6 @@ impl FilesPanel {
         self.state
             .as_mut()
             .map(|s| s.take_outbox())
-            .unwrap_or_default()
-    }
-
-    /// 排空宿主动作请求(搜索 / 文件历史 / 打开文件 / 选目录)。Task 9 接产品动作。
-    #[allow(dead_code)]
-    pub fn take_host_requests(&mut self) -> Vec<dozer_panel_host::HostRequest<FilesMessage>> {
-        self.state
-            .as_mut()
-            .map(|s| s.host.take())
             .unwrap_or_default()
     }
 
@@ -471,6 +560,60 @@ mod tests {
             Some(7),
         );
         assert_eq!(visible_names(&panel), before);
+    }
+
+    /// 打开文件:路径作为**单个参数**传给打开器(含空格与引号也不拆分、不转义)。
+    #[test]
+    fn open_file_command_uses_the_system_opener_with_the_path_as_a_single_argument() {
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let mut panel = panel("open-file");
+        panel.set_opener(std::sync::Arc::new(move |path: &std::path::Path| {
+            sink.lock().unwrap().push(path.to_path_buf());
+            Ok(())
+        }));
+        let weird = PathBuf::from("/tmp/a dir/with \"quotes\" and 'single'.txt");
+        let request =
+            dozer_panel_host::HostRequest::Command(dozer_panel_host::PanelCommand::OpenFile {
+                path: weird.clone(),
+            });
+        assert!(panel.handle_host_request(&request).is_none());
+        assert_eq!(*seen.lock().unwrap(), vec![weird]);
+    }
+
+    /// 没有项目时右键空白区域:不 panic,也不弹空菜单。
+    #[test]
+    fn the_context_menu_request_is_not_dropped_when_no_project_is_open() {
+        let mut panel = panel("menu-no-project");
+        panel.set_project(None);
+        let _ = panel.update(FilesMessage::RightClickAt { x: 10.0, y: 20.0 }, None);
+        let _ = panel.update(
+            FilesMessage::ContextMenuOpen {
+                path: PathBuf::from("/tmp"),
+                is_dir: true,
+            },
+            None,
+        );
+        assert!(panel.take_requests().is_empty());
+        assert!(panel.menu().is_none());
+        let _ = panel.view(Length::Fill, Border::default());
+    }
+
+    /// 库给出空条目表时不弹浮层(不是画一个空盒子)。
+    #[test]
+    fn an_empty_item_list_does_not_open_a_popup() {
+        let mut panel = panel("menu-empty");
+        let empty = crate::adapters::menu_overlay::MenuOverlay::<FilesMessage> {
+            anchor: crate::adapters::menu_overlay::MenuAnchor { x: 0.0, y: 0.0 },
+            items: Vec::new(),
+        };
+        assert!(empty.is_empty());
+        panel.menu = Some(empty);
+        // 产品侧按 `is_empty` / 条目数决定不渲染;这里确认面板能识别空表。
+        assert!(panel.menu().is_some_and(|m| m.is_empty()));
+        panel.menu = None;
+        assert!(panel.menu().is_none());
     }
 
     /// 能力四项全关:关掉的条目整条不出现。

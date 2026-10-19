@@ -45,6 +45,8 @@ pub enum Msg {
     Files(dozer_panel_files::Message),
     /// 文件系统监听:当前项目的工作区有增删改,文件树与 git 着色要跟进。
     FilesFsChanged(crate::adapters::files::FsChange),
+    /// 关掉「文件」面板的右键菜单(点空白 / Esc)。
+    FilesMenuDismiss,
     /// 「编辑器」面板的消息(ADR-013)。
     Markdown(crate::markdown::Message),
     /// 项目页签与注册表(顶栏页签行)。
@@ -472,6 +474,11 @@ impl ProductShell {
             return Task::none();
         }
         let resized = matches!(msg, ShellMsg::Resized { .. });
+        if let ShellMsg::CursorMoved { x, y } = msg {
+            // 文件树的拖拽幽灵胶囊要跟着光标走(展示语义读这两个值)。
+            let size = (self.shell.window().0, self.shell.window().1);
+            self.files.set_window_probe(size, (x, y));
+        }
         let out = shell::update(&mut self.shell, msg);
         if out.persist {
             self.save_shell();
@@ -894,6 +901,12 @@ impl Product<Msg> for ProductShell {
             Msg::Files(m) => {
                 let project_id = self.projects.current_project_id();
                 let task = self.files.update(m, project_id);
+                // 库把"只有产品做得到"的事放进队列:右键菜单落到 iced 浮层,
+                // 打开文件交给系统默认应用;选目录暂时无入口(能力已关)。
+                let _ = self.files.take_requests();
+                for request in self.files.take_host_requests() {
+                    let _ = self.files.handle_host_request(&request);
+                }
                 // Digger 一期无 Toast:提示落到 stderr,不静默吞掉。
                 for notice in self.files.take_notices() {
                     eprintln!(
@@ -903,6 +916,7 @@ impl Product<Msg> for ProductShell {
                 }
                 task
             }
+            Msg::FilesMenuDismiss => self.files.close_menu(),
             Msg::FilesFsChanged(change) => {
                 if Some(change.project_id) == self.projects.current_project_id() {
                     self.files.fs_changed(&change)
@@ -1106,9 +1120,26 @@ impl Product<Msg> for ProductShell {
                     .padding(24)
                     .into()
             });
-        match card {
+        let body = match card {
             Some(card) => iced::widget::stack![body, card].into(),
             None => body,
+        };
+        // 「文件」面板的右键菜单:盖在最上层,点空白或 Esc 关闭。
+        match self.files.menu() {
+            Some(menu) if self.panel_visible(&shell::files_id()) => {
+                let window = (self.shell.window().0, self.shell.window().1);
+                iced::widget::stack![
+                    body,
+                    crate::adapters::menu_overlay::view(
+                        menu,
+                        window,
+                        Msg::Files,
+                        Msg::FilesMenuDismiss
+                    )
+                ]
+                .into()
+            }
+            _ => body,
         }
     }
 
@@ -1201,6 +1232,19 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
                 )
             },
         ));
+    }
+    // 右键菜单打开时订阅 Esc:关掉浮层(点空白走浮层自己的透明按下区)。
+    if shell.files.menu().is_some() {
+        subs.push(iced::event::listen_with(|evt, _status, _id| {
+            matches!(
+                evt,
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                })
+            )
+            .then_some(Msg::FilesMenuDismiss)
+        }));
     }
     if shell.shell.animating() {
         subs.push(

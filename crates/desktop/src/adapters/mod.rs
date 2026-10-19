@@ -4,6 +4,7 @@
 //! 只定义窄接缝,产品侧提供实现。这里有 Usage 与 Project 两个面板的适配。
 
 pub mod files;
+pub mod menu_overlay;
 pub mod project;
 pub mod usage;
 
