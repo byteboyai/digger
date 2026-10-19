@@ -33,6 +33,22 @@ pub struct FilesPanel {
     tx: tokio::sync::mpsc::UnboundedSender<FilesMessage>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<FilesMessage>>,
     window: WindowProbe,
+    /// 本项目的实时文件系统监听。失败(如 fd 耗尽)降级为"只在切项目时刷新"。
+    /// Drop 时自动停止。
+    watch: Option<bytegit::WatchHandle>,
+    /// 监听事件(具体变更路径)回流成一条 iced 流,由产品转成 `Msg::FsChanged`。
+    fs_tx: tokio::sync::mpsc::UnboundedSender<FsChange>,
+    fs_rx: Option<tokio::sync::mpsc::UnboundedReceiver<FsChange>>,
+    /// 这台面板当前服务的项目 id:监听事件与后台结果都按它过滤,旧项目的迟到消息丢弃。
+    project_id: Option<i64>,
+}
+
+/// 一次工作区变更(文件树需要重读的那部分)。
+#[derive(Debug, Clone, Default)]
+pub struct FsChange {
+    pub project_id: i64,
+    /// 工作区有改动(增删改文件)。
+    pub workdir_changed: bool,
 }
 
 /// 窗口尺寸与光标位置:展示语义里拖拽幽灵胶囊要用,由产品每帧写回。
@@ -47,6 +63,7 @@ impl FilesPanel {
     /// [`FilesPanel::attach_handle`] 在进入 iced 运行时后补挂。
     pub fn new(external_apps_path: PathBuf) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             state: None,
             app_state: AppState::default(),
@@ -56,6 +73,10 @@ impl FilesPanel {
             tx,
             rx: Some(rx),
             window: WindowProbe::default(),
+            watch: None,
+            fs_tx,
+            fs_rx: Some(fs_rx),
+            project_id: None,
         }
     }
 
@@ -76,18 +97,73 @@ impl FilesPanel {
         self.window.cursor = cursor;
     }
 
-    /// 树根跟随当前项目:换项目整棵重置,并拉一次 git 文件状态。`None`(没有项目)时清空。
+    /// 取走文件系统监听的事件接收端(组合根接成 iced 流;只该取一次)。
+    pub fn take_fs_receiver(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<FsChange>> {
+        self.fs_rx.take()
+    }
+
+    /// 一次工作区变更:重读已展开的目录,并重拉 git 文件状态(着色随之更新)。
+    /// 只有当前项目的事件才生效——切项目后旧项目的迟到事件直接丢弃。
+    pub fn fs_changed(&mut self, change: &FsChange) -> iced::Task<Msg> {
+        if self.project_id != Some(change.project_id) {
+            return iced::Task::none();
+        }
+        let Some(state) = self.state.as_mut() else {
+            return iced::Task::none();
+        };
+        if change.workdir_changed {
+            state.reload_tree_from_disk();
+        }
+        if let Some(root) = state.file_tree.as_ref().map(|t| t.root().to_path_buf()) {
+            self.refresh_git(change.project_id, root);
+        }
+        iced::Task::none()
+    }
+
+    /// 树根跟随当前项目:换项目时丢弃旧树与旧监听、按新路径重建,并拉一次 git 文件状态。
+    /// `None`(没有项目)时清空。目录已不存在时树为空,由视图显示空盒并在 `take_notices` 里
+    /// 报一条错误提示(不 panic)。
     pub fn set_project(&mut self, project: Option<&ProjectInfo>) {
+        self.watch = None;
         let Some(project) = project else {
             self.state = None;
+            self.project_id = None;
             return;
         };
+        self.project_id = Some(project.id);
         let root = PathBuf::from(&project.path);
         match &mut self.state {
             Some(state) => state.reset_for_project(FileTree::new(root.clone())),
             None => self.state = Some(WorkspaceState::new(FileTree::new(root.clone()))),
         }
+        if let Some(state) = self.state.as_mut()
+            && !root.is_dir()
+        {
+            state.outbox.push(
+                dozer_panel_host::NoticeLevel::Error,
+                format!("项目目录不存在:{}", root.display()),
+            );
+        }
+        self.start_watch(project.id, root.clone());
         self.refresh_git(project.id, root);
+    }
+
+    /// 启动本项目的文件系统监听。忽略名单与 Dozer 相同(文件树恒不显示的目录/文件名)。
+    fn start_watch(&mut self, project_id: i64, root: PathBuf) {
+        if !root.is_dir() {
+            return;
+        }
+        let tx = self.fs_tx.clone();
+        let options = bytegit::WatchOptions::new(std::time::Duration::from_millis(300));
+        match bytegit::watch(&root, options, move |changes| {
+            let _ = tx.send(FsChange {
+                project_id,
+                workdir_changed: changes.workdir_changed,
+            });
+        }) {
+            Ok(handle) => self.watch = Some(handle),
+            Err(e) => eprintln!("digger: 文件监听启动失败: {e}"), // cli-output
+        }
     }
 
     /// 后台算一次本项目子树内的 git 文件状态,投回 `StatusesRefreshed`。
@@ -293,6 +369,108 @@ mod tests {
         assert_eq!(tree.root(), b.as_path());
         panel.set_project(None);
         assert!(panel.state.is_none());
+    }
+
+    /// 两个临时项目目录,各放一个不同的文件;用完删掉。
+    struct TwoProjects {
+        a: PathBuf,
+        b: PathBuf,
+    }
+
+    impl TwoProjects {
+        fn new(tag: &str) -> Self {
+            let base = std::env::temp_dir().join(format!(
+                "digger-files-panel-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let a = base.join("a");
+            let b = base.join("b");
+            std::fs::create_dir_all(&a).unwrap();
+            std::fs::create_dir_all(&b).unwrap();
+            std::fs::write(a.join("only-in-a.txt"), "a").unwrap();
+            std::fs::write(b.join("only-in-b.txt"), "b").unwrap();
+            Self { a, b }
+        }
+    }
+
+    impl Drop for TwoProjects {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.a.parent().unwrap());
+        }
+    }
+
+    fn visible_names(panel: &FilesPanel) -> Vec<String> {
+        panel
+            .state
+            .as_ref()
+            .and_then(|s| s.file_tree.as_ref())
+            .map(|t| {
+                t.visible_rows()
+                    .iter()
+                    .map(|r| r.name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 没有项目:面板是空的,且不向宿主提任何请求或命令。
+    #[test]
+    fn without_a_project_the_panel_is_empty_and_requests_nothing() {
+        let mut panel = panel("without-project");
+        panel.set_project(None);
+        let _ = panel.view(Length::Fill, Border::default());
+        assert!(panel.take_requests().is_empty());
+        assert!(panel.take_host_requests().is_empty());
+        assert!(panel.take_notices().is_empty());
+    }
+
+    /// 换项目重建树根:可见行只含新项目的文件。
+    #[test]
+    fn switching_projects_rebuilds_the_tree_root() {
+        let dirs = TwoProjects::new("switch");
+        let mut panel = panel("switch-projects");
+        panel.set_project(Some(&project("a", &dirs.a)));
+        assert_eq!(visible_names(&panel), vec!["only-in-a.txt"]);
+        panel.set_project(Some(&project("b", &dirs.b)));
+        assert_eq!(visible_names(&panel), vec!["only-in-b.txt"]);
+    }
+
+    /// 项目目录已经不存在:不 panic,报一条错误提示。
+    #[test]
+    fn a_project_whose_directory_vanished_shows_a_notice_and_does_not_panic() {
+        let dirs = TwoProjects::new("vanished");
+        let mut panel = panel("vanished");
+        std::fs::remove_dir_all(&dirs.a).unwrap();
+        panel.set_project(Some(&project("a", &dirs.a)));
+        let _ = panel.view(Length::Fill, Border::default());
+        let notices = panel.take_notices();
+        assert!(
+            notices
+                .iter()
+                .any(|n| matches!(n.level, dozer_panel_host::NoticeLevel::Error)),
+            "missing root must be reported: {notices:?}"
+        );
+    }
+
+    /// 旧项目的迟到完成消息被丢弃:B 的树不受 A 的 `PasteDone` 影响。
+    #[test]
+    fn late_paste_done_from_previous_project_is_ignored() {
+        let dirs = TwoProjects::new("late");
+        let mut panel = panel("late-paste");
+        panel.set_project(Some(&project("a", &dirs.a)));
+        panel.set_project(Some(&project("b", &dirs.b)));
+        let before = visible_names(&panel);
+        let _ = panel.update(
+            FilesMessage::PasteDone(
+                7,
+                Err(dozer_panel_files::fs::ProjectFsError::Io {
+                    detail: "stale".into(),
+                }),
+            ),
+            Some(7),
+        );
+        assert_eq!(visible_names(&panel), before);
     }
 
     /// 能力四项全关:关掉的条目整条不出现。

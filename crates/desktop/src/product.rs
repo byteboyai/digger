@@ -43,6 +43,8 @@ pub enum Msg {
     NativeUsage(crate::adapters::usage_native::Event),
     /// 「文件」面板的库消息(共享 `dozer-panel-files` 库)。
     Files(dozer_panel_files::Message),
+    /// 文件系统监听:当前项目的工作区有增删改,文件树与 git 着色要跟进。
+    FilesFsChanged(crate::adapters::files::FsChange),
     /// 「编辑器」面板的消息(ADR-013)。
     Markdown(crate::markdown::Message),
     /// 项目页签与注册表(顶栏页签行)。
@@ -901,6 +903,13 @@ impl Product<Msg> for ProductShell {
                 }
                 task
             }
+            Msg::FilesFsChanged(change) => {
+                if Some(change.project_id) == self.projects.current_project_id() {
+                    self.files.fs_changed(&change)
+                } else {
+                    Task::none()
+                }
+            }
             Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
             Msg::Projects(m) => {
                 // 打开/切换项目:若「项目」面板此刻就在眼前,立刻把它切到新项目
@@ -1269,6 +1278,13 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         Some(rx) => Task::stream(crate::adapters::files::receiver_stream(rx).map(Msg::Files)),
         None => Task::none(),
     };
+    // 文件系统监听的事件回流(当前项目的增删改 → 树与 git 着色跟进)。
+    let fs_task = match shell.files.take_fs_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|c| (Msg::FilesFsChanged(c), rx))
+        })),
+        None => Task::none(),
+    };
     // 「删除项目」的后台结果回流(库的 `spawn_delete_project` 在结束回调里投递)。
     let delete_task = match shell.take_delete_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
@@ -1297,6 +1313,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             markdown_task,
             project_task,
             files_task,
+            fs_task,
             delete_task,
             lifecycle_task,
             Task::batch(initial),
