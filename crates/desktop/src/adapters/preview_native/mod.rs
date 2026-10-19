@@ -87,6 +87,30 @@ impl Host {
         self.allowed.lock().expect("allowed 锁").insert(path);
     }
 
+    /// 清空白名单(切走 / 删除项目时,D4:预览不跨项目留存)。
+    pub fn clear_allowed(&self) {
+        self.allowed.lock().expect("allowed 锁").clear();
+    }
+
+    /// 某路径是否已在白名单(测试与宿主自检用,不触发读取)。
+    pub fn accepts(&self, path: impl AsRef<Path>) -> bool {
+        let path = path.as_ref();
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.allowed.lock().expect("allowed 锁").contains(&path)
+    }
+
+    /// 当前活着的预览句柄 id(库取宿主脚本时据此剔除已销毁页签)。
+    pub fn live_ids(&self) -> std::collections::HashSet<usize> {
+        VIEWS.with(|v| v.borrow().keys().copied().collect())
+    }
+
+    /// 向某个已建好的预览页面注入脚本(只在该页面确实活着时生效)。
+    pub fn push_script(&self, webview_id: usize, script: String) {
+        with(webview_id, |view| {
+            let _ = view.evaluate_script(&script);
+        });
+    }
+
     pub fn take_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Event>> {
         self.rx.lock().expect("rx 锁").take()
     }
