@@ -140,3 +140,14 @@
 - Dozer:`cargo test --workspace`(含 `dozer-app`)总数 ≥ 修复前、无删除 / 削弱;三份黄金字节不变;`dozer-panel-preview` 依赖闭包无 `wry` / `winit` / `dozer-app` / `dozer-client` / `dozer-core`;`clippy`、`check-i18n`、`check-shared-deps`、边界脚本通过。
 - Digger:`cargo test --workspace`、`clippy`、`fmt --check`、`check-shared-deps.sh`、`check-host-deps.sh --self-test`、`check-shell-regions.sh`、`run-editor-selftest.sh` 通过;打一个调试包,`preview_smoke --selftest` 在包内通过;**真机上配对预览确实显示(N1)**。
 - 修完再交我复审(只读)。未经用户确认:不合并、不切 tag、不推送、不发布。
+
+## 6. 第三轮处理结果(2026-10-20)
+
+- **更正(G-I5):** 上文「沿用 Dozer 的原生 `NSMenu`」说错了。核实 Dozer:页签溢出菜单就是 iced 菜单;原生 `NSMenu` 只用于右键菜单。Dozer 的做法是**浮层开着就把 webview 真隐藏**(`app_modal_open` / `tab_overflow_open` / `panel_popup_open`)。Digger 已照做:页签溢出菜单、Files 右键菜单 / 对话框、Project 删除确认卡任一打开,预览 webview 隐藏而不是销毁(`hide_for_overlay`,有测试)。**不移植 `native_menu`。**
+- **N1:** 预览同步任务现在作为返回值交给 iced 运行时(`native_preview_task`),新增用 `task::into_stream` 数窗口动作的测试和「构造后丢弃发出 0 个」的反面对照。
+- **N6:** 页面所属项目在创建 webview 时由 Rust 定下,请求 URL 里的 `proj` 不再起作用。
+- **Dozer:** `path_within_root` 改为 fail-closed;补 `save_is_rejected_when_the_event_path_differs_from_the_bound_path` 与 `path_within_root_is_fail_closed`;`scratch()` 并行竞争已修;残留格式化噪声与误提交的 Digger 审查文档已移除。
+- **合并与 tag(用户已批准):** Dozer `main` = `b9373b02`,新 tag `libs-2026-10-20a`;远端 `libs-2026-10-19g`、`libs-2026-10-19h` 与分支 `feat/preview-events-lib` 已删。Digger `feat/preview-pairing` 已改钉 `libs-2026-10-20a`。
+- **门禁(Digger,钉新 tag 后):** `fmt --check`、`clippy --workspace --all-targets` 无输出(干净);`cargo test --workspace` 全过(桌面 223、store 35、11 …);`check-shared-deps`、`check-host-deps`(含 `--self-test`)、`check-shell-regions` 通过;`dozer-*` 无重复版本。
+- **仍待人工:** G-I2 webview 上下边距与 Dozer 并排对比;预览是否真的显示、编辑保存、切项目、放大、PDF、浮层不被盖;打包产物里 `flyfish/vendor/pdf` 存在。
+- **未做的已知项:** `apps::tests::closing_during_startup_waits_and_releases_the_root` 偶发失败(单独跑稳定通过,在 Apps 代码里,与本分支无关);D-C1 历史提交说明里「端到端」措辞偏强,以本节为准。
