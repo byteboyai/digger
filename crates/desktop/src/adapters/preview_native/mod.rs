@@ -243,6 +243,13 @@ impl Host {
             flyfish: context.kind == dozer_panel_preview::host_ipc::WebviewKind::Flyfish,
         });
         let allowed = Arc::clone(&self.allowed);
+        // N6:这个页面属于哪个项目,在**创建时**由 Rust 一次定下(绑定里的项目,否则 Rust 拼出来的
+        // URL 里的 `proj`),之后协议请求带什么 `proj` 都不作数——页面自己能改请求 URL。
+        let bound_project = spec
+            .editor_binding
+            .as_ref()
+            .map(|b| b.project_id)
+            .or_else(|| project_from_url(&spec.url));
         let root = self.assets_root.clone();
         let tx = self.tx.clone();
         let webview_id = spec.id;
@@ -263,18 +270,13 @@ impl Host {
                 });
             })
             .with_custom_protocol("dozer".into(), move |_id, request| {
-                // N6:只查**这个请求所属项目**的白名单。此前把各项目的授权
-                // 合并成一份交给库,分项目存储只实现了撤销隔离,没实现访问
-                // 隔离——A 项目的页面能读到只授权给 B 项目的文件。
-                //
-                // 归属取自请求 URL 的绑定查询串(proj/panel/tab/doc,与创建
-                // 页面时拼的是同一份)。解析不出项目的请求一律拒绝。
+                // N6:只查**这个页面所属项目**的白名单(创建时绑定,见 `bound_project`)。
+                // 此前把各项目的授权合并成一份,A 项目的页面能读到只授权给 B 的文件;
+                // 后来改成按请求 URL 里的 `proj` 查,页面自己改 URL 就能越过隔离。
                 let uri = request.uri().to_string();
-                // 页面的静态资源(编辑器脚本 / 字体 / 图片宿主页)本身不带
-                // `proj`,不能用它当授权凭据;只有 `__file__/` 读文件才要。
-                // 所以解析不出项目时给一份空白名单:静态资源照常服务,
-                // 任何文件读取都落到 404。
-                let files = allowed_for_uri(&allowed, &uri);
+                // 页面的静态资源(编辑器脚本 / 字体 / 宿主页)不需要白名单;只有 `__file__/`
+                // 读文件才要。没有绑定项目的页面拿到空白名单,任何文件读取都落到 404。
+                let files = allowed_for_project(&allowed, bound_project);
                 let reply = dozer_panel_preview::assets::handle_protocol(&root, &files, &uri)
                     .unwrap_or_else(dozer_panel_preview::assets::not_found);
                 wry::http::Response::builder()
@@ -339,35 +341,29 @@ fn forget(id: usize) {
     });
 }
 
-/// 预览页面允许发生的导航:库的 `dozer://` 协议(含程序化 `load_url`:重载、主题、语言变化都会换 URL),
-/// 以及 HTML 隔离宿主内部的 `about:blank` / `about:srcdoc` iframe。其余(http/https/file…)一律拒绝。
-/// wry 对所有导航动作都调用这个处理器,不区分主 frame 与子 frame。
-/// N6:一个 `dozer://` 请求能用的白名单 = **它自己那个项目**的那一份。
-///
-/// 归属从 URL 查询串里的 `proj` 取。这里不能用库的
-/// `flyfish_binding_from_url`:它只认 flyfish / html / image-annotate /
-/// plantuml 前缀,而 editor / json-editor 同样有 `__file__` 端点,漏掉它们
-/// 会让编辑器读不到已打开的文件。
-///
-/// 解析不出 `proj` 时返回空白名单:页面自身的静态资源(编辑器脚本 / 字体 /
-/// 宿主页)本来就不带 `proj`,必须照常服务;这类请求读不到任何用户文件
-/// (`__file__/` 一律 404)。
-fn allowed_for_uri(
-    allowed: &std::sync::Mutex<std::collections::HashMap<i64, AllowedFiles>>,
-    uri: &str,
-) -> AllowedFiles {
-    let project_id = uri
-        .split_once('?')
+/// URL 查询串里的 `proj=<id>`。只在**创建页面时**对 Rust 自己拼的 URL 用一次,不对页面发来的请求用。
+fn project_from_url(url: &str) -> Option<i64> {
+    url.split_once('?')
         .map(|(_, query)| query)
         .unwrap_or("")
         .split('&')
         .find_map(|pair| pair.strip_prefix("proj="))
-        .and_then(|v| v.parse::<i64>().ok());
-    project_id
+        .and_then(|v| v.parse::<i64>().ok())
+}
+
+/// N6:一个页面能用的白名单 = **它自己那个项目**的那一份;没有绑定项目的页面拿空白名单。
+fn allowed_for_project(
+    allowed: &std::sync::Mutex<std::collections::HashMap<i64, AllowedFiles>>,
+    project: Option<i64>,
+) -> AllowedFiles {
+    project
         .and_then(|id| allowed.lock().expect("allowed 锁").get(&id).cloned())
         .unwrap_or_default()
 }
 
+/// 预览页面允许发生的导航:库的 `dozer://` 协议(含程序化 `load_url`:重载、主题、语言变化都会换 URL),
+/// 以及 HTML 隔离宿主内部的 `about:blank` / `about:srcdoc` iframe。其余(http/https/file…)一律拒绝。
+/// wry 对所有导航动作都调用这个处理器,不区分主 frame 与子 frame。
 fn navigation_allowed(url: &str) -> bool {
     url.starts_with("dozer://") || url == "about:blank" || url == "about:srcdoc"
 }
@@ -491,7 +487,7 @@ mod tests {
             "dozer://editor/__file__/{}?proj=1&panel=files&tab=1&doc=x",
             dozer_panel_preview::webview::encode_component(&b_file.display().to_string())
         );
-        let a_files = allowed_for_uri(&allowed, &b_uri);
+        let a_files = allowed_for_project(&allowed, Some(1));
         let reply = dozer_panel_preview::assets::handle_protocol(&dir, &a_files, &b_uri)
             .unwrap_or_else(dozer_panel_preview::assets::not_found);
         assert_ne!(reply.status, 200, "A 读到了只授权给 B 的文件");
@@ -505,12 +501,7 @@ mod tests {
             "dozer://editor/__file__/{}?proj=1&panel=files&tab=1&doc=x",
             dozer_panel_preview::webview::encode_component(&a_file.display().to_string())
         );
-        let a_files = allowed_for_uri(&allowed, &a_uri);
-        eprintln!("DBG a_file={}", a_file.display()); // cli-output
-        eprintln!("DBG contains={}", a_files.contains(&a_file)); // cli-output
-        for p in a_files.iter() {
-            eprintln!("DBG key={:?} eq={}", p, p == &a_file);
-        } // cli-output
+        let a_files = allowed_for_project(&allowed, Some(1));
         let ok = dozer_panel_preview::assets::handle_protocol(&dir, &a_files, &a_uri)
             .unwrap_or_else(dozer_panel_preview::assets::not_found);
         assert_eq!(ok.status, 200, "A 读不到自己的文件(测试自证不成立)");
@@ -530,8 +521,47 @@ mod tests {
             guard.insert(1, any);
         }
         // 静态资源:不带 proj,必须照常解析(用空白名单)。
-        let files = allowed_for_uri(&allowed, "dozer://editor/index.html");
+        let files = allowed_for_project(&allowed, None);
         assert!(!files.contains(Path::new("/etc/hosts")));
+    }
+
+    /// N6:页面自己把请求 URL 里的 `proj` 改成别的项目,也读不到别的项目的文件——归属在创建页面时就
+    /// 由 Rust 定下,请求里带什么都不作数。
+    #[test]
+    fn a_forged_proj_in_the_request_url_does_not_switch_the_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "digger-n6-forged-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let b_file = std::fs::canonicalize({
+            let f = dir.join("b-secret.txt");
+            std::fs::write(&f, "B-SECRET").unwrap();
+            f
+        })
+        .unwrap();
+        let allowed = std::sync::Mutex::new(std::collections::HashMap::new());
+        {
+            let mut b = AllowedFiles::new();
+            b.insert(&b_file);
+            allowed.lock().unwrap().insert(2, b);
+        }
+        // 这个页面创建时绑定的是项目 1;请求 URL 谎称 `proj=2`。
+        let files = allowed_for_project(
+            &allowed,
+            project_from_url("dozer://editor/index.html?proj=1&tab=1"),
+        );
+        let forged = format!(
+            "dozer://editor/__file__/{}?proj=2&panel=files&tab=1&doc=x",
+            dozer_panel_preview::webview::encode_component(&b_file.display().to_string())
+        );
+        let reply = dozer_panel_preview::assets::handle_protocol(&dir, &files, &forged)
+            .unwrap_or_else(dozer_panel_preview::assets::not_found);
+        assert_ne!(reply.status, 200);
+        assert!(!String::from_utf8_lossy(&reply.body).contains("B-SECRET"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
