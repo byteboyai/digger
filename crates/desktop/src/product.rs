@@ -104,6 +104,10 @@ pub enum Msg {
     /// 面板生命周期自检的推进(仅 `DIGGER_LIFECYCLE_SELFTEST` 设置时出现)。
     Lifecycle(crate::lifecycle_selftest::Phase),
     Tick,
+    /// 左键按下 / 松开(全局事件):树内拖拽靠它收尾和自愈。
+    LeftButton(bool),
+    /// 修饰键变化(全局事件):树内单击的 Shift / Cmd 多选读它。
+    Modifiers(iced::keyboard::Modifiers),
     /// 双击顶栏空白处:缩放窗口(系统标题栏没了,这个手势要自己补)。
     ZoomToggle,
     ShutdownFinished(Result<(), String>),
@@ -156,6 +160,10 @@ pub struct ProductShell {
     /// 产品未接业务服务时的启动说明,显示在信息面板。
     boot_note: String,
     closing: bool,
+    /// 左键此刻是否物理按住(`Msg::LeftButton` 维护)。
+    left_down: bool,
+    /// 当前修饰键(`Msg::Modifiers` 维护)。
+    modifiers: iced::keyboard::Modifiers,
     shutdown_started: bool,
     shutdown_error: Option<String>,
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
@@ -381,6 +389,8 @@ impl ProductShell {
             visible_before: Vec::new(),
             boot_note,
             closing: false,
+            left_down: false,
+            modifiers: iced::keyboard::Modifiers::default(),
             shutdown_started: false,
             shutdown_error: None,
             #[cfg(test)]
@@ -620,6 +630,8 @@ impl ProductShell {
             // 文件树的拖拽幽灵胶囊要跟着光标走(展示语义读这两个值)。
             let size = (self.shell.window().0, self.shell.window().1);
             self.files.set_window_probe(size, (x, y));
+            // 树内拖拽:越过距离 + 按住时长两道阈值才算真拖拽(否则只是单击)。
+            self.files.maybe_confirm_tree_drag(self.left_down);
         }
         let out = shell::update(&mut self.shell, msg);
         publish_panes(self.shell.panes());
@@ -928,8 +940,74 @@ impl ProductShell {
         )
     }
 
-    /// 配对第二块:预览面板本体(库的 `view::pane`)。没有当前项目 / 预览层还没装上时
-    /// 给一块空面板,配对几何不变。
+    /// 文件面板的库消息入口。
+    ///
+    /// 库里有几条消息的 `update` 是 `unreachable!`——它们**必须由宿主拦截**(跨内核边界):
+    /// `TreeRowPress` / `TreeDragRelease` / `TreeRowDoubleClick` / `CopyPath` / `TextInputMenuOpen` /
+    /// `FileHistoryRollbackPrevious` / `RequestSendToAgentTerminal`。漏一条,用户一点就崩溃
+    /// (2026-10-20:单击文件名崩溃,就是 `TreeRowPress` 原样进了库)。这里逐条处理,其余才交给库。
+    fn on_files_message(&mut self, message: dozer_panel_files::Message) -> Task<Msg> {
+        use dozer_panel_files::Message as F;
+        let project_id = self.projects.current_project_id();
+        match message {
+            // 单击(按下):只武装拖拽,不展开 / 不打开;松开时由 `Msg::LeftButton(false)` 收尾,
+            // 没越过阈值就是一次单击,只选中。
+            F::TreeRowPress { path, is_dir } => {
+                self.files.arm_tree_drag(path, is_dir);
+                return Task::none();
+            }
+            // 通常由 `Msg::LeftButton(false)` 直接收尾;这里兜底同一语义。
+            F::TreeDragRelease { shift, command } => {
+                return self.files.release_tree_drag(shift, command, project_id);
+            }
+            // 双击:目录展开 / 折叠(同点箭头),文件在预览里打开(D3)。
+            F::TreeRowDoubleClick { path, is_dir } => {
+                if is_dir {
+                    return self.files.update(F::Toggle(path), project_id);
+                }
+                return self.preview_open(ViewerPanel::Files, &path);
+            }
+            // 复制路径:写系统剪贴板,再收起右键菜单。
+            F::CopyPath(path, kind) => {
+                let root = self
+                    .projects
+                    .current_project()
+                    .map(|p| PathBuf::from(&p.path))
+                    .unwrap_or_else(|| path.clone());
+                let text = dozer_panel_files::fs::path_string(kind, &path, &root);
+                let close = self.files.update(F::ContextMenuClose, project_id);
+                return Task::batch([iced::clipboard::write(text), close]);
+            }
+            // Digger 没有这三个能力(能力开关已关 / 没有通用输入框菜单):收到就忽略,绝不进库。
+            F::TextInputMenuOpen(_)
+            | F::FileHistoryRollbackPrevious(_)
+            | F::RequestSendToAgentTerminal { .. } => {
+                eprintln!("digger: files 面板消息在 Digger 里不适用,已忽略"); // cli-output
+                return Task::none();
+            }
+            _ => {}
+        }
+        let task = self.files.update(message, project_id);
+        // 库把"只有产品做得到"的事放进队列:右键菜单落到 iced 浮层,
+        // 双击文件进预览(D3);选目录暂时无入口(能力已关)。
+        let _ = self.files.take_requests();
+        let mut task = task;
+        for request in self.files.take_host_requests() {
+            if let Some(path) = crate::adapters::files::FilesPanel::open_path(&request) {
+                task = Task::batch([task, self.preview_open(ViewerPanel::Files, path)]);
+            }
+            let _ = self.files.handle_host_request(&request);
+        }
+        // Digger 一期无 Toast:提示落到 stderr,不静默吞掉。
+        for notice in self.files.take_notices() {
+            eprintln!(
+                "digger: files 面板/{:?}: {}",
+                notice.level, notice.text.fallback
+            ); // cli-output
+        }
+        task
+    }
+
     /// D3:在右半边的预览里打开一个路径(文件树双击 / Project 文档链接)。
     /// 没有当前项目时什么都不做(预览本来就按项目存)。
     fn preview_open(&mut self, panel: ViewerPanel, path: &Path) -> Task<Msg> {
@@ -942,6 +1020,8 @@ impl ProductShell {
         self.sync_native()
     }
 
+    /// 配对第二块:预览面板本体(库的 `view::pane`)。没有当前项目 / 预览层还没装上时
+    /// 给一块空面板,配对几何不变。
     fn preview_pane<'a>(&'a self, panel: ViewerPanel) -> Element<'a, Msg> {
         let (Some(preview), Some(current)) =
             (self.preview.as_ref(), self.projects.current_project())
@@ -1239,27 +1319,19 @@ impl Product<Msg> for ProductShell {
                 self.usage.native.update(event);
                 Task::none()
             }
-            Msg::Files(m) => {
-                let project_id = self.projects.current_project_id();
-                let task = self.files.update(m, project_id);
-                // 库把"只有产品做得到"的事放进队列:右键菜单落到 iced 浮层,
-                // 双击文件进预览(D3);选目录暂时无入口(能力已关)。
-                let _ = self.files.take_requests();
-                let mut task = task;
-                for request in self.files.take_host_requests() {
-                    if let Some(path) = crate::adapters::files::FilesPanel::open_path(&request) {
-                        task = Task::batch([task, self.preview_open(ViewerPanel::Files, path)]);
-                    }
-                    let _ = self.files.handle_host_request(&request);
+            Msg::Files(m) => self.on_files_message(m),
+            Msg::LeftButton(down) => {
+                self.left_down = down;
+                if !down && self.files.tree_drag_active() {
+                    let project_id = self.projects.current_project_id();
+                    let (shift, command) = (self.modifiers.shift(), self.modifiers.command());
+                    return self.files.release_tree_drag(shift, command, project_id);
                 }
-                // Digger 一期无 Toast:提示落到 stderr,不静默吞掉。
-                for notice in self.files.take_notices() {
-                    eprintln!(
-                        "digger: files 面板/{:?}: {}",
-                        notice.level, notice.text.fallback
-                    ); // cli-output
-                }
-                task
+                Task::none()
+            }
+            Msg::Modifiers(modifiers) => {
+                self.modifiers = modifiers;
+                Task::none()
             }
             Msg::FilesMenuDismiss => {
                 let project_id = self.projects.current_project_id();
@@ -1617,8 +1689,22 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     if shell.closing {
         return events;
     }
+    // 左键按下 / 松开与修饰键:文件树的单击 / 拖拽 / 多选靠它们(库对这些消息的 `update` 不处理)。
+    let pointer = iced::event::listen_with(|evt, _status, _id| match evt {
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+            Some(Msg::LeftButton(true))
+        }
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Msg::LeftButton(false))
+        }
+        iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+            Some(Msg::Modifiers(modifiers))
+        }
+        _ => None,
+    });
     let mut subs = vec![
         events,
+        pointer,
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
     ];
     // 页签拖拽中:在页签行外松手也要结束拖拽(行内松手由页签行自己的 `on_release` 管),
@@ -2697,6 +2783,227 @@ mod tests {
             "new-name",
             "the registry is the only source of names, so the tab title follows it"
         );
+    }
+
+    /// 用户反馈(2026-10-20):Digger 的 Files 单击文件名就崩溃。根因:库对 `TreeRowPress` /
+    /// `TreeDragRelease` / `TreeRowDoubleClick` 的 `update` 是 `unreachable!`("由内核拦截"),
+    /// Digger 把它们原样交给了库。单击 = 按下 + 松开,必须只选中、不打开预览;双击才打开。
+    #[test]
+    fn a_single_click_on_a_file_only_selects_it_and_a_double_click_opens_the_preview() {
+        use crate::projects::Message as P;
+        use dozer_panel_files::Message as F;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = test_temp_dir("click");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let file = repo.join("a.txt");
+        let info = dozer_model::ProjectInfo {
+            id: 3,
+            path: repo.to_string_lossy().into_owned(),
+            name: "repo".into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        shell.files.attach_handle(rt.handle().clone());
+        shell.preview = Some(crate::adapters::preview::PreviewHub::with_config_dir(
+            crate::adapters::preview_native::Host::new(&dir),
+            &dir,
+        ));
+        send(
+            &mut shell,
+            Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![
+                info.clone(),
+            ])))),
+        );
+        shell.projects.open_tab_for_test(info.id);
+        send(&mut shell, Msg::Projects(P::Activate(info.id)));
+        // `open_tab_for_test` 已经让它成了当前项目,切换钩子不会再跑:手动指向树根。
+        shell.files.set_project(Some(&info));
+        if let Some(hub) = shell.preview.as_mut() {
+            hub.set_current_project(Some(&info));
+        }
+
+        // 单击 = 按下 + 松开:只选中,不打开预览,不崩溃。
+        send(
+            &mut shell,
+            Msg::Files(F::TreeRowPress {
+                path: file.clone(),
+                is_dir: false,
+            }),
+        );
+        send(
+            &mut shell,
+            Msg::Files(F::TreeDragRelease {
+                shift: false,
+                command: false,
+            }),
+        );
+        assert_eq!(shell.files.selected_paths(), vec![file.clone()]);
+        assert!(
+            !preview_has_tab_for(&shell, &file),
+            "单击不应该打开预览(双击才打开)"
+        );
+
+        // 双击文件:在预览里打开。
+        send(
+            &mut shell,
+            Msg::Files(F::TreeRowDoubleClick {
+                path: file.clone(),
+                is_dir: false,
+            }),
+        );
+        assert!(preview_has_tab_for(&shell, &file), "双击文件应在预览里打开");
+
+        // 双击目录:展开 / 折叠,不是预览。
+        send(
+            &mut shell,
+            Msg::Files(F::TreeRowDoubleClick {
+                path: repo.join("sub"),
+                is_dir: true,
+            }),
+        );
+    }
+
+    /// 同一类崩溃的整类防护:库里"必须由宿主拦截"的每一条消息,经产品入口发进去都不能 panic。
+    #[test]
+    fn every_library_message_the_host_must_intercept_is_survivable() {
+        use crate::projects::Message as P;
+        use dozer_panel_files::Message as F;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = test_temp_dir("intercepts");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let file = repo.join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        let info = dozer_model::ProjectInfo {
+            id: 4,
+            path: repo.to_string_lossy().into_owned(),
+            name: "repo".into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        shell.files.attach_handle(rt.handle().clone());
+        send(
+            &mut shell,
+            Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![
+                info.clone(),
+            ])))),
+        );
+        shell.projects.open_tab_for_test(info.id);
+        send(&mut shell, Msg::Projects(P::Activate(info.id)));
+        shell.files.set_project(Some(&info));
+        for m in [
+            F::TreeRowPress {
+                path: file.clone(),
+                is_dir: false,
+            },
+            F::TreeDragRelease {
+                shift: false,
+                command: false,
+            },
+            F::TreeRowDoubleClick {
+                path: file.clone(),
+                is_dir: false,
+            },
+            F::TreeRowDoubleClick {
+                path: repo.clone(),
+                is_dir: true,
+            },
+            F::CopyPath(file.clone(), dozer_panel_files::fs::PathKind::Relative),
+            F::TextInputMenuOpen(dozer_panel_files::adapter::TextInputTarget {
+                id: iced::widget::Id::new("x"),
+                secure: false,
+            }),
+            F::FileHistoryRollbackPrevious(file.clone()),
+            F::RequestSendToAgentTerminal {
+                is_dir: false,
+                relative: "a.txt".into(),
+            },
+        ] {
+            send(&mut shell, Msg::Files(m));
+        }
+        // 左键松开(全局事件)也一样:没有拖拽在进行时是空操作。
+        send(&mut shell, Msg::LeftButton(true));
+        send(&mut shell, Msg::LeftButton(false));
+    }
+
+    /// 单击不是拖拽:按住时间太短或位移不够都不能推进到 `Dragging`;真拖拽两道阈值都要过。
+    #[test]
+    fn a_quick_click_never_becomes_a_drag_but_a_held_move_does() {
+        use crate::projects::Message as P;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = test_temp_dir("dragthreshold");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let file = repo.join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        let info = dozer_model::ProjectInfo {
+            id: 5,
+            path: repo.to_string_lossy().into_owned(),
+            name: "repo".into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        shell.files.attach_handle(rt.handle().clone());
+        send(
+            &mut shell,
+            Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![
+                info.clone(),
+            ])))),
+        );
+        shell.projects.open_tab_for_test(info.id);
+        send(&mut shell, Msg::Projects(P::Activate(info.id)));
+        shell.files.set_project(Some(&info));
+
+        shell.files.set_window_probe((800.0, 600.0), (100.0, 100.0));
+        shell.files.arm_tree_drag(file.clone(), false);
+        // 位移够远但按住时间太短(trackpad 快速点按):不是拖拽。
+        shell.files.set_window_probe((800.0, 600.0), (160.0, 100.0));
+        assert!(!shell.files.maybe_confirm_tree_drag(true));
+        // 按住够久但没动:也不是。
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        shell.files.set_window_probe((800.0, 600.0), (100.0, 100.0));
+        assert!(!shell.files.maybe_confirm_tree_drag(true));
+        // 两道都过:才是拖拽。
+        shell.files.set_window_probe((800.0, 600.0), (160.0, 100.0));
+        assert!(shell.files.maybe_confirm_tree_drag(true));
+        // 左键其实没按着却残留拖拽:自愈清空。
+        assert!(!shell.files.maybe_confirm_tree_drag(false));
+        assert!(!shell.files.tree_drag_active());
+    }
+
+    fn preview_has_tab_for(shell: &ProductShell, path: &std::path::Path) -> bool {
+        let Some(project) = shell.projects.current_project() else {
+            return false;
+        };
+        shell
+            .preview
+            .as_ref()
+            .and_then(|hub| hub.state(ViewerPanel::Files, project.id))
+            .is_some_and(|state| {
+                state.pane.tabs().iter().any(
+                    |tab| matches!(&tab.kind, dozer_panel_preview::TabKind::File(p) if p == path),
+                )
+            })
     }
 
     fn send(shell: &mut ProductShell, m: Msg) {

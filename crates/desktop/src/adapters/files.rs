@@ -364,6 +364,78 @@ impl FilesPanel {
             .unwrap_or_default()
     }
 
+    /// 树内行被按下:武装拖拽(库的 `TreeRowPress` 由宿主拦截,`files::update` 收到会 `unreachable!`)。
+    /// 单击只选中,不展开 / 不打开,那要等松开(见 [`Self::release_tree_drag`])或双击。
+    pub fn arm_tree_drag(&mut self, path: PathBuf, is_dir: bool) {
+        let cursor = self.window.cursor;
+        if let Some(state) = self.state.as_mut() {
+            state.arm_tree_drag(path, is_dir, cursor, std::time::Instant::now());
+        }
+    }
+
+    /// 是否有一场树内拖拽在进行(含还没越过阈值的 `Pending`):产品据此决定左键松开时要不要收尾。
+    pub fn tree_drag_active(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|s| s.tree_drag_press_pos().is_some())
+    }
+
+    /// 左键松开:把"这场拖拽有没有走到 `Dragging`"读成 `confirmed`,发库的 `TreeDragEnd`。
+    /// 没越过阈值就是一次单击(只选中)。
+    pub fn release_tree_drag(
+        &mut self,
+        shift: bool,
+        command: bool,
+        project_id: Option<i64>,
+    ) -> iced::Task<Msg> {
+        let confirmed = self.state.as_ref().is_some_and(|s| s.tree_drag_confirmed());
+        self.update(
+            FilesMessage::TreeDragEnd {
+                confirmed,
+                shift,
+                command,
+            },
+            project_id,
+        )
+    }
+
+    /// 每次光标移动调用:`Pending` 的拖拽同时越过距离和按住时长两道阈值才推进到 `Dragging`
+    /// (与 Dozer 同一套阈值,在 `dozer-panel-host`)。左键并未物理按住却还残留拖拽时自愈清空。
+    /// 返回是否发生了推进。
+    pub fn maybe_confirm_tree_drag(&mut self, left_mouse_down: bool) -> bool {
+        let Some(state) = self.state.as_mut() else {
+            return false;
+        };
+        if !left_mouse_down {
+            state.cancel_tree_drag();
+            return false;
+        }
+        let cursor = self.window.cursor;
+        let confirm = state.tree_drag_is_pending()
+            && state
+                .tree_drag_press_pos()
+                .is_some_and(|p| dozer_panel_host::tree_drag_past_threshold(p, cursor))
+            && state
+                .tree_drag_armed_at()
+                .is_some_and(|t| dozer_panel_host::tree_drag_held_long_enough(t.elapsed()));
+        if confirm {
+            state.confirm_tree_drag();
+        }
+        confirm
+    }
+
+    /// 当前树里被选中的路径(排序后,测试里断言"单击只选中"用)。
+    #[cfg(test)]
+    pub fn selected_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self
+            .state
+            .as_ref()
+            .map(|s| s.tree_selected.iter().cloned().collect())
+            .unwrap_or_default();
+        paths.sort();
+        paths
+    }
+
     /// 面板视图(区域几何由骨架给出,与 Dozer 的 `files_pane` 同义)。
     pub fn view(&self, width: Length, outer: Border) -> Element<'_, Msg> {
         match &self.state {
