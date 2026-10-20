@@ -989,6 +989,7 @@ dependencies = [
  "iced",
  "iced_core",
  "iced_renderer",
+ "iced_runtime",
  "iced_widget",
  "objc2-foundation 0.3.2",
  "rfd",

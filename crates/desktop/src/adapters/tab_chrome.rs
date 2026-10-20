@@ -11,7 +11,6 @@
 //! 入口 / 下拉,不参与任何宽度决策;宽度估算 [`tab_display_width`] 是库反
 //! 过来要的那一份(估算而非测量,CJK 按全宽计)。
 
-#![allow(dead_code)] // Task 8 才会把 `overflow_menu` / `panel_tab` 接进 `pair_view`。
 
 use byteui::interaction::{icons, tabs};
 use iced_widget::core::{Border, Color, Element, Length, Padding};
