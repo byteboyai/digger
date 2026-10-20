@@ -102,7 +102,7 @@ Digger 一侧已有的:`MarkdownPanel` 自己用 wry 建原生子 webview(`markd
 - D1 分两个 crate(`dozer-preview-core` 与 `dozer-panel-preview`),库里不依赖 `wry`。
 - D2 webview 端口用"期望清单 + 事件 + 协议应答"三件套,不引入"创建 webview"的 trait。
 - D3 路由表整体搬走不删减,用 `PreviewCapabilities` 在产品层关闭未启用的类型。
-- D4 Project 与 Files 的右半边各一份 `PreviewPane`,与 Dozer 一致。
+- D4 Project 与 Files 的右半边各一份 `PreviewPane`,与 Dozer 一致。**Digger 一期:Project 面板的页签不落盘,切项目即丢弃(回来为空);只有 Files 面板的页签恢复。** Dozer 按项目常驻 workspace,Digger 不做(G-I3)。
 - D5 P4 改配对时同步修改 S5a、S5b-1 的单栏约定与测试。
 
 未解:

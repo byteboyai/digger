@@ -46,23 +46,23 @@ byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.4.5" }
 # 实现 `UsageService`;`dozer-panel-usage` 含公共 UI 与 bytehost Surface,只许宿主适配层
 # (`digger-desktop`)依赖。dozer 现有的 `v0.5.x` tag 是 App 发布 tag;库 crate 快照用
 # `libs-2026-10-19f` tag(ADR:升级 bytehost/byteui 时 dozer 与 digger 同日一起升)。
-dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
-dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
-dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
+dozer-model = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
+dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
+dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
 # 同源 Project 面板库(S5a):状态 / 更新 / 视图;依赖闭包不含 dozer-app/client/core。
-dozer-panel-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
+dozer-panel-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
 # 同源 Files 面板库(S5b-1):文件树状态 / 更新 / 视图 / 菜单;依赖闭包同样不含 dozer-app/client/core。
-dozer-panel-files = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
+dozer-panel-files = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
 # 面板库依赖的宿主件(激活上下文 / 请求身份);只许宿主适配层直接依赖。
 # 同源预览面板库(S5b-2 P3):清单 / 协议应答 / 注入脚本 / IPC 分类 + 面板状态;不含 wry。
-dozer-panel-preview = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
+dozer-panel-preview = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
 # 预览库背后的路由/画像/存储纯逻辑(`dozer-panel-preview` 的公开面已重导出大部分)。
-dozer-preview-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
-dozer-panel-host = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
+dozer-preview-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
+dozer-panel-host = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
 # 面板的 git 快照(分支/脏标/remote)与「修复项目」的 git init 共用同一个 tag,图里只有一份。
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
 # Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。
-dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19g" }
+dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-19h" }
 
 iced = { version = "0.14", default-features = false, features = ["tokio", "wgpu"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。

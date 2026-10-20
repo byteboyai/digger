@@ -50,7 +50,8 @@ pub enum Event {
 /// 产品可注入的上下文:资源根 + 允许读取的绝对路径 + IPC 回流通道。
 pub struct Host {
     assets_root: PathBuf,
-    allowed: Arc<Mutex<AllowedFiles>>,
+    /// 白名单按项目隔离(G-C1):删 / 切别的项目不许收回本项目已打开文件的授权。
+    allowed: Arc<Mutex<std::collections::HashMap<i64, AllowedFiles>>>,
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
     rx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Event>>>>,
 }
@@ -79,7 +80,7 @@ impl Host {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             assets_root: root,
-            allowed: Arc::new(Mutex::new(AllowedFiles::new())),
+            allowed: Arc::new(Mutex::new(std::collections::HashMap::new())),
             tx,
             rx: Arc::new(Mutex::new(Some(rx))),
         }
@@ -95,21 +96,40 @@ impl Host {
     /// 白名单是精确匹配(库的 `serve_allowlisted_file` 不做 canonicalize),带
     /// `..` 或相对分量入表会在真机上 404。
     pub fn allow_file(&self, path: impl AsRef<Path>) {
-        let path = path.as_ref();
-        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        self.allowed.lock().expect("allowed 锁").insert(path);
+        self.allow_file_for(0, path);
     }
 
-    /// 清空白名单(切走 / 删除项目时,D4:预览不跨项目留存)。
+    /// 为某个项目授权一个路径。项目 id 只做隔离用,不参与协议应答。
+    pub fn allow_file_for(&self, project_id: i64, path: impl AsRef<Path>) {
+        let path = path.as_ref();
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.allowed
+            .lock()
+            .expect("allowed 锁")
+            .entry(project_id)
+            .or_default()
+            .insert(path);
+    }
+
+    /// 撤掉某个项目的全部授权(删除项目时)。
+    pub fn clear_allowed_for(&self, project_id: i64) {
+        self.allowed.lock().expect("allowed 锁").remove(&project_id);
+    }
+
+    /// 清空所有项目的白名单(测试 / 宿主自检用)。
     pub fn clear_allowed(&self) {
         self.allowed.lock().expect("allowed 锁").clear();
     }
 
-    /// 某路径是否已在白名单(测试与宿主自检用,不触发读取)。
+    /// 某路径是否已在任一项目的白名单里(测试与宿主自检用,不触发读取)。
     pub fn accepts(&self, path: impl AsRef<Path>) -> bool {
         let path = path.as_ref();
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        self.allowed.lock().expect("allowed 锁").contains(&path)
+        self.allowed
+            .lock()
+            .expect("allowed 锁")
+            .values()
+            .any(|files| files.contains(&path))
     }
 
     /// 当前活着的预览句柄 id(库取宿主脚本时据此剔除已销毁页签)。
@@ -132,12 +152,10 @@ impl Host {
         project_id: i64,
         panel: ViewerPanel,
     ) -> Vec<(usize, String)> {
+        // G-I1:库已返回 `binding.webview_id()`(Project 侧含偏移),不能再加。
         state
             .pane
             .take_host_scripts(&self.live_ids(), project_id, panel)
-            .into_iter()
-            .map(|(id, script)| (id + id_offset(panel), script))
-            .collect()
     }
 
     pub fn take_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Event>> {
@@ -227,8 +245,14 @@ impl Host {
             })
             .with_custom_protocol("dozer".into(), move |_id, request| {
                 let allowed = allowed.lock().expect("allowed 锁");
+                // 合并各项目的授权交给库做精确匹配(路径 → 项目),页面本身
+                // 只会请求自己那一份,合并不会扩大可达面材。
+                let files: AllowedFiles = allowed
+                    .values()
+                    .flat_map(|files| files.iter().cloned())
+                    .collect();
                 let uri = request.uri().to_string();
-                let reply = dozer_panel_preview::assets::handle_protocol(&root, &allowed, &uri)
+                let reply = dozer_panel_preview::assets::handle_protocol(&root, &files, &uri)
                     .unwrap_or_else(dozer_panel_preview::assets::not_found);
                 wry::http::Response::builder()
                     .status(reply.status)

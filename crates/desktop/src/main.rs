@@ -18,6 +18,11 @@ use iced::{Element, Task};
 
 use product::{Msg, ProductShell};
 
+// 下面这个 thread local(以及 `product::CURRENT_PANES`)是给 `PanelDisplay`
+// 适配器**取外部状态**的绕法:库的 `PanelDisplay` 方法签名(`fn background(&self)`
+// 等)没有地方传窗口尺寸 / 分栏状态,而适配器本身是 `&self` 的零状态展示对象。
+// 因此由产品每帧 `view` 前刷新一份快照,适配器只读。约束:**只读、每帧覆盖、
+// 不跨帧累积**——见 `pane_snapshot_does_not_outlive_the_frame`。
 thread_local! {
     /// 最近一次已知的窗口逻辑尺寸:只给 `PanelDisplay` 这类拿不到 `ProductShell` 的展示适配器用。
     pub(crate) static CURRENT_WINDOW: std::cell::Cell<Option<(f32, f32)>> =

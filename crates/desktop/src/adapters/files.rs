@@ -616,6 +616,73 @@ mod tests {
         assert_eq!(FilesPanel::open_path(&request), Some(&weird));
     }
 
+    /// G-M:降级页 / 页签菜单的"用系统应用打开"走 `system_opener`——**路径
+    /// 必须作为单个 argv 传给 `open` / `xdg-open`**,不经 shell、不因空格或引号
+    /// 被拆开。用 PATH 里的假 opener 记录 argv 来钉住这条语义。
+    #[test]
+    fn system_opener_passes_the_path_as_one_argument_and_never_through_a_shell() {
+        let dir = std::env::temp_dir().join(format!(
+            "digger-opener-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("argv.log");
+        let program = dir.join(if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        });
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", log.display()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&program).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&program, perms).unwrap();
+        }
+        let old_path = std::env::var_os("PATH");
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let mut path = dir.display().to_string();
+        if let Some(old) = &old_path {
+            path.push_str(sep);
+            path.push_str(&old.to_string_lossy());
+        }
+        // SAFETY:测试单线程跑(`--test-threads=1`),这里不并发读 PATH。
+        unsafe { std::env::set_var("PATH", &path) };
+
+        let weird = PathBuf::from("/tmp/a dir/with \"quotes\" and 'single' $HOME;x.txt");
+        open_with_default(&system_opener(), &weird);
+        // spawn 是异步的:等日志出现(最多 2 秒)。
+        let mut got = None;
+        for _ in 0..200 {
+            if let Ok(body) = std::fs::read_to_string(&log) {
+                got = Some(body);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        unsafe {
+            match &old_path {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        let got = got.expect("假 opener 必须被调用");
+        let lines: Vec<&str> = got.lines().collect();
+        assert_eq!(
+            lines,
+            vec![weird.to_string_lossy().as_ref()],
+            "路径必须是唯一的 argv,空格 / 引号 / $ / ; 原样保留"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 没有项目时右键空白区域:不 panic,也不弹空菜单。
     #[test]
     fn the_context_menu_request_is_not_dropped_when_no_project_is_open() {

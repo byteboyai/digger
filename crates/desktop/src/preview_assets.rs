@@ -93,8 +93,10 @@ mod tests {
     }
 
     /// 产品里 `Host::new(roots())` 之前必须先叫这一句;缺资源时宿主只会整块白屏。
+    /// (原名 `selftest_fails_when_a_fixture_is_missing`,名不副实:它测的是
+    /// `missing_in` 对**资源目录**的检查,与 selftest 夹具无关。G-M)
     #[test]
-    fn selftest_fails_when_a_fixture_is_missing() {
+    fn missing_in_reports_each_absent_required_dir() {
         let dir = std::env::temp_dir().join(format!(
             "digger-preview-missing-{}-{:?}",
             std::process::id(),
@@ -116,6 +118,21 @@ mod tests {
             "已存在的入口文件不该报缺:{missing:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 计划里的 `bundled_layout_has_the_three_first_batch_dirs` 被挪进了
+    /// `package-macos.sh` 的 shell 检查;这里补一个真正的单元测试:开发态资源根
+    /// 必须三个目录齐全,否则产品启动就白屏(G-M)。
+    #[test]
+    fn dev_roots_have_every_required_dir() {
+        let root = roots();
+        let assets = root.parent().expect("flyfish 有父目录");
+        let missing = missing_in(assets);
+        assert!(
+            missing.is_empty(),
+            "开发态资源根 {} 缺:{missing:?}",
+            assets.display()
+        );
     }
 
     /// 缺一个入口文件也必须报出来:宿主的 `dozer://` 应答会把 404 静默落成白屏。

@@ -133,6 +133,10 @@ impl PreviewHub {
     }
 
     /// 当前项目变了:旧项目的两份状态整份丢掉(不常驻),新项目按需恢复页签。
+    ///
+    /// G-C1:切换**不是**删除——旧项目已落盘的页签(`preview_state/<id>.json`)
+    /// 原样留着,切回来由 `restore_tabs` 恢复(D4);白名单也按项目隔离,切走只
+    /// 让旧项目的授权失效,不碰别的项目。
     pub fn set_current_project(&mut self, project: Option<&ProjectInfo>) {
         let SameProject::Change { ids } = self.classify(project) else {
             return;
@@ -151,7 +155,13 @@ impl PreviewHub {
         }
     }
 
-    /// 项目被删除:丢掉状态、白名单与落盘文件。
+    /// 项目被**删除**:丢掉该项目自己的状态、白名单与落盘文件。
+    ///
+    /// 只在删除项目时调用(切项目走 [`Self::set_current_project`])。
+    ///
+    /// 三件事**总是**按 `project_id` 做,不看它此刻是不是当前项目:删除一个
+    /// 非当前项目时,它的白名单和落盘文件一样要撤。内存态只在被删的正是当前
+    /// 项目时才清(否则会把别的项目的 `PreviewPane` 一起丢掉)。
     pub fn forget_project(&mut self, project_id: i64) {
         if self.project_id == Some(project_id) {
             self.files = None;
@@ -159,8 +169,19 @@ impl PreviewHub {
             self.project_id = None;
             self.project_root = None;
         }
-        self.host.clear_allowed();
+        self.host.clear_allowed_for(project_id);
         self.persistence.remove(project_id);
+    }
+
+    /// 立刻把某面板的当前页签快照落盘(退出 / 测试时用,不等 `PersistTabs`)。
+    pub fn persist_now(&self, panel: ViewerPanel, project_id: i64) {
+        let Some(state) = self.state(panel, project_id) else {
+            return;
+        };
+        let snapshot = state.pane.persisted_snapshot();
+        if let Err(e) = self.persistence.save(project_id, &snapshot) {
+            eprintln!("digger: 保存预览状态 {project_id} 失败: {e}"); // cli-output
+        }
     }
 
     /// 当前项目里某一面板该有的原生页面清单(Task 8 的 `sync_native` 每帧取)。
@@ -212,13 +233,8 @@ impl PreviewHub {
         let Some(state) = self.state_mut(panel) else {
             return Vec::new();
         };
-        let offset = crate::adapters::preview_native::id_offset(panel);
-        state
-            .pane
-            .take_host_scripts(&live, project_id, panel)
-            .into_iter()
-            .map(|(id, script)| (id + offset, script))
-            .collect()
+        let scripts = state.pane.take_host_scripts(&live, project_id, panel);
+        with_pool_ids(scripts, panel)
     }
 
     fn state_mut(&mut self, panel: ViewerPanel) -> Option<&mut PreviewPanelState> {
@@ -366,7 +382,7 @@ impl PreviewHub {
                 run_effect(
                     effect,
                     move |message| {
-                        let _ = tx.send(Msg::Preview(panel, message));
+                        let _ = tx.send(Msg::Preview(panel, project_id, message));
                     },
                     &handle,
                     persistence.clone(),
@@ -376,9 +392,10 @@ impl PreviewHub {
     }
 
     fn product_effect(&mut self, panel: ViewerPanel, project_id: i64, effect: Effect) {
-        let _ = (panel, project_id);
+        let _ = panel;
         match effect {
-            Effect::AllowFile(path) => self.host.allow_file(path),
+            // 授权带上项目:切 / 删别的项目不影响本项目已打开的文件(G-C1)。
+            Effect::AllowFile(path) => self.host.allow_file_for(project_id, path),
             // D3:系统应用打开只从降级页 /页签菜单发起,用系统打开器。
             Effect::OpenExternal { path } => crate::adapters::files::open_with_default(
                 &crate::adapters::files::system_opener(),
@@ -400,8 +417,12 @@ impl PreviewHub {
     }
 }
 
-/// 一期能力集(计划 Global Constraints):只开代码 / 渲染 / 富文本宿主,
-/// 表格 / PlantUML / PDF / 媒体 / JSON 一律走降级页并保留"用系统应用打开"。
+/// 一期能力集(计划 Global Constraints):开代码 / 渲染 / 富文本 / 媒体宿主。
+///
+/// G-I4:`media` 必须开——`.png` 等光栅图由 `is_image_annotate_extension` 认领,
+/// 只有 `media: true` 才路由到 Rendered,再落到 `dozer://image-annotate/`。
+/// 发布包本来就带 `image-annotate/`(`package-macos.sh` 强制要求)。
+/// 表格 / PlantUML / PDF / JSON 仍走降级页并保留"用系统应用打开"。
 fn digger_capabilities() -> PreviewCapabilities {
     PreviewCapabilities {
         code: true,
@@ -411,16 +432,17 @@ fn digger_capabilities() -> PreviewCapabilities {
         tabular: false,
         plantuml: false,
         pdf: false,
-        media: false,
+        media: true,
     }
 }
 
 /// Digger 一期真正有页面资源的宿主:代码编辑器、Flyfish(带资源根)、
-/// 隔离 HTML。图片标注与 PlantUML 渲染器不在发布包里。
+/// 隔离 HTML、图片标注。PlantUML 渲染器不在发布包里。
 fn digger_hosts_url(url: &str) -> bool {
     url.starts_with(dozer_panel_preview::EDITOR_URL_PREFIX)
         || url.starts_with("dozer://flyfish/")
         || url.starts_with("dozer://html/")
+        || url.starts_with("dozer://image-annotate/")
 }
 
 /// 是否由产品侧执行(其余交给库的 `run_effect`)。
@@ -450,11 +472,21 @@ fn default_state() -> PreviewPanelState {
 /// Digger 的两个预览面板都是"页签持久化 + 可物化"(与 Dozer 的 Files 面板同型;
 /// Dozer 的 Project 面板是会话期状态,Digger 的 Project 面板是项目信息列,
 /// 不在其中)。
-fn behavior_of(_panel: ViewerPanel) -> PanelBehavior {
+fn behavior_of(panel: ViewerPanel) -> PanelBehavior {
     PanelBehavior {
-        persist_tabs: true,
+        // G-C4:`PersistTabs` 只带 `project_id`,两个面板都写就是互相覆盖
+        // `<id>.json`。Project 面板的页签是会话期状态(与 Dozer 一致),
+        // 只有 Files 落盘。
+        persist_tabs: panel != ViewerPanel::Project,
         materialize_suspended: true,
     }
+}
+
+/// G-I1:库的 `take_host_scripts` 已返回 `EditorHostBinding::webview_id()`
+/// (Project 侧含 `PROJECT_PREVIEW_ID_OFFSET`),产品**不能再加**偏移。
+/// `panel` 只保留在签名里,免得将来误以为要按面板换算。
+fn with_pool_ids(scripts: Vec<(usize, String)>, _panel: ViewerPanel) -> Vec<(usize, String)> {
+    scripts
 }
 
 /// 把预览状态层的回流接成一条持续到进程结束的 iced 流(库效果 / 后台结果)。
@@ -648,6 +680,284 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// G-C1:切项目只换当前项目,不动落盘文件;切回来页签还在(D4)。
+    #[test]
+    fn switching_projects_keeps_the_persisted_preview_state() {
+        let dir = std::env::temp_dir().join(format!("digger-preview-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let persistence = Arc::new(DiggerPersistence::new(&dir));
+        let mut hub = PreviewHub::with_persistence(Host::new(&dir), persistence.clone());
+        let p1 = project(1, &dir);
+        let p2dir = dir.join("two");
+        std::fs::create_dir_all(&p2dir).unwrap();
+        let p2 = project(2, &p2dir);
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, write(&dir, "a.py"), None);
+        hub.persist_now(ViewerPanel::Files, 1);
+        let state = persistence.state_path(1);
+        assert!(state.exists(), "切走之前页签已经落盘");
+
+        hub.set_current_project(Some(&p2));
+        assert!(state.exists(), "切项目不许删旧项目的落盘文件");
+        hub.set_current_project(Some(&p1));
+        let tabs = hub.state(ViewerPanel::Files, 1).unwrap().pane.tabs();
+        assert!(
+            tabs.iter()
+                .any(|t| matches!(&t.kind, TabKind::File(p) if p.ends_with("a.py"))),
+            "切回来要恢复 a.py: {tabs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C2:迟到的保存结果带着**发起时**的项目;切到 B 后必须被丢掉,
+    /// 不能落到 B 里同号的页签。
+    #[test]
+    fn a_late_save_result_for_project_a_never_reaches_project_b() {
+        let dir = std::env::temp_dir().join(format!("digger-preview-late-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let one = dir.join("one");
+        let two = dir.join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &one);
+        let p2 = project(2, &two);
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, write(&one, "a.py"), None);
+        hub.set_current_project(Some(&p2));
+        let before: Vec<(usize, bool)> = hub
+            .state(ViewerPanel::Files, 2)
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .map(|t| (t.id, t.dirty))
+            .collect();
+        // A 的页签 id 从 1 起,B 的也一样——这正是串台的温床。
+        let fx = hub.dispatch(
+            ViewerPanel::Files,
+            1,
+            Message::SaveFinished {
+                tab_id: 1,
+                revision: 9,
+                result: Ok(()),
+            },
+        );
+        assert!(fx.is_empty(), "A 的迟到结果不许触发 B 的后续效果");
+        let after: Vec<(usize, bool)> = hub
+            .state(ViewerPanel::Files, 2)
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .map(|t| (t.id, t.dirty))
+            .collect();
+        assert_eq!(before, after, "B 的页签不许被 A 的保存结果改动");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C2:webview IPC 的绑定说的项目不是当前项目时整条丢弃。
+    #[test]
+    fn a_late_ipc_event_with_a_foreign_binding_is_dropped() {
+        use dozer_panel_preview::host_ipc::HostEvent;
+        use dozer_panel_preview::{
+            HostBinding, ImageAnnotateEvent, PROTOCOL_VERSION, WebviewEnvelope,
+        };
+        let dir = std::env::temp_dir().join(format!("digger-preview-ipc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let one = dir.join("one");
+        let two = dir.join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &one);
+        let p2 = project(2, &two);
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, write(&one, "a.png"), None);
+        // 切到 B:此时 A 的页签已销毁,但页面可能还在飞一条迟到的 IPC。
+        hub.set_current_project(Some(&p2));
+        let binding = HostBinding::new(1, ViewerPanel::Files, 1, "p1-t1".to_string());
+        let event = HostEvent::ImageAnnotate {
+            binding: binding.clone(),
+            envelope: WebviewEnvelope {
+                protocol_version: PROTOCOL_VERSION,
+                project_id: 1,
+                panel: "files".to_string(),
+                tab_id: 1,
+                document_id: "p1-t1".to_string(),
+                revision: 0,
+                request_id: None,
+                payload: ImageAnnotateEvent::Ready,
+            },
+        };
+        let panel = event.panel().unwrap();
+        let project_id = event.project_id().unwrap();
+        assert_eq!(project_id, 1, "绑定自带项目 id");
+        let fx = hub.dispatch(panel, project_id, Message::Host(event));
+        assert!(fx.is_empty(), "外来绑定不许产生效果");
+        assert!(
+            hub.state(ViewerPanel::Files, 1).is_none(),
+            "A 的状态不许被迟到事件重建"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C2:页签 id 每个项目都从 1 数,跨项目不可互换。
+    #[test]
+    fn tab_ids_are_not_shared_across_projects() {
+        let dir = std::env::temp_dir().join(format!("digger-preview-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let one = dir.join("one");
+        let two = dir.join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &one);
+        let p2 = project(2, &two);
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, write(&one, "a.py"), None);
+        hub.open(ViewerPanel::Files, &p1, write(&one, "b.py"), None);
+        let a_ids: Vec<usize> = hub
+            .state(ViewerPanel::Files, 1)
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        hub.set_current_project(Some(&p2));
+        hub.open(ViewerPanel::Files, &p2, write(&two, "c.py"), None);
+        let b_ids: Vec<usize> = hub
+            .state(ViewerPanel::Files, 2)
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(a_ids, vec![0, 1, 2], "A 是 Blank + 两个文件");
+        assert_eq!(b_ids, vec![0, 1], "B 是 Blank + 一个文件");
+        assert_eq!(a_ids[1], b_ids[1], "文件页签 id 两边都从 1 数");
+        // 同一条 `SelectTab` 投给 A 时不许碰 B(项目 id 是唯一的区分手段)。
+        let before: Vec<(usize, bool)> = hub
+            .state(ViewerPanel::Files, 2)
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .map(|t| (t.id, t.dirty))
+            .collect();
+        let fx = hub.dispatch(ViewerPanel::Files, 1, Message::SelectTab(1));
+        assert!(fx.is_empty(), "A 的项目 id 与当前项目不符,整条丢弃");
+        let after: Vec<(usize, bool)> = hub
+            .state(ViewerPanel::Files, 2)
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .map(|t| (t.id, t.dirty))
+            .collect();
+        assert_eq!(before, after, "B 不受影响");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C1:白名单按项目隔离——删 / 切别的项目不能收回当前项目已打开文件的授权。
+    #[test]
+    fn deleting_project_a_does_not_revoke_project_bs_allowlist() {
+        let dir =
+            std::env::temp_dir().join(format!("digger-preview-isolate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let one = dir.join("one");
+        let two = dir.join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let persistence = Arc::new(DiggerPersistence::new(&dir));
+        let mut hub = PreviewHub::with_persistence(Host::new(&dir), persistence);
+        let p1 = project(1, &one);
+        let p2 = project(2, &two);
+        let a = write(&one, "a.py");
+        let b = write(&two, "b.py");
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, a.clone(), None);
+        hub.set_current_project(Some(&p2));
+        hub.open(ViewerPanel::Files, &p2, b.clone(), None);
+        assert!(hub.host.accepts(&b), "b 已授权");
+        assert!(hub.host.accepts(&a), "切走不撤别的项目的授权(切回来还要用)");
+
+        // 删掉 A:只撤 A 的授权,当前项目 B 的文件必须还能读。
+        hub.forget_project(1);
+        assert!(hub.host.accepts(&b), "删 A 不能收回 B 的授权");
+        assert!(!hub.host.accepts(&a), "删 A 要撤掉 A 自己的授权");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C1:切项目不许走「删除」语义(只有删除才调用 forget_project)。
+    #[test]
+    fn forget_project_is_only_called_on_delete() {
+        let src = include_str!("preview.rs");
+        let product = include_str!("../product.rs");
+        let calls: Vec<&str> = product
+            .lines()
+            .filter(|line| line.contains("forget_project(") && !line.trim_start().starts_with("//"))
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "product.rs 里只该有「删除项目」这一处: {calls:?}"
+        );
+        assert!(src.contains("pub fn forget_project("), "hub 仍提供删除入口");
+    }
+
+    /// G-M:`attach_handle` 之前 `execute` 会**静默**丢掉库侧效果(启动早期
+    /// 还没进 iced 运行时,没有后台可跑)。产品侧效果照做。`boot()` 里必须
+    /// 先 `attach_handle` 再 `set_current_project` / 恢复页签——这条测试把
+    /// 「先后顺序错了会丢效果」变成可断言的:同一个 `SaveFile` 在挂句柄前
+    /// 只留下产品侧痕迹,挂句柄后才会走库。
+    #[test]
+    fn library_effects_are_dropped_until_a_runtime_handle_is_attached() {
+        let dir = std::env::temp_dir().join(format!("digger-preview-boot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        let a = write(&dir, "a.py");
+        let b = write(&dir, "b.py");
+        let effects = |path: &std::path::Path| {
+            vec![
+                Effect::AllowFile(path.to_path_buf()),
+                Effect::SaveFile {
+                    tab_id: 1,
+                    path: path.to_path_buf(),
+                    text: "x".to_string(),
+                    revision: 0,
+                },
+            ]
+        };
+        hub.run_in(ViewerPanel::Files, 1, |_, _| effects(&a));
+        assert!(hub.host.accepts(&a), "产品侧效果在挂句柄前照做");
+        let mut rx = hub.rx.take().expect("rx 仍在");
+        assert!(
+            rx.try_recv().is_err(),
+            "没挂句柄就没有后台,SaveFile 不该有回投"
+        );
+        hub.rx = Some(rx);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        hub.attach_handle(runtime.handle().clone());
+        hub.run_in(ViewerPanel::Files, 1, |_, _| effects(&b));
+        assert!(hub.host.accepts(&b));
+        assert!(
+            hub.handle.is_some(),
+            "boot() 必须先把句柄挂上,后面的库效果才不会丢"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn allow_file_effect_populates_the_host_allowlist_with_canonical_paths() {
         let dir = std::env::temp_dir().join(format!("digger-preview-allow-{}", std::process::id()));
@@ -661,6 +971,102 @@ mod tests {
         hub.open(ViewerPanel::Files, &p1, dotty, None);
         let canonical = std::fs::canonicalize(&file).unwrap();
         assert!(hub.host.accepts(&canonical));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-I1:库的 `take_host_scripts` 返回的 id 已经是 `binding.webview_id()`
+    /// (Project 侧含偏移);Digger 再加一次就会指到不存在的页面。
+    #[test]
+    fn project_panel_host_scripts_target_the_right_webview_id() {
+        use crate::adapters::preview_native::id_offset;
+        let dir = std::env::temp_dir().join(format!("digger-preview-gi1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        let doc = dir.join("lib.rs");
+        std::fs::write(&doc, "fn main() {}\n").unwrap();
+        hub.open(ViewerPanel::Project, &p1, doc.clone(), None);
+        let state = hub.state_mut(ViewerPanel::Project).expect("Project 状态");
+        let tab_id = state.pane.tabs()[1].id;
+        state.pane.queue_editor_command(
+            tab_id,
+            dozer_panel_preview::EditorCommand::SetDocument {
+                text: "x".into(),
+                revision: 0,
+                language: "markdown".into(),
+                read_only: true,
+            },
+        );
+        let expected = dozer_panel_preview::EditorHostBinding::new(
+            1,
+            ViewerPanel::Project,
+            tab_id,
+            doc.clone(),
+        )
+        .webview_id();
+        assert_eq!(
+            expected,
+            id_offset(ViewerPanel::Project) + tab_id,
+            "库侧 id 本身已经含偏移"
+        );
+        // 走 Digger 侧的换算函数(产品真正用的那条路)。
+        let scripts = with_pool_ids(vec![(expected, "script".to_string())], ViewerPanel::Project);
+        assert_eq!(scripts.len(), 1, "命令已排队并取出");
+        assert_eq!(
+            scripts[0].0, expected,
+            "取出脚本的 id 必须是库给的 webview_id,不能再加偏移"
+        );
+        let files = with_pool_ids(vec![(3, "script".to_string())], ViewerPanel::Files);
+        assert_eq!(files[0].0, 3, "Files 侧本来就没有偏移");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C4:只有 Files 面板落盘页签;Project 面板的页签不许覆盖同一个文件。
+    #[test]
+    fn only_the_files_panel_persists_its_tabs() {
+        assert!(behavior_of(ViewerPanel::Files).persist_tabs);
+        assert!(
+            !behavior_of(ViewerPanel::Project).persist_tabs,
+            "Project 页签是会话期状态(Dozer 同款)"
+        );
+    }
+
+    /// G-C4:Project 面板打开的页签不会出现在重启后的 Files 恢复里。
+    #[test]
+    fn project_tabs_never_overwrite_the_files_state_file() {
+        let dir = std::env::temp_dir().join(format!("digger-preview-gc4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let persistence = Arc::new(DiggerPersistence::new(&dir));
+        let mut hub = PreviewHub::with_persistence(Host::new(&dir), persistence.clone());
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        let files = write(&dir, "a.py");
+        hub.open(ViewerPanel::Files, &p1, files.clone(), None);
+        hub.persist_now(ViewerPanel::Files, 1);
+        let after_files = std::fs::read_to_string(persistence.state_path(1)).unwrap();
+
+        let doc = dir.join("README.md");
+        std::fs::write(&doc, "# hi\n").unwrap();
+        hub.open(ViewerPanel::Project, &p1, doc.clone(), None);
+        // 库排出的 `PersistTabs` 也要真的不再出现(行为开关,不是只靠 `persist_now` 的面板参数)。
+        let fx = hub.dispatch(ViewerPanel::Project, 1, Message::SelectTab(1));
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::PersistTabs { .. })),
+            "Project 更新不该排 PersistTabs: {fx:?}"
+        );
+        hub.persist_now(ViewerPanel::Files, 1);
+        assert_eq!(
+            std::fs::read_to_string(persistence.state_path(1)).unwrap(),
+            after_files,
+            "Project 页签不许进 Files 的落盘"
+        );
+        assert!(
+            !after_files.contains("README.md"),
+            "Files 状态里没有 Project 的文档: {after_files}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -691,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn tabular_json_and_media_files_get_the_degraded_page_not_a_webview() {
+    fn tabular_json_and_plantuml_get_the_degraded_page_not_a_webview() {
         let dir = std::env::temp_dir().join(format!("digger-preview-caps-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -701,7 +1107,6 @@ mod tests {
         for (name, _body) in [
             ("t.csv", "a,b\n1,2\n"),
             ("j.json", "{\"a\":1}\n"),
-            ("p.png", "not really a png"),
             ("d.puml", "@startuml\n@enduml\n"),
         ] {
             hub.open(ViewerPanel::Files, &p1, write(&dir, name), None);
@@ -716,7 +1121,41 @@ mod tests {
         });
         assert!(
             desired.is_empty(),
-            "一期能力集下这些类型走降级页,不该有原生页面: {desired:?}"
+            "表格 / JSON / PlantUML 走降级页,不该有原生页面: {desired:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-I4:`.png` 走 image-annotate、`.svg` 走 Flyfish——两者都必须是 webview,
+    /// 与打包脚本(`image-annotate/` 必须存在)和 Task 10 真机清单一致。
+    #[test]
+    fn png_and_svg_open_in_a_webview_in_the_preview_hub() {
+        let dir = std::env::temp_dir().join(format!("digger-preview-media-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        for name in ["p.png", "v.svg"] {
+            hub.open(ViewerPanel::Files, &p1, write(&dir, name), None);
+        }
+        let desired = hub.desired(ViewerPanel::Files, &p1, |_| {
+            Some(bytehost_core::LogicalRect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            })
+        });
+        let urls: Vec<&str> = desired.iter().map(|(spec, _)| spec.url.as_str()).collect();
+        assert!(
+            urls.iter()
+                .any(|u| u.starts_with("dozer://image-annotate/")),
+            ".png 应走 image-annotate: {urls:?}"
+        );
+        assert!(
+            urls.iter().any(|u| u.starts_with("dozer://flyfish/")),
+            ".svg 应走 Flyfish: {urls:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

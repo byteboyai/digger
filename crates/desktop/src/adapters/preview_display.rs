@@ -44,6 +44,8 @@ pub struct PreviewDisplay<'a> {
     pub tab_bar_px: f32,
     /// Digger 一期的配对布局把列表放在左边(D3),收起按钮据此画方向。
     pub list_on_left: bool,
+    /// 这棵预览属于哪个项目(G-C2):库消息回投时带上,产品据此丢弃迟到消息。
+    pub project_id: i64,
 }
 
 impl PreviewDisplay<'_> {
@@ -73,9 +75,33 @@ impl PreviewDisplay<'_> {
     }
 }
 
+/// 画预览面板的内容。库对宿主用 `'b`、对预览本体用 `'p`,但在点击 / 悬停闭包里
+/// **按引用**捕获 host(`move |..| host.wrap(..)`),所以 host 必须和返回元素活得
+/// 一样久(`'a`);这里的 `display` 由调用方保证(`preview_pane` 每帧给一份)。
+pub fn pane<'a>(
+    display: &'a PreviewDisplay<'a>,
+    state: &'a dozer_panel_preview::PreviewPanelState,
+    panel: ViewerPanel,
+    project: &'a dozer_model::ProjectInfo,
+    width: iced::Length,
+) -> Element<'a, Msg> {
+    dozer_panel_preview::view::pane(
+        &state.pane,
+        state.tab_first,
+        state.error.as_ref(),
+        panel,
+        display,
+        &dozer_panel_preview::view::ViewCtx {
+            project: Some(project),
+        },
+        width,
+        Border::default(),
+    )
+}
+
 impl PanelDisplay<Msg> for PreviewDisplay<'_> {
     fn wrap(&self, panel: ViewerPanel, message: LibMessage) -> Msg {
-        Msg::Preview(panel, message)
+        Msg::Preview(panel, self.project_id, message)
     }
 
     fn locale(&self) -> &str {
@@ -323,6 +349,7 @@ mod tests {
             locale: "en",
             tab_bar_px: 400.0,
             list_on_left: true,
+            project_id: 42,
         }
     }
 
@@ -358,11 +385,24 @@ mod tests {
         let project = d.wrap(ViewerPanel::Project, LibMessage::Retry(0));
         assert!(matches!(
             files,
-            Msg::Preview(ViewerPanel::Files, LibMessage::Retry(0))
+            Msg::Preview(ViewerPanel::Files, 42, LibMessage::Retry(0))
         ));
         assert!(matches!(
             project,
-            Msg::Preview(ViewerPanel::Project, LibMessage::Retry(0))
+            Msg::Preview(ViewerPanel::Project, 42, LibMessage::Retry(0))
+        ));
+    }
+
+    /// G-C2:回投时带的是**发起时**的项目,不是此刻聚焦的项目。
+    #[test]
+    fn wrap_carries_the_project_that_owns_the_pane() {
+        let d = PreviewDisplay {
+            project_id: 7,
+            ..display()
+        };
+        assert!(matches!(
+            d.wrap(ViewerPanel::Files, LibMessage::Retry(0)),
+            Msg::Preview(_, 7, _)
         ));
     }
 

@@ -25,6 +25,7 @@
   - **D2 页签控件自己写在 Digger(`tab_chrome.rs`),** 没有悬停动画(`hover_progress` 恒为 0,`hover_tooltip_ready` 恒为 false);byteui 目前没有 `panel_tab` / 溢出菜单。以后迁进 byteui 是单独任务。
   - **D3 行为改动(请审阅):** 文件树的 `PanelCommand::OpenFile` 从"系统默认应用"改为"在预览里打开";Project 的文档链接 `OpenLink` 同样改为在 Project 的预览里打开(S5a 现在是系统应用打开)。系统应用打开保留在预览降级页和页签右键里。
   - **D4 项目切换时销毁非当前项目的 webview,** 回来时由库按页签状态重新加载(`Suspended` → `Profiling`),不做 webview 常驻。
+    - **G-I3 取舍(已确认):** Project 面板的页签**不落盘**(`behavior_of` 里 `persist_tabs: panel != ViewerPanel::Project`),切项目时 Project 的 `PreviewPane` 整份丢弃,回来是空的;只有 Files 面板的页签跨重启 / 切项目恢复。脏缓冲仍由库的恢复快照兜底(D5)。Dozer 是按项目常驻 workspace,Digger 一期不做。
   - **D5 脏页签保护沿用库的恢复机制** (`ReadRecovery` / `ClearRecovery`);Digger 退出和关项目时对脏页签不弹确认,依赖恢复文件(与 Dozer 现状一致)。
 
 ## Review Focus

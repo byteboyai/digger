@@ -437,7 +437,7 @@ mod tests {
                 Side::Left,
                 "{panel} lives on the left by default, like Dozer"
             );
-            let pane = r.pane.expect("{panel} has a pane");
+            let pane = r.pane.unwrap_or_else(|| panic!("{panel} has a pane"));
             // 列表是第一块、默认在前;可拖窄收起。
             assert_eq!(pane.spec, PaneSpec::new(true, true));
             assert_eq!(
