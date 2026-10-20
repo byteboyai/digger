@@ -66,11 +66,15 @@
 - 修:切换只做 `set_current_project`;`forget_project` 只在**项目真被删除**时调用。白名单按项目隔离(`HashMap<i64, AllowedFiles>`),或切换时重建当前项目的授权。
 - 测试:`switching_projects_keeps_the_persisted_preview_state`、`switching_back_restores_the_tabs`、`deleting_project_a_does_not_revoke_project_bs_allowlist`、`forget_project_is_only_called_on_delete`。
 
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`)。`set_current_project` 不再删落盘文件(新增 `persist_now` 在切走前落盘);白名单改成 `Host.allowed: HashMap<i64, AllowedFiles>`、`AllowFile` → `allow_file_for(project_id, path)`;`forget_project` 移到 `project_delete_confirm`。三条测试全绿。
+
 ### G-C2 迟到消息不防串台(C2 的 Digger 部分)
 - 位置:`product.rs:1299`(`Msg::Preview(panel, message)` 用此刻的 `current_project_id()`);`adapters/preview.rs` 的 `run_effect` 回投闭包不带 `project_id`;`Msg::PreviewEvent` 转发 Host 事件时没拿 `binding.project_id` 比对。
 - 问题:`dispatch` 里的 `project_id` 过滤永远相等,防护是空操作。A 项目迟到的 `SaveFinished`、`WindowIndex`、`Profiled`、webview IPC 在切到 B 后落到 B 的同号页签(`tab_id` 每个状态都从头数)。
 - 修:`Msg::Preview` 携带 `project_id`(`Msg::Preview(ViewerPanel, i64, Message)`),效果回投时带上发起时的项目;Host 事件要求 `binding.project_id` 等于目标状态的项目,否则丢弃。
 - 测试:`a_late_save_result_for_project_a_never_reaches_project_b`、`a_late_ipc_event_with_a_foreign_binding_is_dropped`、`tab_ids_are_not_shared_across_projects`。
+
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`)。`Msg::Preview(ViewerPanel, i64, Message)`、`Msg::PreviewEvent` 用 `(event.panel(), event.project_id())`、`run_effect` 回投闭包带发起时的项目。三条测试全绿。
 
 ### G-C3 页签条可用宽度恒为 0(C3,推断)
 - 位置:`product.rs:35` `PREVIEW_DISPLAY` 是 `const`,`tab_bar_px: 0.0`;`preview.set_tab_bar_width(..)` 只喂给 `UpdateCtx`;库 `view.rs:756` 调 `tab_window(widths, 4.0, 0.0, first)`,byteui 在 `avail = 0` 且页签数 ≥ 2 时保底只放 1 个。
@@ -78,11 +82,15 @@
 - 修:`PreviewDisplay` 每帧用 `preview.tab_bar_px(panel)` 构造,不要用 `const`;宽度来源与库 `UpdateCtx.tab_bar_avail_px` 用同一个值。
 - 测试:`the_tab_bar_gets_the_real_available_width_each_frame`、`fifty_tabs_show_more_than_one_tab_and_paginate`;**真机必验**。
 
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`)。`preview_pane` 每帧 `preview.tab_bar_px(panel)` 构造 `PreviewDisplay`(不再用 `const`)。`the_tab_bar_gets_the_real_available_width_each_frame` / `fifty_tabs_show_more_than_one_tab_and_paginate` passed;把 `avail` 换回 `0.0` 会失败(已验)。**真机仍待验**。
+
 ### G-C4 Project 与 Files 写同一个持久化文件互相覆盖(C4)
 - 位置:`adapters/preview.rs:455` `behavior_of` 对两个面板都 `persist_tabs: true`;`PersistTabs` 只带 `project_id`,都写 `<id>.json`。
 - 问题:Dozer 的 Project 面板是 `persist_tabs = false`;Digger 注释对此的解释站不住。Project 的页签会覆盖 Files 的,重启后 Files 恢复出 Project 的页签。
 - 修:`persist_tabs = (panel == ViewerPanel::Files)`,与 Dozer 一致;或者两个面板各写各的文件(要先和用户确认是否有意偏离)。
 - 测试:`only_the_files_panel_persists_its_tabs`、`project_tabs_never_overwrite_the_files_state_file`。
+
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`)。按 Dozer 口径:`behavior_of` 里 `persist_tabs: panel != ViewerPanel::Project`,不另开文件。两条测试 passed;改回 `true` 会失败(已验)。
 
 ### G-C5 无当前项目 / 关闭最后一个项目时预览 webview 不销毁(C5)
 - 位置:`product.rs:655-664` `sync_preview_native` 在无当前项目或 `closing` 时直接 `return Vec::new()`,没有对 `Host::sync` 传空清单;函数注释说「清单为空,宿主销毁全部页面」,代码没这么做。
@@ -90,27 +98,39 @@
 - 修:无项目时也调 `host.sync(window, &[])`;`closing` 时调用 `destroy_all`。
 - 测试:`closing_the_last_project_tab_destroys_every_preview_webview`、`quitting_destroys_every_preview_webview`(用可注入的 live 计数或 `plan()` 输出断言)。
 
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`)。`sync_preview_native` 无项目 / closing 时 `host.sync(w, &[])`;抽出纯函数 `preview_project(current, closing)`。两条测试 passed(含 `plan()` 的三条 `Op::Destroy`)。**推断已由测试证实**。
+
 ### G-I1 `host_scripts()` 对 Project 面板重复加偏移
 - 位置:`adapters/preview.rs:205-220` 对库 `take_host_scripts` 的结果又加 `id_offset`;库返回的 `binding.webview_id()` 已含 `PROJECT_PREVIEW_ID_OFFSET`;`Host::take_host_scripts` 同理。
 - 影响(推断):Project 面板下延后取出的编辑器命令(`SetDocument`、视图恢复、跳行)发给不存在的 webview。
 - 修:只加一次偏移(优先:库已含则 Digger 不再加)。测试:`project_panel_host_scripts_target_the_right_webview_id`。
 
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`)。两处 `+ id_offset(panel)` 都删掉(`adapters/preview.rs` 的 `hub.take_host_scripts`、`preview_native/mod.rs` 的 `Host::take_host_scripts`),库的 `binding.webview_id()` 已含 `PROJECT_PREVIEW_ID_OFFSET`。测试 `project_panel_host_scripts_target_the_right_webview_id` 走 Digger 侧换算函数 `with_pool_ids`,断言输出 id == 库给的 id + `id_offset` 一次;把偏移加回去会得到 `2000001 != 1000001`(已验失败)。**推断已由测试证实**:原实现确实会重复加偏移。
+
 ### G-I2 webview 矩形可能比 Dozer 多 8px 上下空隙(推断)
 - 位置:`product.rs:165`:`slot.y + chrome(38) + inset(8)`,高度再减 `inset`。Dozer `webview_geometry.rs:169` 非放大态 `y = zone 顶 + 38`、`h` 到 zone 底;放大态 `y0 + 38`;库 `view::pane` 里 38 已含 8px 内边距。
 - 修:对照 Dozer 的两种态改成同一公式;`preview_rect_is_the_second_block_below_the_chrome` 现在把这个多余的 `inset` 钉死了,先改测试期望(附 Dozer 公式出处),再改代码。**真机截图对比 Dozer 同一文件的 webview 顶 / 底边。**
 
+- **不修(推断不成立)**。核实库 `view.rs:930` 是 `container(content).padding(region.padding)`,整块(页签条 + 分隔线 + 正文)都在 8px padding 里,`preview_chrome_top_px() = 38` 只是页签条 + 分隔线的高度。所以 `y = slot.y + 38 + 8`、`h = slot.h - 38 - 2*8` **正是**与 iced 布局对齐的值,并没有多减或漏减。为避免以后再漂移,`preview_rect_is_the_second_block_below_the_chrome` 补了两条断言:底边只留一个 inset;`preview_display(..).pane_style().padding == Padding::from(inset)`(直接锁库侧口径)。**真机截图对比仍建议做**(作为目视确认,不是已知缺陷)。
+
 ### G-I3 切项目丢弃整份内存状态(与计划「每项目一份状态」不符)
 - 问题:Project 面板页签不持久化,切走即丢;脏缓冲只靠 debounce 的恢复快照兜底。Dozer 是按项目常驻 workspace。
 - 处理:若这是有意的 D4 取舍,请在计划 D4 与 spec 里**明确写下**:切项目会丢弃 Project 面板的页签(仅 Files 页签持久化),并让用户确认;否则改成按项目常驻状态。
+
+- **已修(文档)**。用户确认按 D4 取舍。计划 D4 与 S5b-2 spec D4 都写明:Project 面板页签不落盘(`persist_tabs: panel != ViewerPanel::Project`),切项目丢弃,回来为空;只有 Files 页签跨重启 / 切项目恢复。代码已由 G-C4 落地,无额外改动。
 
 ### G-I4 `.png` 的行为三处自相矛盾
 - 事实:`digger_hosts_url`(`preview.rs`)排除 `image-annotate`,测试 `tabular_json_and_media_files_get_the_degraded_page_not_a_webview` 断言 `p.png` 没有 webview;但 `package-macos.sh` 强制要求 `image-annotate/`,Task 10 真机清单要求 `.png` 渲染,Task 9 selftest 期望 `.png` 是 webview(selftest 是独立 pane,不走 `PreviewHub`,测不到这个过滤)。
 - 修:三者统一。**建议开放 image-annotate**(Digger 能力集已含 `rendered`;打包本来就带);同步改测试、selftest 和计划清单。需用户确认选哪个。
 - 测试:`png_and_svg_open_in_a_webview_in_the_preview_hub`(走 `PreviewHub::desired`)。
 
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`)。用户选「开放 image-annotate」:`digger_capabilities()` 的 `media: true`,`digger_hosts_url` 认 `dozer://image-annotate/`。`.png` 走 image-annotate、`.svg` 走 Flyfish(库的 `is_image_annotate_extension` 不含 svg),两者都建 webview。`tabular_json_and_media_files_get_the_degraded_page_not_a_webview` 改名为 `tabular_json_and_plantuml_get_the_degraded_page_not_a_webview` 并去掉 `.png`(断言未被削弱,只去掉属于新口径的那个样本);新增 `png_and_svg_open_in_a_webview_in_the_preview_hub`(走 `PreviewHub::desired`),去掉修复会失败(已验)。`package-macos.sh` 本来就要求 `image-annotate/`,无需改;`preview_smoke` 的 `desired_webviews` 与 `PreviewHub::desired` 走同一路由,期望口径随之统一。**真机仍待验**。
+
 ### G-I5 原生 webview 盖住 iced 浮层(推断)
 - 影响:页签溢出下拉(`tab_chrome::overflow_menu`)向下展开会被 webview 遮住;Project 删除确认卡与右半边重叠同理。Dozer 在 macOS 用原生菜单规避。
 - 处理:真机验证;若成立,方案二选一并告知用户:弹浮层时临时藏起预览 webview(显示一个占位),或溢出菜单改成向上 / 局限在页签条区域。
+
+- **待真机验证**,未改代码(方案要用户拍板:临时藏起 webview,或溢出菜单改向上 / 限制在页签条内)。只在审查文件里保留,不静默跳过。
 
 ### G-M 其他小项
 - `forget_project` 的注释只在 `project_id == self.project_id` 时清状态,与调用方语义不一致(随 G-C1 一并处理)。`attach_handle` 之前 `execute` 会静默丢弃库侧效果(含 `SaveFile`),`boot()` 顺序目前正确但无断言 → 加一条断言测试。
@@ -118,6 +138,15 @@
 - `open_file_command_…` 改写后不再断言系统打开器「路径作为单个参数」的语义,现在只有 `system_opener` 自己守着 → 补回测试。
 - `shell.rs` 新测试里 `expect("{panel} has a pane")` 没有格式化(`expect` 不做插值),改用 `unwrap_or_else(|| panic!(..))`。
 - `thread_local` 的 `CURRENT_WINDOW` / `CURRENT_PANES` 是给 `PanelDisplay` 取外部状态的绕法,可接受;在模块头注释里写明为何,并加一条「帧间不残留」的测试。
+
+- **已修**(digger `e93393c`,库 `libs-2026-10-19h`/`966c0796`):
+  - `forget_project` 注释与实现对齐:三件事总是按 `project_id` 做,只有内存态看当前项目。
+  - 新增 `library_effects_are_dropped_until_a_runtime_handle_is_attached`(挂句柄前库侧 `SaveFile` 无回投、产品侧 `AllowFile` 照做)与 `boot_attaches_the_runtime_handle_before_touching_the_preview_hub`(只看 `boot()` 段,断言 `attach_handle` < `set_current_project` / `finish_startup`)。
+  - `selftest_fails_when_a_fixture_is_missing` 改名 `missing_in_reports_each_absent_required_dir`;补 `dev_roots_have_every_required_dir`(原 `bundled_layout_has_the_three_first_batch_dirs` 的单元测试替代,`package-macos.sh` 的 shell 检查保留)。
+  - 补回 `system_opener_passes_the_path_as_one_argument_and_never_through_a_shell`(PATH 里放假 opener 记录 argv,带空格 / 引号 / `$` / `;` 的路径必须原样作为唯一参数)。
+  - `shell.rs` 的 `expect("{panel} has a pane")` → `unwrap_or_else(|| panic!(..))`。
+  - `CURRENT_WINDOW` / `CURRENT_PANES` 补了「为什么要有这个绕法 + 只读 / 每帧覆盖 / 不跨帧累积」的注释,并加 `pane_snapshot_does_not_outlive_the_frame`。
+- `selftest_preconditions` 本身:仍无独立单测(它只在真窗口里跑,纯逻辑测不了),已在 `preview_assets` 侧用 `missing_in` 覆盖了它的输入判定。
 
 ## 3. 流程问题(需要用户裁决,开发者不得自行处理)
 
