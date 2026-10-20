@@ -90,15 +90,18 @@
 ## 3. 仍需真机或用户拍板
 
 - **G-I2(webview 矩形)的「不修」不成立。** 复审者核对:Dozer `webview_geometry.rs` 非放大态 `y = top_bar + zone.margin.top + preview_chrome_top_px(38)`,`h = window_h - y - margin.bottom - footbar`,**底部不留 8px**(代码注释说明故意贴着 footbar);Digger 是 `slot.y + 38 + 8`、底部再减 8。顶部是否多 8px 取决于 byteui 的 38 是否已含顶部 padding(静态无法确定),底部肯定与 Dozer 不同。修复者只证明了与 iced 布局自洽。**必须 Dozer 与 Digger 同一文件、同一窗口尺寸并排截图对比 webview 顶 / 底边**,不一致就改公式(并更新钉死当前公式的测试)。
-- **G-I5(原生 webview 盖住 iced 浮层)未处理。** 溢出菜单、Project 删除确认卡与右半边重叠时会被盖住。需用户拍板方案:弹浮层时临时藏起预览 webview 并显示占位,还是溢出菜单限制在页签条区域内。
-- **PDF 是否开启**(见 N5)。
+- **G-I5(原生 webview 盖住 iced 浮层):用户 2026-10-20 裁决 —— 沿用 Dozer 的做法。** Dozer 在 macOS 上用原生 `NSMenu`(`dozer-app/src/chrome/native_menu.rs`,695 行,依赖 `dozer_core` 的日志宏,**在 `dozer-app` 里,Digger 不能直接引用**)弹页签溢出菜单等,删除确认用独立原生窗口(`platform/project_delete_overlay.rs`)。Digger 的落地方式(我的决定,可推翻):
+  - **溢出菜单:** 把 `native_menu.rs` 移植到 `crates/desktop/src/adapters/native_menu.rs`(去掉 `dozer_core` 日志依赖,改用 `tracing`;`objc2` / `objc2-app-kit` / `objc2-foundation` 依赖按 Dozer 的最小 feature 集加进 Digger),`tab_chrome::overflow_menu` 在 macOS 走它;与 S6d 的 D9「Digger 暂时复制、以后迁进 byteui」同一性质,在模块头注释写明来源和待迁移。Files 右键菜单在左侧列表里,不会与预览 webview 重叠,暂不改。
+  - **Project 删除确认卡:** 不移植独立 overlay 窗口(代价大);显示卡片期间让预览 webview 暂时不在期望清单里(销毁或藏起),关闭卡片后恢复。
+  - 测试:`overflow_menu_uses_the_native_menu_on_macos`(菜单项描述构造为纯数据,可无头测);`delete_card_hides_the_preview_webviews_while_it_is_open`;**真机验收:** 溢出菜单与删除卡展开时可见、可点,不被 webview 遮住。
+- **PDF:用户 2026-10-20 裁决 —— 要开。** 修:`digger_capabilities()` 的 `pdf: true`;打包脚本不再删除 `flyfish/vendor/pdf`(`vendor/docx` 仍按 Word 未开保持排除,除非用户另说);`digger_hosts_url`、selftest、`preview_assets` 的必需目录清单、夹具头与能力注释统一为「`.pdf` 走 flyfish webview」;包体积增量写进提交说明(flyfish 目录约 21 MB,大头是 PDF 的 cmap)。测试:`pdf_opens_in_a_webview_in_the_preview_hub`;**真机验收:** `doc.pdf` 能翻页显示;打包产物里 `Contents/Resources/flyfish/vendor/pdf` 存在。N5 随之关闭(注释与行为一致)。
 
 ## 4. 流程问题(需用户裁决,开发者不得自行处理)
 
 - `libs-2026-10-19h`(轻量 tag,指向 `966c0796`,提交时间 10:27:25)已推送到 `origin`,**在用户验收 Dozer 之前**;`libs-2026-10-19g`(指向有 bug 的 `4e05f0a4`)仍在 `origin`。
 - `origin` 上现在有 `feat/preview-events-lib`:reflog 显示 10:24:14 推送了 `30c0f05f`,10:27:33 又推送了 `966c0796`(提交被 amend 两次后强制推送)。第一轮审查时 origin 上还没有这个分支。
 - 没有 `chore(release)`、版本号变更或合并到 `main` 的动作:`main` 与 `origin/main` 均在 `2eaba8cf`;Digger 分支未推送。
-- 请用户决定 `g`、`h` 两个已推送 tag 的去留。建议:修完并验收后统一切一个新 tag,旧的两个删掉;**在此之前不要再切 tag、不要再 force 推送、不要再让 Digger 钉新的未验收 tag。**
+- **用户裁决(2026-10-20,按建议):** 修完并验收后统一切一个新 tag,旧的 `libs-2026-10-19g`、`libs-2026-10-19h` 删掉。**删除远端 tag 与新 tag 的推送仍是对外动作,到时由我向用户确认后执行,开发者不得自行处理;在此之前不要再切 tag、不要再 force 推送、不要再让 Digger 钉新的未验收 tag。**
 
 ## 5. 验收标准(本轮)
 
