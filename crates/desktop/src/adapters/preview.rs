@@ -39,6 +39,13 @@ pub struct PreviewHub {
     project: Option<PreviewPanelState>,
     /// 上面两份状态属于哪个项目。
     project_id: Option<i64>,
+    /// 会话代次:每次 `project_id` / 项目根发生变化就 +1。
+    ///
+    /// A → B → A 回到 A 时,`project_id` 又会等于 A,光靠项目 id 拦不住 A 在
+    /// 上一轮排出的迟到消息(`SaveFinished` / `Profiled` / 原生 IPC 回传)。
+    /// 而页签 id 在重新打开时是从头编号的,旧消息很可能命中同号页签。投递时
+    /// 带上发起那一刻的 epoch,回投时和当前 epoch 比对就能整批丢掉。
+    epoch: u64,
     /// 当前项目的根目录(库判"是否在项目根内"时用)。
     project_root: Option<PathBuf>,
     /// digger 已确认启动完成之前,库里不调度索引 / 快照类后台任务。
@@ -74,6 +81,7 @@ impl PreviewHub {
             files: None,
             project: None,
             project_id: None,
+            epoch: 0,
             project_root: None,
             safe_startup: true,
             tab_bar_px: (0.0, 0.0),
@@ -117,7 +125,18 @@ impl PreviewHub {
         })
     }
 
-    /// 处理一条库消息。项目对不上(切走了 / 删了)就丢掉。
+    /// 当前会话代次。后台效果回投时必须带上它(见 [`Self::accepts`])。
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// 一条回投消息还属于当前会话吗?项目对不上(切走了 / 删了)**或**代次对
+    /// 不上(A → B → A 之后 A 的旧消息)都算过期。
+    pub fn accepts(&self, project_id: i64, epoch: u64) -> bool {
+        self.project_id == Some(project_id) && self.epoch == epoch
+    }
+
+    /// 处理一条库消息。项目 / 代次对不上就丢掉。
     pub fn dispatch(
         &mut self,
         panel: ViewerPanel,
@@ -134,9 +153,16 @@ impl PreviewHub {
 
     /// 当前项目变了:旧项目的两份状态整份丢掉(不常驻),新项目按需恢复页签。
     ///
-    /// G-C1:切换**不是**删除——旧项目已落盘的页签(`preview_state/<id>.json`)
-    /// 原样留着,切回来由 `restore_tabs` 恢复(D4);白名单也按项目隔离,切走只
-    /// 让旧项目的授权失效,不碰别的项目。
+    /// G-C1:切换**不是**删除。切走时:
+    ///
+    /// - 旧项目已落盘的页签(`preview_state/<id>.json`)**原样留着**(落盘发生在
+    ///   库排出 `PersistTabs` 时,即打开 / 关闭页签那一刻;切换本身不落盘),
+    ///   切回来由 `restore_tabs` 恢复(D4);
+    /// - 旧项目的白名单**不撤**(切回来还要用),只有 [`Self::forget_project`]
+    ///   才撤。
+    ///
+    /// 换句话说,`set_current_project` 不碰磁盘、也不碰任何项目的授权,只换内存
+    /// 里那两份状态。
     pub fn set_current_project(&mut self, project: Option<&ProjectInfo>) {
         let SameProject::Change { ids } = self.classify(project) else {
             return;
@@ -144,6 +170,8 @@ impl PreviewHub {
         self.files = None;
         self.project = None;
         self.project_id = ids;
+        // 代次推进:上一轮排出的后台消息从此不再属于当前状态。
+        self.epoch = self.epoch.wrapping_add(1);
         self.project_root = project.map(|p| PathBuf::from(&p.path));
         if let Some(id) = self.project_id {
             let safe = self.safe_startup;
@@ -167,13 +195,17 @@ impl PreviewHub {
             self.files = None;
             self.project = None;
             self.project_id = None;
+            self.epoch = self.epoch.wrapping_add(1);
             self.project_root = None;
         }
         self.host.clear_allowed_for(project_id);
         self.persistence.remove(project_id);
     }
 
-    /// 立刻把某面板的当前页签快照落盘(退出 / 测试时用,不等 `PersistTabs`)。
+    /// 立刻把某面板的当前页签快照落盘,不等库排出 `PersistTabs`。
+    ///
+    /// 生产代码**不调用**它(切项目 / 退出都不额外落盘;页签增减时库自己排
+    /// `PersistTabs`),只有测试用它把「页签已存在」变成可断言的。
     pub fn persist_now(&self, panel: ViewerPanel, project_id: i64) {
         let Some(state) = self.state(panel, project_id) else {
             return;
@@ -374,6 +406,7 @@ impl PreviewHub {
         };
         let persistence: Arc<dyn PreviewPersistence> = self.persistence.clone();
         let tx = self.tx.clone();
+        let epoch = self.epoch;
         for effect in fx {
             if is_product_effect(&effect) {
                 self.product_effect(panel, project_id, effect);
@@ -382,7 +415,7 @@ impl PreviewHub {
                 run_effect(
                     effect,
                     move |message| {
-                        let _ = tx.send(Msg::Preview(panel, project_id, message));
+                        let _ = tx.send(Msg::Preview(panel, project_id, epoch, message));
                     },
                     &handle,
                     persistence.clone(),
@@ -401,9 +434,6 @@ impl PreviewHub {
                 &crate::adapters::files::system_opener(),
                 &path,
             ),
-            Effect::PushHostScript { webview_id, script } => {
-                self.host.push_script(webview_id, script)
-            }
             // Digger 一期不做:MCP 上下文推送(没有 agent 侧上下文)、页签拖拽换位
             // 与悬停记录(无 hover 动画,见 D2)、预览内选区右键菜单(D3 只留文件树 /
             // Project 链接的右键)。
@@ -422,7 +452,11 @@ impl PreviewHub {
 /// G-I4:`media` 必须开——`.png` 等光栅图由 `is_image_annotate_extension` 认领,
 /// 只有 `media: true` 才路由到 Rendered,再落到 `dozer://image-annotate/`。
 /// 发布包本来就带 `image-annotate/`(`package-macos.sh` 强制要求)。
-/// 表格 / PlantUML / PDF / JSON 仍走降级页并保留"用系统应用打开"。
+///
+/// N5(用户 2026-10-20 裁决):`pdf` 开——`.pdf` 与 `.md` / `.html` 一样进
+/// flyfish webview,不再走降级页。打包脚本因此**不再**删除
+/// `flyfish/vendor/pdf`(约 21 MB,大头是 PDF 的 CMap)。
+/// 表格 / PlantUML / JSON 仍走降级页并保留"用系统应用打开"。
 fn digger_capabilities() -> PreviewCapabilities {
     PreviewCapabilities {
         code: true,
@@ -431,7 +465,7 @@ fn digger_capabilities() -> PreviewCapabilities {
         streamed: false,
         tabular: false,
         plantuml: false,
-        pdf: false,
+        pdf: true,
         media: true,
     }
 }
@@ -456,7 +490,6 @@ fn is_product_effect(effect: &Effect) -> bool {
             | Effect::TabClosed { .. }
             | Effect::PathOpened(_)
             | Effect::SelectionContextMenu { .. }
-            | Effect::PushHostScript { .. }
     )
 }
 
@@ -599,6 +632,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 迟到消息过滤的会话代次:A → B → A 回到 A 之后,`project_id` 又等于 A,
+    /// 光靠项目 id 拦不住 A 在**上一轮**排出的后台消息。而页签 id 在重新打开
+    /// 时从头编号,旧消息很可能命中同号页签。`accepts` 必须同时比对代次。
+    #[test]
+    fn going_away_and_back_invalidates_the_previous_epoch() {
+        let dir = std::env::temp_dir().join(format!("digger-epoch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let one = dir.join("one");
+        let two = dir.join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let mut hub = hub(&dir);
+        let a = project(1, &one);
+        let b = project(2, &two);
+        hub.set_current_project(Some(&a));
+        let first = hub.epoch();
+        assert!(hub.accepts(1, first), "刚切到 A:本轮消息有效");
+
+        hub.set_current_project(Some(&b));
+        hub.set_current_project(Some(&a));
+        let second = hub.epoch();
+        assert_ne!(first, second, "回到同一个项目也必须换一代");
+        assert!(hub.accepts(1, second), "本轮消息有效");
+        assert!(
+            !hub.accepts(1, first),
+            "A 上一轮的迟到消息必须被拒(G-C2 的代次)"
+        );
+        // 项目 id 也对不上的老消息自然还是拒。
+        assert!(!hub.accepts(2, second));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn files_and_project_panels_do_not_share_tabs() {
         let dir = std::env::temp_dir().join(format!("digger-preview-split-{}", std::process::id()));
@@ -680,24 +745,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// G-C1:切项目只换当前项目,不动落盘文件;切回来页签还在(D4)。
+    /// G-C1:切项目不删盘、不撤授权,切回来页签恢复。
     #[test]
     fn switching_projects_keeps_the_persisted_preview_state() {
+        // G-C1(第一轮修复的遗留问题):旧版从 hub 层直接调 `persist_now`,既绕开
+        // 产品路径,又靠只有测试才会用的落盘入口,修复前也能通过。现在走真实
+        // 接线:打开页签由库排出 `PersistTabs`,`pump` 执行它落盘;然后只用
+        // `set_current_project` 切走再切回,断言页签从盘上恢复。
         let dir = std::env::temp_dir().join(format!("digger-preview-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let persistence = Arc::new(DiggerPersistence::new(&dir));
-        let mut hub = PreviewHub::with_persistence(Host::new(&dir), persistence.clone());
-        let p1 = project(1, &dir);
         let p2dir = dir.join("two");
         std::fs::create_dir_all(&p2dir).unwrap();
+        let p1 = project(1, &dir);
         let p2 = project(2, &p2dir);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut hub = PreviewHub::with_persistence(Host::new(&dir), persistence.clone());
+        // `PersistTabs` 是库侧效果,要走后台;不给运行时它会被丢掉(G-M)。
+        hub.attach_handle(runtime.handle().clone());
         hub.set_current_project(Some(&p1));
         hub.open(ViewerPanel::Files, &p1, write(&dir, "a.py"), None);
-        hub.persist_now(ViewerPanel::Files, 1);
-        let state = persistence.state_path(1);
-        assert!(state.exists(), "切走之前页签已经落盘");
+        // 等落盘任务跑完。
+        runtime.block_on(async { tokio::task::yield_now().await });
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
+        // 真实路径:`open` 里库排出的 `PersistTabs` 由库侧效果落盘,
+        // 不经过只有测试才调的 `persist_now`。
+        let state = persistence.state_path(1);
+        assert!(state.exists(), "打开页签后 PersistTabs 应已落盘");
+
+        // 切走不删盘、不撤授权,切回来能恢复。
         hub.set_current_project(Some(&p2));
         assert!(state.exists(), "切项目不许删旧项目的落盘文件");
         hub.set_current_project(Some(&p1));
@@ -892,21 +973,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// G-C1:切项目不许走「删除」语义(只有删除才调用 forget_project)。
+    /// G-C1:只有删除才回收状态 / 授权 / 落盘文件。
     #[test]
-    fn forget_project_is_only_called_on_delete() {
-        let src = include_str!("preview.rs");
-        let product = include_str!("../product.rs");
-        let calls: Vec<&str> = product
-            .lines()
-            .filter(|line| line.contains("forget_project(") && !line.trim_start().starts_with("//"))
-            .collect();
-        assert_eq!(
-            calls.len(),
-            1,
-            "product.rs 里只该有「删除项目」这一处: {calls:?}"
-        );
-        assert!(src.contains("pub fn forget_project("), "hub 仍提供删除入口");
+    fn switching_projects_never_forgets_a_project() {
+        // G-C1(第一轮修复的遗留问题):旧版数 `forget_project(` 的行数,修复前
+        // 后都等于 1,是循环论证。这里改成行为断言:切换走真实入口
+        // (`set_current_project`),断言被切走项目的白名单与落盘文件都还在;
+        // 只有 `forget_project` 才会让它们消失。
+        let dir =
+            std::env::temp_dir().join(format!("digger-preview-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let one = dir.join("one");
+        let two = dir.join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let persistence = Arc::new(DiggerPersistence::new(&dir));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut hub = PreviewHub::with_persistence(Host::new(&dir), persistence.clone());
+        hub.attach_handle(runtime.handle().clone());
+        let p1 = project(1, &one);
+        let p2 = project(2, &two);
+        let a = write(&one, "a.py");
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, a.clone(), None);
+        // `PersistTabs` 排在 current-thread 运行时上,靠 `block_on` 推进。
+        runtime.block_on(async { tokio::task::yield_now().await });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(hub.host.accepts(&a));
+        let state = persistence.state_path(1);
+        assert!(state.exists(), "打开页签后应已落盘");
+
+        // 真实切换:A → B。切走**不是**删除。
+        hub.set_current_project(Some(&p2));
+        assert!(hub.host.accepts(&a), "切走不撤旧项目的授权");
+        assert!(state.exists(), "切走不删旧项目的落盘文件");
+
+        // B → A 再切回来,页签恢复。
+        hub.set_current_project(Some(&p1));
+        assert!(hub.state(ViewerPanel::Files, 1).is_some(), "切回来状态重建");
+
+        // 只有 `forget_project` 才回收。
+        hub.forget_project(1);
+        assert!(!hub.host.accepts(&a), "删除才撤授权");
+        assert!(!state.exists(), "删除才删落盘文件");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// G-M:`attach_handle` 之前 `execute` 会**静默**丢掉库侧效果(启动早期
@@ -1011,15 +1124,33 @@ mod tests {
             id_offset(ViewerPanel::Project) + tab_id,
             "库侧 id 本身已经含偏移"
         );
-        // 走 Digger 侧的换算函数(产品真正用的那条路)。
-        let scripts = with_pool_ids(vec![(expected, "script".to_string())], ViewerPanel::Project);
-        assert_eq!(scripts.len(), 1, "命令已排队并取出");
+
+        // G-I1:走生产路径 `host_scripts()`(内部即 `take_host_scripts` +
+        // `with_pool_ids`),而不是自己构造一个恒等函数再断言它恒等。
+        // 无 wry 的测试里 `live_ids()` 本来是空的,`take_host_scripts` 会把
+        // 命令留到下轮(永远取不到);这里把库算出来的 id 标成「活着」。
+        hub.host.set_test_live_ids([expected]);
+        let scripts = hub.host_scripts(ViewerPanel::Project, 1);
+        assert_eq!(
+            scripts.len(),
+            1,
+            "命令已排队并应从生产路径取出: {scripts:?}"
+        );
         assert_eq!(
             scripts[0].0, expected,
-            "取出脚本的 id 必须是库给的 webview_id,不能再加偏移"
+            "生产路径给注入脚本的 id 必须是库的 binding.webview_id(),不能再叠加偏移"
         );
-        let files = with_pool_ids(vec![(3, "script".to_string())], ViewerPanel::Files);
-        assert_eq!(files[0].0, 3, "Files 侧本来就没有偏移");
+        assert!(
+            scripts[0].1.contains("SetDocument") || !scripts[0].1.is_empty(),
+            "注入脚本不能为空"
+        );
+
+        // 反向对照:再叠加一次偏移必须对不上(证明上一条不是恒等式).
+        assert_ne!(
+            scripts[0].0,
+            expected + id_offset(ViewerPanel::Project),
+            "把偏移加回去必须与库给的 id 不同"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1158,6 +1289,41 @@ mod tests {
             ".svg 应走 Flyfish: {urls:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// N5(用户 2026-10-20 裁决「PDF 要开」):`.pdf` 进 flyfish webview,
+    /// 不再走降级页。
+    ///
+    /// 注意库的时序:`open` 之后页签先按名字路由成 `Rendered`(所以立刻取
+    /// `desired` 看不出能力开关的差别),真正的降级在 `Profiled` 之后由
+    /// `gate_backend` 做。这里断言两件能直接钉住能力的事:
+    ///
+    /// 1. `digger_capabilities().pdf` 为真(Digger 侧的唯一开关);
+    /// 2. 库对该能力确实放行 `.pdf`(`backend_enabled` 是 `gate_backend`
+    ///    唯一判据),并确认 `pdf: false` 会拒绝——防止开关写反。
+    #[test]
+    fn pdf_capability_is_on_and_the_library_honors_it() {
+        let caps = digger_capabilities();
+        assert!(caps.pdf, "N5:PDF 能力必须开");
+
+        let pdf = std::path::Path::new("/tmp/doc.pdf");
+        let rendered = dozer_preview_core::backend::PreviewBackend::Rendered(
+            dozer_preview_core::backend::RenderedBackend {
+                renderer: dozer_preview_core::backend::RenderedRenderer::Flyfish,
+                mode: dozer_preview_core::backend::RenderedMode::Rendered,
+                source_language: None,
+            },
+        );
+        assert!(
+            dozer_panel_preview::capabilities::backend_enabled(&rendered, pdf, &caps),
+            "能力开着时 .pdf 必须放行"
+        );
+        let mut off = digger_capabilities();
+        off.pdf = false;
+        assert!(
+            !dozer_panel_preview::capabilities::backend_enabled(&rendered, pdf, &off),
+            "pdf 关掉时必须拒绝(否则开关形同虚设)"
+        );
     }
 
     #[test]

@@ -46,6 +46,8 @@ pub struct PreviewDisplay<'a> {
     pub list_on_left: bool,
     /// 这棵预览属于哪个项目(G-C2):库消息回投时带上,产品据此丢弃迟到消息。
     pub project_id: i64,
+    /// 发起这一刻的会话代次:切走又切回同一项目后,上一轮的迟到消息靠它丢掉。
+    pub epoch: u64,
 }
 
 impl PreviewDisplay<'_> {
@@ -101,7 +103,7 @@ pub fn pane<'a>(
 
 impl PanelDisplay<Msg> for PreviewDisplay<'_> {
     fn wrap(&self, panel: ViewerPanel, message: LibMessage) -> Msg {
-        Msg::Preview(panel, self.project_id, message)
+        Msg::Preview(panel, self.project_id, self.epoch, message)
     }
 
     fn locale(&self) -> &str {
@@ -350,6 +352,7 @@ mod tests {
             tab_bar_px: 400.0,
             list_on_left: true,
             project_id: 42,
+            epoch: 0,
         }
     }
 
@@ -385,11 +388,11 @@ mod tests {
         let project = d.wrap(ViewerPanel::Project, LibMessage::Retry(0));
         assert!(matches!(
             files,
-            Msg::Preview(ViewerPanel::Files, 42, LibMessage::Retry(0))
+            Msg::Preview(ViewerPanel::Files, 42, 0, LibMessage::Retry(0))
         ));
         assert!(matches!(
             project,
-            Msg::Preview(ViewerPanel::Project, 42, LibMessage::Retry(0))
+            Msg::Preview(ViewerPanel::Project, 42, 0, LibMessage::Retry(0))
         ));
     }
 
@@ -402,7 +405,7 @@ mod tests {
         };
         assert!(matches!(
             d.wrap(ViewerPanel::Files, LibMessage::Retry(0)),
-            Msg::Preview(_, 7, _)
+            Msg::Preview(_, 7, _, _)
         ));
     }
 

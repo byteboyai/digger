@@ -68,9 +68,9 @@ for dir in editor flyfish image-annotate; do
   rm -rf "$APP_DIR/Contents/Resources/$dir"
   cp -R "$ASSETS_DIR/$dir" "$APP_DIR/Contents/Resources/$dir"
 done
-# pdf / docx 渲染器第一批用不到(能力关闭),省 10 MB。
-rm -rf "$APP_DIR/Contents/Resources/flyfish/vendor/pdf" \
-       "$APP_DIR/Contents/Resources/flyfish/vendor/docx"
+# docx 渲染器第一批用不到(能力关闭),省若干 MB。
+# PDF 已开启(N5):`flyfish/vendor/pdf` 必须留在包里。
+rm -rf "$APP_DIR/Contents/Resources/flyfish/vendor/docx"
 
 # 宿主按名字读的目录与入口(与 crates/desktop/src/preview_assets.rs 的名单一致):
 # dozer:// 应答把 404 静默落成白屏,所以打包时就点名报错。

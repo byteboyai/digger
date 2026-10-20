@@ -28,8 +28,9 @@ const STATUS_BAR: f64 = 26.0;
 const WINDOW: iced::Size = iced::Size::new(1100.0, 760.0);
 
 /// 自检用的夹具(随仓库提交,示例不再依赖 `../dozer` 源码树)。
-/// `.py`/`.md`/`.html`/`.png` 是真正会建 webview 的类型;`.json`/`.csv`/`.pdf`
-/// 在 Digger 的能力下走原生降级页,不应产生句柄。
+/// `.md`/`.html`/`.png`/`.svg`/`.pdf` 是真正会建 webview 的类型(N5 起
+/// `.pdf` 进 flyfish);`.py`/`.txt` 走原生编辑器,`.json`/`.csv` 在 Digger
+/// 的能力下走原生降级页,都不产生句柄。
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/fixtures/preview")
 }

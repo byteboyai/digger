@@ -32,7 +32,10 @@ const REQUIRED_DIRS: [&str; 3] = ["editor", "flyfish", "image-annotate"];
 /// `image_annotate_host_html`),不读磁盘——所以只点名 flyfish 那个文件,
 /// image-annotate 只需目录在(它要服务 vendor 静态资源)。4xx 的静态资源
 /// 在宿主里不会报错,只会白屏。
-const REQUIRED_FILES: [&str; 1] = ["flyfish/host.html"];
+///
+/// `flyfish/vendor/pdf/pdf.worker.mjs`(N5):PDF 能力已开,打包脚本不再删
+/// `vendor/pdf`;它是 pdf.js 的 worker,缺了页面会静默白屏,所以点名。
+const REQUIRED_FILES: [&str; 2] = ["flyfish/host.html", "flyfish/vendor/pdf/pdf.worker.mjs"];
 
 /// `assets/` 目录里缺什么。空 = 齐全。只做存在性检查,不读内容、不碰网络。
 pub(crate) fn missing_in(assets: &std::path::Path) -> Vec<String> {
@@ -147,7 +150,9 @@ mod tests {
         for name in REQUIRED_DIRS {
             std::fs::create_dir_all(dir.join(name)).unwrap();
         }
+        std::fs::create_dir_all(dir.join("flyfish/vendor/pdf")).unwrap();
         std::fs::write(dir.join("flyfish/host.html"), b"<html>").unwrap();
+        std::fs::write(dir.join("flyfish/vendor/pdf/pdf.worker.mjs"), b"//").unwrap();
         assert!(missing_in(&dir).is_empty(), "{:?}", missing_in(&dir));
 
         std::fs::remove_dir_all(dir.join("editor")).unwrap();

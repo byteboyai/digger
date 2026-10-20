@@ -37,12 +37,14 @@ const PREVIEW_LOCALE: &str = "en";
 fn preview_display(
     tab_bar_px: f32,
     project_id: i64,
+    epoch: u64,
 ) -> crate::adapters::preview_display::PreviewDisplay<'static> {
     crate::adapters::preview_display::PreviewDisplay {
         locale: PREVIEW_LOCALE,
         tab_bar_px,
         list_on_left: true,
         project_id,
+        epoch,
     }
 }
 
@@ -78,9 +80,12 @@ pub enum Msg {
     /// 预览面板的库消息(S5b-2 P4):`Files` / `Project` 各自一份状态。
     /// `project_id` 是**发起时**的项目(G-C2):迟到的 `SaveFinished` /
     /// `Profiled` / `WindowIndex` 靠它丢弃,不按此刻聚焦的项目再猜一次。
+    /// `epoch` 是**发起时**的会话代次:A → B → A 之后 A 上一轮的迟到消息
+    /// 项目 id 又对上了,靠代次整批丢掉(页签 id 会重新编号,不拦会误伤)。
     Preview(
         dozer_panel_preview::ViewerPanel,
         i64,
+        u64,
         dozer_panel_preview::Message,
     ),
     /// 预览原生页面的回传(库已分类的 host IPC / 建页失败)。
@@ -136,6 +141,11 @@ pub struct ProductShell {
     /// 预览状态层(S5b-2 P4):Files / Project 两个面板各一份库状态 + 原生宿主。
     /// 在 `boot` 里装上;纯逻辑测试可以不要(没有预览就没有页签可开)。
     preview: Option<crate::adapters::preview::PreviewHub>,
+    /// N1b:两个预览面板(Files / Project)各一份展示上下文,`view(&self)` 每帧
+    /// 原地更新。库的 `view::pane` 要求它活到返回的 `Element` 一样久;以前每帧
+    /// `Box::leak` 一份新的(60fps 下无界增长),现在由壳持有,地址稳定。
+    preview_displays:
+        [std::cell::Cell<crate::adapters::preview_display::PreviewDisplay<'static>>; 2],
     /// 「删除项目」结果回流:库的后台任务在线程池里跑,结果经这里转成产品消息。
     delete_tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     /// 上面那条通道的接收端,`boot` 里取一次接成 iced 流(`None` = 已取走)。
@@ -187,7 +197,7 @@ fn preview_webview_rect(slot: Rect) -> Rect {
         slot.x + inset,
         slot.y + top,
         (slot.w - inset * 2.0).max(1.0),
-        (slot.h - top - inset).max(1.0),
+        (slot.h - top).max(1.0),
     )
 }
 
@@ -214,6 +224,47 @@ fn usage_native_rect(layout: UsageLayout, content: Rect, pair: Option<PairRects>
         (UsageLayout::Paired, Some(p)) => p.second,
         _ => content,
     }
+}
+
+/// 本帧要把哪些预览页面放到哪:`sync_native` 的纯数据半段。
+///
+/// 只读骨架(选中的配对面板)与预览状态,顺便把两个面板的页签条可用宽度
+/// 写回 hub。与 `window::run` / `Task` 无关,所以能在无头测试里走真实接线
+/// (G-C3 的「宽度确实被 `sync_preview_native` 写回」、G-C5 的「关闭 / 无项目
+/// 时同步空清单」都靠它)。
+fn collect_preview_desired(
+    preview: &mut crate::adapters::preview::PreviewHub,
+    shell: &ShellModel,
+    rects: &bytehost_chrome::ShellRects,
+    project: &dozer_model::ProjectInfo,
+) -> Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> {
+    let mut desired: Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> = Vec::new();
+    let mut tab_bar = (0.0_f32, 0.0_f32);
+    for panel in [ViewerPanel::Files, ViewerPanel::Project] {
+        let id = match panel {
+            ViewerPanel::Project => shell::project_id(),
+            _ => shell::files_id(),
+        };
+        let Some(side) = shell.side_of(&id) else {
+            continue;
+        };
+        if shell.selected(side) != &id || rects.content(side).is_none() {
+            continue;
+        }
+        let Some(slot) = shell::pair_rects(shell, side).map(|p| p.second) else {
+            continue;
+        };
+        let rect = logical(preview_webview_rect(slot));
+        desired.extend(preview.desired(panel, project, |_| Some(rect)));
+        // 页签条可用宽度:预览块真实宽度减三颗按钮与间距(Dozer 同款估算)。
+        let avail = (slot.w - PREVIEW_CHROME_RESERVE_PX).max(0.0);
+        match panel {
+            ViewerPanel::Project => tab_bar.1 = avail,
+            _ => tab_bar.0 = avail,
+        }
+    }
+    preview.set_tab_bar_width(tab_bar.0, tab_bar.1);
+    desired
 }
 
 impl ProductShell {
@@ -300,6 +351,10 @@ impl ProductShell {
             project,
             files,
             preview: None,
+            preview_displays: [
+                std::cell::Cell::new(preview_display(0.0, 0, 0)),
+                std::cell::Cell::new(preview_display(0.0, 0, 0)),
+            ],
             delete_tx,
             delete_rx,
             lifecycle,
@@ -687,7 +742,12 @@ impl ProductShell {
         let Some(project) = preview_project(self.projects.current_project(), closing) else {
             let host = preview.host().clone();
             self.preview = Some(preview);
-            return vec![window::run(window, move |w| host.sync(w, &[])).discard()];
+            // N1:同 `preview_native_tasks`——`.discard()` 会把 Task 丢掉,
+            // 空清单的同步(销毁全部预览页)从来没执行过。
+            return vec![Task::stream(iced::futures::stream::once(async move {
+                let _ = window::run(window, move |w| host.sync(w, &[]));
+                Msg::Noop
+            }))];
         };
         let tasks = Self::preview_native_tasks(&mut preview, &self.shell, rects, &project, window);
         self.preview = Some(preview);
@@ -701,49 +761,30 @@ impl ProductShell {
         project: &dozer_model::ProjectInfo,
         window: window::Id,
     ) -> Vec<Task<Msg>> {
-        let mut desired: Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> = Vec::new();
-        let mut tab_bar = (0.0_f32, 0.0_f32);
-        for panel in [ViewerPanel::Files, ViewerPanel::Project] {
-            let id = match panel {
-                ViewerPanel::Project => shell::project_id(),
-                _ => shell::files_id(),
-            };
-            let Some(side) = shell.side_of(&id) else {
-                continue;
-            };
-            if shell.selected(side) != &id || rects.content(side).is_none() {
-                continue;
-            }
-            let Some(slot) = shell::pair_rects(shell, side).map(|p| p.second) else {
-                continue;
-            };
-            let rect = logical(preview_webview_rect(slot));
-            desired.extend(preview.desired(panel, project, |_| Some(rect)));
-            // 页签条可用宽度:预览块真实宽度减三颗按钮与间距(Dozer 同款估算)。
-            let avail = (slot.w - PREVIEW_CHROME_RESERVE_PX).max(0.0);
-            match panel {
-                ViewerPanel::Project => tab_bar.1 = avail,
-                _ => tab_bar.0 = avail,
-            }
-        }
-        preview.set_tab_bar_width(tab_bar.0, tab_bar.1);
+        let desired = collect_preview_desired(preview, shell, rects, project);
         // 建 / 挪 / 销毁在窗口线程内同步完成;注入排在同一闭包里、紧随其后。
         let host = preview.host().clone();
-        let _: Task<Msg> = window::run(window, move |w| host.sync(w, &desired)).discard();
         let mut scripts = Vec::new();
         for panel in [ViewerPanel::Files, ViewerPanel::Project] {
             scripts.extend(preview.host_scripts(panel, project.id));
         }
-        if scripts.is_empty() {
-            return Vec::new();
-        }
-        let host = preview.host_sender();
+        // N1:建 / 挪 / 销毁必须真的执行。此前 `window::run(..).discard()` 把
+        // Task 直接丢掉,`host.sync` 从不运行,预览 webview 永远不出现;只有
+        // 恰好有脚本要注入时才因为走 stream 分支而侥幸生效。
+        //
+        // 现在两者都进同一条 stream:先 sync(建页面),再让出一帧让布局落定,
+        // 最后把排在它后面的注入脚本推进去。没有脚本时也要跑 sync。
+        let host_sender = preview.host_sender();
         vec![Task::stream(iced::futures::stream::once(async move {
+            let _ = window::run(window, move |w| host.sync(w, &desired));
+            if scripts.is_empty() {
+                return Msg::Noop;
+            }
             // 让出这一帧:建页面的 `window::run` 先排队执行。
             tokio::task::yield_now().await;
             let _ = window::run(window, move |_| {
                 for (webview_id, script) in scripts {
-                    host.push_script(webview_id, script);
+                    host_sender.push_script(webview_id, script);
                 }
             });
             Msg::Noop
@@ -887,13 +928,21 @@ impl ProductShell {
         let Some(state) = preview.state(panel, current.id) else {
             return iced::widget::Space::new().into();
         };
-        // 库的 `view::pane` 会在点击 / 悬停闭包里按引用捕获宿主,要求它和返回的
-        // 元素活得一样久(`&'a`),而 `PreviewDisplay` 是每帧在栈上构造的纯数据。
-        // 每帧至多两份(两个面板),按帧泄漏一份换取签名简单;不要在别处再泄漏,
-        // 那会把 `project_id` 固化到旧项目上(G-C2)。
-        let display: &'a crate::adapters::preview_display::PreviewDisplay<'a> = Box::leak(
-            Box::new(preview_display(preview.tab_bar_px(panel), current.id)),
-        );
+        // N1b:展示上下文每帧原地更新(见 `preview_displays` 字段),不再泄漏。
+        // 项目 id 每次写入,避免把旧项目固化进去(G-C2)。
+        // `preview_pane` 只被 Files / Project 两个面板调用(见 `view`),
+        // 其它面板落到 0 槽也不会有调用者读到。
+        let slot = if panel == ViewerPanel::Project { 0 } else { 1 };
+        let epoch = preview.epoch();
+        self.preview_displays[slot].set(preview_display(
+            preview.tab_bar_px(panel),
+            current.id,
+            epoch,
+        ));
+        // SAFETY: 见 `preview_displays` 字段说明——槽位在壳的生命周期内地址
+        // 固定,里面是 `Copy` 的纯数据;内容在本帧内不会再被写。
+        let display: &'a crate::adapters::preview_display::PreviewDisplay<'a> =
+            unsafe { &*self.preview_displays[slot].as_ptr() };
         crate::adapters::preview_display::pane(display, state, panel, current, Length::Fill)
     }
 
@@ -1319,11 +1368,15 @@ impl Product<Msg> for ProductShell {
                     else {
                         return Task::none();
                     };
+                    // 原生 IPC 回传也要带代次,否则切走又切回后的旧回传会落到
+                    // 同号的重新编号页签上。
+                    let epoch = self.preview.as_ref().map(|p| p.epoch()).unwrap_or_default();
                     // 绑定说的事件属于哪个项目就投给哪个项目;项目已切走则由
                     // `PreviewHub::dispatch` 丢掉,不会被投进当前项目的同号页签。
                     Task::done(Msg::Preview(
                         panel,
                         project_id,
+                        epoch,
                         dozer_panel_preview::Message::Host(event),
                     ))
                 }
@@ -1332,9 +1385,14 @@ impl Product<Msg> for ProductShell {
                     Task::none()
                 }
             },
-            Msg::Preview(panel, project_id, message) => {
+            Msg::Preview(panel, project_id, epoch, message) => {
                 // 按**发起时**的项目路由;项目已切走 / 删除时 `dispatch` 整条丢弃。
-                if let Some(preview) = self.preview.as_mut() {
+                // 代次对不上(切走又切回)也在这一层拒掉,免得同号页签被误伤。
+                if let Some(preview) = self
+                    .preview
+                    .as_mut()
+                    .filter(|p| p.accepts(project_id, epoch))
+                {
                     preview.dispatch(panel, project_id, message);
                 }
                 // 页签状态变了:原生页面的清单 / 编辑命令要在同一帧里跟上。
@@ -1748,6 +1806,52 @@ mod tests {
     use bytehost_chrome::Side;
     use bytehost_desktop::SurfaceEvent;
 
+    /// N1b:预览展示上下文不能每帧泄漏。
+    ///
+    /// 以前 `preview_pane` 每帧 `Box::leak` 一份 `PreviewDisplay`(60fps 下
+    /// 两份/帧,无界增长)。现在由 `ProductShell::preview_displays` 持有、
+    /// 原地 `Cell::set`;`preview_pane` 里不该再出现任何 leak 写法。
+    #[test]
+    fn preview_display_is_not_leaked_every_frame() {
+        let source = include_str!("product.rs");
+        let start = source.find("fn preview_pane").expect("找不到 preview_pane");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n    fn markdown_view")
+            .expect("找不到下一个函数");
+        let body = &rest[..end];
+        assert!(
+            !body.contains("leak"),
+            "`preview_pane` 又在按帧泄漏展示上下文了"
+        );
+    }
+
+    /// N1:预览同步任务必须真的被返回给运行时。
+    ///
+    /// `Product` 里的 `PreviewHub` 需要真实窗口才能构造,所以这里做源码级
+    /// 断言:每个 `host.sync(..)` 调用都必须包在 `Task::stream` 里(即真的
+    /// 变成要执行的任务),不能被 `.discard()` 丢掉。曾经的写法
+    /// `window::run(..).discard()` 让预览 webview 永远建不出来。
+    #[test]
+    fn every_preview_sync_is_returned_as_a_running_task() {
+        let source = include_str!("product.rs");
+        let mut checked = 0usize;
+        for (at, _) in source.match_indices("host.sync(") {
+            checked += 1;
+            let line_start = source[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_end = source[at..]
+                .find('\n')
+                .map(|i| at + i)
+                .unwrap_or(source.len());
+            let line = &source[line_start..line_end];
+            assert!(
+                !line.contains(".discard()"),
+                "`host.sync` 的 Task 被 `.discard()` 丢掉了,预览不会被创建或销毁:\n{line}"
+            );
+        }
+        assert!(checked > 0, "找不到任何 `host.sync` 调用:审计规则已失效");
+    }
+
     fn test_temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "digger-product-{tag}-{}-{:?}",
@@ -1788,17 +1892,19 @@ mod tests {
         assert_eq!(rect.x, 600.0 + inset);
         assert_eq!(rect.y, 120.0 + chrome + inset);
         assert_eq!(rect.w, 400.0 - inset * 2.0);
-        assert_eq!(rect.h, 500.0 - chrome - inset * 2.0);
-        // G-I2:上/下各只留**一个**内容内边距,与库 `view::pane` 的
-        // `container(content).padding(region.padding)` 同口径。
+        // G-I2:`slot` 就是库 `view::pane` 的内容块(它自己已经 `padding(8)`)。
+        // Dozer 的 `webview_geometry` 非放大态是 `y = 顶 + 38`、`h` 一直到
+        // `content` 底边(`content` 已扣 padding 与 footbar),**底部不再缩**。
+        // 旧实现底部又减了一个 `inset`,比 Dozer 矮 8px。
+        assert_eq!(rect.h, 500.0 - chrome - inset);
         assert_eq!(
             rect.y + rect.h,
-            slot.y + slot.h - inset,
-            "底部只留一个 inset"
+            slot.y + slot.h,
+            "webview 底边必须贴齐内容块底边(G-I2)"
         );
         let style = {
             use dozer_panel_preview::display::PanelDisplay;
-            preview_display(0.0, 1).pane_style()
+            preview_display(0.0, 1, 0).pane_style()
         };
         assert_eq!(
             style.padding,
@@ -1954,6 +2060,7 @@ mod tests {
                 .unwrap()
                 .tab_bar_px(ViewerPanel::Files),
             5,
+            0,
         );
         assert_eq!(
             display.tab_bar_avail_px(ViewerPanel::Files),
@@ -1967,6 +2074,7 @@ mod tests {
                 .unwrap()
                 .tab_bar_px(ViewerPanel::Project),
             5,
+            0,
         );
         assert_eq!(
             display.tab_bar_avail_px(ViewerPanel::Project),
@@ -2032,6 +2140,94 @@ mod tests {
             window.visible_end
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C3:页签条宽度确实由 `sync_native` 的接线写回 hub,而不是测试自己
+    /// 手动 `set_tab_bar_width`。走真实的 `collect_preview_desired`。
+    #[test]
+    fn syncing_the_native_pages_writes_back_the_tab_bar_width() {
+        let dir = std::env::temp_dir().join(format!("digger-gc3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = shell::defaults();
+        let mut shell =
+            ShellModel::new(d.rails.clone(), d.selected.clone(), d.left_width, d.window).unwrap();
+        let files_side = shell.side_of(&shell::files_id()).expect("文件面板在布局里");
+        let _ = shell::update(
+            &mut shell,
+            ShellMsg::PanelPress {
+                panel: shell::files_id(),
+            },
+        );
+        let Some(pair) = shell::pair_rects(&shell, files_side).map(|p| p.second) else {
+            panic!("选中文件面板后该有配对预览块");
+        };
+        let rects = shell.rects(&bytehost_chrome::metrics_from_theme());
+        let mut hub = crate::adapters::preview::PreviewHub::with_config_dir(
+            crate::adapters::preview_native::Host::new(&dir),
+            &dir,
+        );
+        let project = dozer_model::ProjectInfo {
+            id: 1,
+            path: dir.display().to_string(),
+            name: "p".into(),
+            last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
+        };
+        // 之前是 0:证明宽度不是构造时就有的。
+        assert_eq!(hub.tab_bar_px(ViewerPanel::Files), 0.0);
+
+        let _ = collect_preview_desired(&mut hub, &shell, &rects, &project);
+
+        let expected = (pair.w - PREVIEW_CHROME_RESERVE_PX).max(0.0);
+        assert!(expected > 0.0, "配对预览块得有宽度: {pair:?}");
+        assert_eq!(
+            hub.tab_bar_px(ViewerPanel::Files),
+            expected,
+            "sync 必须把页签条可用宽度写回 hub(G-C3)"
+        );
+        // 没有页签时不该有页面,但宽度照样写回。
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G-C5:`preview_project` 被 `sync_preview_native` 真实调用——关闭中或
+    /// 没有当前项目时都得到 `None`(调用方据此同步空清单销毁页面)。
+    #[test]
+    fn sync_native_asks_preview_project_before_desiring_anything() {
+        let source = include_str!("product.rs");
+        let start = source
+            .find("fn sync_preview_native(")
+            .expect("找不到 sync_preview_native");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n    fn preview_native_tasks(")
+            .expect("找不到下一个函数");
+        let body = &rest[..end];
+        assert!(
+            body.contains("preview_project("),
+            "sync_preview_native 必须先过 preview_project(G-C5)"
+        );
+        // 空清单分支必须真的同步(否则旧页面留在窗口上)。
+        assert!(
+            body.contains("host.sync(w, &[])"),
+            "无项目 / 关闭中必须同步空清单,把旧页面销毁"
+        );
+        // 以及行为断言本身。
+        let project = dozer_model::ProjectInfo {
+            id: 7,
+            path: "/tmp/p".into(),
+            name: "p".into(),
+            last_active_ms: 0,
+            created_ms: 0,
+            updated_ms: 0,
+        };
+        assert!(preview_project(Some(&project), false).is_some());
+        assert!(
+            preview_project(Some(&project), true).is_none(),
+            "关闭中不服务"
+        );
+        assert!(preview_project(None, false).is_none(), "无项目不服务");
     }
 
     /// 只有被骨架选中、且在配对里的面板才该有预览块。
