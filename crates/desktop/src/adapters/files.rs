@@ -43,8 +43,6 @@ pub struct FilesPanel {
     project_id: Option<i64>,
     /// iced 自绘的右键菜单(Digger 不认原生 NSMenu,`ShowNativeMenu` 一律落到这里)。
     menu: Option<crate::adapters::menu_overlay::MenuOverlay<FilesMessage>>,
-    /// 系统打开器(测试注入假实现)。
-    opener: Opener,
 }
 
 /// 用系统默认应用打开一个路径。生产走 `open <path>`(路径作为独立参数,不经 shell)。
@@ -64,7 +62,7 @@ pub fn system_opener() -> Opener {
     })
 }
 
-/// 打开一个文件(产品把 `PanelCommand::OpenFile` 映射到这里)。失败只记日志。
+/// 用系统默认应用打开一个路径(降级页 / 页签菜单的"用系统应用打开")。失败只记日志。
 pub fn open_with_default(opener: &Opener, path: &std::path::Path) {
     if let Err(e) = opener(path) {
         eprintln!("digger: 打开 {} 失败: {e}", path.display()); // cli-output
@@ -106,7 +104,6 @@ impl FilesPanel {
             fs_rx: Some(fs_rx),
             project_id: None,
             menu: None,
-            opener: system_opener(),
         }
     }
 
@@ -322,8 +319,8 @@ impl FilesPanel {
         iced::Task::none()
     }
 
-    /// 排空宿主动作请求:`OpenFile` 用系统默认应用打开;搜索/文件历史 Digger 没有,
-    /// 丢弃(能力开关也已关掉,正常不会出现)。选目录交给调用方(产品弹系统对话框)。
+    /// 排空宿主动作请求(搜索/文件历史 Digger 没有,能力开关也已关掉,正常不会出现)。
+    /// 选目录交给调用方(产品弹系统对话框);`OpenFile` 由调用方路由到预览(D3)。
     pub fn take_host_requests(&mut self) -> Vec<dozer_panel_host::HostRequest<FilesMessage>> {
         self.state
             .as_mut()
@@ -332,17 +329,15 @@ impl FilesPanel {
     }
 
     /// 落地一条宿主动作。选目录返回 `Some(start)`,产品据此弹系统对话框。
+    /// `OpenFile` 不在这里打开:`open_path` 返回路径,调用方按 D3 送进预览。
     pub fn handle_host_request(
         &mut self,
         request: &dozer_panel_host::HostRequest<FilesMessage>,
     ) -> Option<PathBuf> {
         match request {
             dozer_panel_host::HostRequest::Command(dozer_panel_host::PanelCommand::OpenFile {
-                path,
-            }) => {
-                open_with_default(&self.opener, path);
-                None
-            }
+                ..
+            }) => None,
             dozer_panel_host::HostRequest::Command(
                 dozer_panel_host::PanelCommand::SearchIn { .. }
                 | dozer_panel_host::PanelCommand::ShowFileHistory { .. },
@@ -351,10 +346,14 @@ impl FilesPanel {
         }
     }
 
-    /// 测试用:替换系统打开器。
-    #[cfg(test)]
-    fn set_opener(&mut self, opener: Opener) {
-        self.opener = opener;
+    /// 这条宿主动作要预览打开哪个文件(文件树双击 / 回车)。
+    pub fn open_path(request: &dozer_panel_host::HostRequest<FilesMessage>) -> Option<&PathBuf> {
+        match request {
+            dozer_panel_host::HostRequest::Command(dozer_panel_host::PanelCommand::OpenFile {
+                path,
+            }) => Some(path),
+            _ => None,
+        }
     }
 
     /// 排空待发提示(库的 outbox)。
@@ -604,24 +603,64 @@ mod tests {
         assert_eq!(visible_names(&panel), before);
     }
 
-    /// 打开文件:路径作为**单个参数**传给打开器(含空格与引号也不拆分、不转义)。
+    /// 打开文件:D3——双击不再交给系统应用,而是把原路径交出去,由产品路由到预览。
     #[test]
-    fn open_file_command_uses_the_system_opener_with_the_path_as_a_single_argument() {
-        let seen: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let sink = seen.clone();
+    fn open_file_command_hands_the_path_back_for_the_preview() {
         let mut panel = panel("open-file");
-        panel.set_opener(std::sync::Arc::new(move |path: &std::path::Path| {
-            sink.lock().unwrap().push(path.to_path_buf());
-            Ok(())
-        }));
         let weird = PathBuf::from("/tmp/a dir/with \"quotes\" and 'single'.txt");
         let request =
             dozer_panel_host::HostRequest::Command(dozer_panel_host::PanelCommand::OpenFile {
                 path: weird.clone(),
             });
         assert!(panel.handle_host_request(&request).is_none());
-        assert_eq!(*seen.lock().unwrap(), vec![weird]);
+        assert_eq!(FilesPanel::open_path(&request), Some(&weird));
+    }
+
+    /// G-M:降级页 / 页签菜单的"用系统应用打开"走 `system_opener`——**路径
+    /// 路径必须以**单个**参数交给打开器,不经 shell、不因空格 / 引号 / `$`
+    /// 被拆分或展开。
+    ///
+    /// N3:旧版把假 opener 写进临时目录再 `unsafe set_var("PATH", ..)`,靠
+    /// 「测试单线程跑」这个**仓库里没人强制**的前提,而且假 opener 先建空
+    /// 日志再写入、测试每 10ms 轮询,可能读到空文件。现在 `Opener` 本身就是
+    /// 可注入的函数参数,直接传一个记录闭包即可。
+    #[test]
+    fn system_opener_receives_the_path_verbatim_as_a_single_argument() {
+        let weird = PathBuf::from("/tmp/a dir/with \"quotes\" and 'single' $HOME;x.txt");
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = {
+            let seen = std::sync::Arc::clone(&seen);
+            std::sync::Arc::new(move |path: &std::path::Path| {
+                seen.lock().unwrap().push(path.to_path_buf());
+                Ok(())
+            }) as Opener
+        };
+        open_with_default(&recorder, &weird);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![weird.clone()],
+            "路径必须原样、唯一地交给打开器"
+        );
+    }
+
+    /// N3:生产打开器真的不走 shell —— 路径作为 `Command::arg` 的独立参数。
+    #[test]
+    fn the_system_opener_never_goes_through_a_shell() {
+        let source = include_str!("files.rs");
+        let start = source
+            .find("pub fn system_opener()")
+            .expect("找不到 system_opener");
+        let rest = &source[start..];
+        let end = rest.find("\n}\n").expect("找不到 system_opener 结尾");
+        let body = &rest[..end];
+        assert!(
+            body.contains(".arg(path)"),
+            "路径必须作为独立参数传给 open / xdg-open"
+        );
+        for shell in ["sh -c", "bash -c", "cmd /C"] {
+            assert!(!body.contains(shell), "打开器里出现了 shell: {shell}");
+        }
     }
 
     /// 没有项目时右键空白区域:不 panic,也不弹空菜单。

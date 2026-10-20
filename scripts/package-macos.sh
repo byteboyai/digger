@@ -68,9 +68,22 @@ for dir in editor flyfish image-annotate; do
   rm -rf "$APP_DIR/Contents/Resources/$dir"
   cp -R "$ASSETS_DIR/$dir" "$APP_DIR/Contents/Resources/$dir"
 done
-# pdf / docx 渲染器第一批用不到(能力关闭),省 10 MB。
-rm -rf "$APP_DIR/Contents/Resources/flyfish/vendor/pdf" \
-       "$APP_DIR/Contents/Resources/flyfish/vendor/docx"
+# docx 渲染器第一批用不到(能力关闭),省若干 MB。
+# PDF 已开启(N5):`flyfish/vendor/pdf` 必须留在包里。
+rm -rf "$APP_DIR/Contents/Resources/flyfish/vendor/docx"
+
+# 宿主按名字读的目录与入口(与 crates/desktop/src/preview_assets.rs 的名单一致):
+# dozer:// 应答把 404 静默落成白屏,所以打包时就点名报错。
+for dir in editor flyfish image-annotate; do
+  if [ ! -d "$APP_DIR/Contents/Resources/$dir" ]; then
+    echo "error: preview resource '$dir/' missing from the bundle" >&2
+    exit 1
+  fi
+done
+if [ ! -f "$APP_DIR/Contents/Resources/flyfish/host.html" ]; then
+  echo "error: preview resource 'flyfish/host.html' missing from the bundle" >&2
+  exit 1
+fi
 
 # cargo 的链接期只对裸二进制做了 ad-hoc 签名,装进 bundle 后这个签名不覆盖
 # Info.plist/资源,且内容一变 ad-hoc identifier 就变;整体重签让本次构建自洽

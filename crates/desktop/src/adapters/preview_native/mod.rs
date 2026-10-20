@@ -19,12 +19,13 @@ mod plan;
 pub use plan::{LiveView, Op, plan};
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use bytehost_core::LogicalRect;
+use dozer_panel_preview::assets::AllowedFiles;
 use dozer_panel_preview::host_ipc::{HostEvent, IpcContext, IpcMessage, classify_ipc};
 use dozer_panel_preview::host_script::{HostScriptOptions, preview_host_script};
 use dozer_panel_preview::{PreviewWebviewSpec, ViewerPanel};
@@ -49,9 +50,29 @@ pub enum Event {
 /// 产品可注入的上下文:资源根 + 允许读取的绝对路径 + IPC 回流通道。
 pub struct Host {
     assets_root: PathBuf,
-    allowed: Arc<Mutex<HashSet<PathBuf>>>,
+    /// 白名单按项目隔离(G-C1):删 / 切别的项目不许收回本项目已打开文件的授权。
+    allowed: Arc<Mutex<std::collections::HashMap<i64, AllowedFiles>>>,
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
-    rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Event>>>,
+    rx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Event>>>>,
+    /// 测试专用:无 wry 时无法建真句柄,这里伪造「哪些 id 活着」,好让
+    /// `live_ids()`(进而 `host_scripts()`)在无头测试里走通生产路径。
+    #[cfg(test)]
+    test_live: Arc<Mutex<Option<std::collections::HashSet<usize>>>>,
+}
+
+/// 句柄表是 `thread_local`,副本等价于同一宿主(共享白名单与回流通道),只为了
+/// 能搬进 `window::run` 的 `'static` 闭包做脚本注入。
+impl Clone for Host {
+    fn clone(&self) -> Self {
+        Self {
+            assets_root: self.assets_root.clone(),
+            allowed: Arc::clone(&self.allowed),
+            tx: self.tx.clone(),
+            rx: Arc::clone(&self.rx),
+            #[cfg(test)]
+            test_live: Arc::clone(&self.test_live),
+        }
+    }
 }
 
 impl Host {
@@ -65,10 +86,19 @@ impl Host {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             assets_root: root,
-            allowed: Arc::new(Mutex::new(HashSet::new())),
+            allowed: Arc::new(Mutex::new(std::collections::HashMap::new())),
             tx,
-            rx: Mutex::new(Some(rx)),
+            rx: Arc::new(Mutex::new(Some(rx))),
+            #[cfg(test)]
+            test_live: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 测试专用:把「活着的句柄 id」固定成给定集合(不再读 thread-local
+    /// `VIEWS`,那里没有 wry 就永远是空的)。
+    #[cfg(test)]
+    pub fn set_test_live_ids(&self, ids: impl IntoIterator<Item = usize>) {
+        *self.test_live.lock().expect("test_live 锁") = Some(ids.into_iter().collect());
     }
 
     pub fn assets_root(&self) -> &Path {
@@ -81,9 +111,70 @@ impl Host {
     /// 白名单是精确匹配(库的 `serve_allowlisted_file` 不做 canonicalize),带
     /// `..` 或相对分量入表会在真机上 404。
     pub fn allow_file(&self, path: impl AsRef<Path>) {
+        self.allow_file_for(0, path);
+    }
+
+    /// 为某个项目授权一个路径。项目 id 只做隔离用,不参与协议应答。
+    pub fn allow_file_for(&self, project_id: i64, path: impl AsRef<Path>) {
         let path = path.as_ref();
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        self.allowed.lock().expect("allowed 锁").insert(path);
+        self.allowed
+            .lock()
+            .expect("allowed 锁")
+            .entry(project_id)
+            .or_default()
+            .insert(path);
+    }
+
+    /// 撤掉某个项目的全部授权(删除项目时)。
+    pub fn clear_allowed_for(&self, project_id: i64) {
+        self.allowed.lock().expect("allowed 锁").remove(&project_id);
+    }
+
+    /// 清空所有项目的白名单(测试 / 宿主自检用)。
+    pub fn clear_allowed(&self) {
+        self.allowed.lock().expect("allowed 锁").clear();
+    }
+
+    /// 某路径是否已在任一项目的白名单里(测试与宿主自检用,不触发读取)。
+    pub fn accepts(&self, path: impl AsRef<Path>) -> bool {
+        let path = path.as_ref();
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.allowed
+            .lock()
+            .expect("allowed 锁")
+            .values()
+            .any(|files| files.contains(&path))
+    }
+
+    /// 当前活着的预览句柄 id(库取宿主脚本时据此剔除已销毁页签)。
+    pub fn live_ids(&self) -> std::collections::HashSet<usize> {
+        #[cfg(test)]
+        if let Some(fixed) = self.test_live.lock().expect("test_live 锁").as_ref() {
+            return fixed.clone();
+        }
+        VIEWS.with(|v| v.borrow().keys().copied().collect())
+    }
+
+    /// 向某个已建好的预览页面注入脚本(只在该页面确实活着时生效)。
+    pub fn push_script(&self, webview_id: usize, script: String) {
+        with(webview_id, |view| {
+            let _ = view.evaluate_script(&script);
+        });
+    }
+
+    /// 这一帧建好页面后,把库排队的 host 命令(编辑器 / 表格 / PlantUML)取成
+    /// 可注入脚本。命令队列在库一侧,生成脚本同在库内,产品只负责 `eval`。
+    pub fn take_host_scripts(
+        &self,
+        state: &mut dozer_panel_preview::PreviewPanelState,
+        project_id: i64,
+        panel: ViewerPanel,
+    ) -> Vec<(usize, String)> {
+        // G-I1:库已返回 `binding.webview_id()`(Project 侧含偏移),不能再加。
+        state
+            .pane
+            .take_host_scripts(&self.live_ids(), project_id, panel)
     }
 
     pub fn take_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Event>> {
@@ -152,6 +243,13 @@ impl Host {
             flyfish: context.kind == dozer_panel_preview::host_ipc::WebviewKind::Flyfish,
         });
         let allowed = Arc::clone(&self.allowed);
+        // N6:这个页面属于哪个项目,在**创建时**由 Rust 一次定下(绑定里的项目,否则 Rust 拼出来的
+        // URL 里的 `proj`),之后协议请求带什么 `proj` 都不作数——页面自己能改请求 URL。
+        let bound_project = spec
+            .editor_binding
+            .as_ref()
+            .map(|b| b.project_id)
+            .or_else(|| project_from_url(&spec.url));
         let root = self.assets_root.clone();
         let tx = self.tx.clone();
         let webview_id = spec.id;
@@ -172,9 +270,14 @@ impl Host {
                 });
             })
             .with_custom_protocol("dozer".into(), move |_id, request| {
-                let allowed = allowed.lock().expect("allowed 锁");
+                // N6:只查**这个页面所属项目**的白名单(创建时绑定,见 `bound_project`)。
+                // 此前把各项目的授权合并成一份,A 项目的页面能读到只授权给 B 的文件;
+                // 后来改成按请求 URL 里的 `proj` 查,页面自己改 URL 就能越过隔离。
                 let uri = request.uri().to_string();
-                let reply = dozer_panel_preview::assets::handle_protocol(&root, &allowed, &uri)
+                // 页面的静态资源(编辑器脚本 / 字体 / 宿主页)不需要白名单;只有 `__file__/`
+                // 读文件才要。没有绑定项目的页面拿到空白名单,任何文件读取都落到 404。
+                let files = allowed_for_project(&allowed, bound_project);
+                let reply = dozer_panel_preview::assets::handle_protocol(&root, &files, &uri)
                     .unwrap_or_else(dozer_panel_preview::assets::not_found);
                 wry::http::Response::builder()
                     .status(reply.status)
@@ -238,6 +341,26 @@ fn forget(id: usize) {
     });
 }
 
+/// URL 查询串里的 `proj=<id>`。只在**创建页面时**对 Rust 自己拼的 URL 用一次,不对页面发来的请求用。
+fn project_from_url(url: &str) -> Option<i64> {
+    url.split_once('?')
+        .map(|(_, query)| query)
+        .unwrap_or("")
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("proj="))
+        .and_then(|v| v.parse::<i64>().ok())
+}
+
+/// N6:一个页面能用的白名单 = **它自己那个项目**的那一份;没有绑定项目的页面拿空白名单。
+fn allowed_for_project(
+    allowed: &std::sync::Mutex<std::collections::HashMap<i64, AllowedFiles>>,
+    project: Option<i64>,
+) -> AllowedFiles {
+    project
+        .and_then(|id| allowed.lock().expect("allowed 锁").get(&id).cloned())
+        .unwrap_or_default()
+}
+
 /// 预览页面允许发生的导航:库的 `dozer://` 协议(含程序化 `load_url`:重载、主题、语言变化都会换 URL),
 /// 以及 HTML 隔离宿主内部的 `about:blank` / `about:srcdoc` iframe。其余(http/https/file…)一律拒绝。
 /// wry 对所有导航动作都调用这个处理器,不区分主 frame 与子 frame。
@@ -257,6 +380,18 @@ fn bounds(rect: LogicalRect) -> wry::Rect {
     wry::Rect {
         position: wry::dpi::LogicalPosition::new(rect.x, rect.y).into(),
         size: wry::dpi::LogicalSize::new(rect.width, rect.height).into(),
+    }
+}
+
+/// `Files` 与 `Project` 是两个独立 `PreviewPane`,各自从 0 数 webview id;两边同进
+/// 一张句柄表,`Project` 侧统一加这个偏移(库的 editor binding 同款)。
+pub const PROJECT_PREVIEW_ID_OFFSET: usize = dozer_panel_preview::PROJECT_PREVIEW_ID_OFFSET;
+
+/// 某面板的 webview id 在共享句柄表里的偏移。
+pub fn id_offset(panel: ViewerPanel) -> usize {
+    match panel {
+        ViewerPanel::Project => PROJECT_PREVIEW_ID_OFFSET,
+        _ => 0,
     }
 }
 
@@ -287,8 +422,18 @@ pub fn desired(
             }
             spec
         })
+        .map(|mut spec| {
+            spec.id += id_offset(panel);
+            spec
+        })
         .filter_map(|spec| rect(&spec).map(|rect| (spec, rect)))
         .collect()
+}
+
+/// 一条预览 IPC 属于哪个预览面板(editor / rendered host 都带绑定;其余变体
+/// 不属于预览面板,返回 `None`)。
+pub fn panel_of(message: &IpcMessage) -> Option<ViewerPanel> {
+    host_event(message).and_then(HostEvent::panel)
 }
 
 /// 让 `HostEvent` 也能直接从 IPC 通道取出(便利函数,不改变分类语义)。
@@ -303,6 +448,121 @@ pub fn host_event(message: &IpcMessage) -> Option<&HostEvent> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// N6:项目 A 的页面读不到只授权给项目 B 的文件。
+    ///
+    /// 此前协议闭包把所有项目的白名单合并成一份,分项目存储只做了撤销
+    /// 隔离;A 页面只要知道路径就能读到 B 的文件。
+    #[test]
+    fn a_page_of_project_a_cannot_read_a_file_allowed_only_for_project_b() {
+        let dir = std::env::temp_dir().join(format!(
+            "digger-n6-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let b_file = dir.join("b-secret.txt");
+        std::fs::write(&b_file, "B-SECRET").unwrap();
+        let a_file = dir.join("a-ok.txt");
+        std::fs::write(&a_file, "A-OK").unwrap();
+        // 生产路径由 `Host::allow_file_for` 先 canonicalize(macOS 的
+        // `/var` → `/private/var`);测试里对齐同一口径。
+        let b_file = std::fs::canonicalize(&b_file).unwrap();
+        let a_file = std::fs::canonicalize(&a_file).unwrap();
+
+        let allowed = std::sync::Mutex::new(std::collections::HashMap::new());
+        {
+            let mut guard = allowed.lock().unwrap();
+            let mut a = AllowedFiles::new();
+            a.insert(&a_file);
+            guard.insert(1, a);
+            let mut b = AllowedFiles::new();
+            b.insert(&b_file);
+            guard.insert(2, b);
+        }
+
+        // A 的页面请求 B 的文件:`__file__/<abs>` 不存在于 A 的白名单 → 404。
+        let b_uri = format!(
+            "dozer://editor/__file__/{}?proj=1&panel=files&tab=1&doc=x",
+            dozer_panel_preview::webview::encode_component(&b_file.display().to_string())
+        );
+        let a_files = allowed_for_project(&allowed, Some(1));
+        let reply = dozer_panel_preview::assets::handle_protocol(&dir, &a_files, &b_uri)
+            .unwrap_or_else(dozer_panel_preview::assets::not_found);
+        assert_ne!(reply.status, 200, "A 读到了只授权给 B 的文件");
+        assert!(
+            !String::from_utf8_lossy(&reply.body).contains("B-SECRET"),
+            "A 的应答里出现了 B 的内容"
+        );
+
+        // 正向对照:A 读自己的文件能成功(证明 404 来自隔离,不是路径写错)。
+        let a_uri = format!(
+            "dozer://editor/__file__/{}?proj=1&panel=files&tab=1&doc=x",
+            dozer_panel_preview::webview::encode_component(&a_file.display().to_string())
+        );
+        let a_files = allowed_for_project(&allowed, Some(1));
+        let ok = dozer_panel_preview::assets::handle_protocol(&dir, &a_files, &a_uri)
+            .unwrap_or_else(dozer_panel_preview::assets::not_found);
+        assert_eq!(ok.status, 200, "A 读不到自己的文件(测试自证不成立)");
+        assert!(String::from_utf8_lossy(&ok.body).contains("A-OK"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = Path::new(&dir);
+    }
+
+    #[test]
+    fn a_protocol_request_without_a_project_gets_no_file_access() {
+        let allowed = std::sync::Mutex::new(std::collections::HashMap::new());
+        {
+            let mut guard = allowed.lock().unwrap();
+            let mut any = AllowedFiles::new();
+            any.insert("/etc/hosts");
+            guard.insert(1, any);
+        }
+        // 静态资源:不带 proj,必须照常解析(用空白名单)。
+        let files = allowed_for_project(&allowed, None);
+        assert!(!files.contains(Path::new("/etc/hosts")));
+    }
+
+    /// N6:页面自己把请求 URL 里的 `proj` 改成别的项目,也读不到别的项目的文件——归属在创建页面时就
+    /// 由 Rust 定下,请求里带什么都不作数。
+    #[test]
+    fn a_forged_proj_in_the_request_url_does_not_switch_the_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "digger-n6-forged-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let b_file = std::fs::canonicalize({
+            let f = dir.join("b-secret.txt");
+            std::fs::write(&f, "B-SECRET").unwrap();
+            f
+        })
+        .unwrap();
+        let allowed = std::sync::Mutex::new(std::collections::HashMap::new());
+        {
+            let mut b = AllowedFiles::new();
+            b.insert(&b_file);
+            allowed.lock().unwrap().insert(2, b);
+        }
+        // 这个页面创建时绑定的是项目 1;请求 URL 谎称 `proj=2`。
+        let files = allowed_for_project(
+            &allowed,
+            project_from_url("dozer://editor/index.html?proj=1&tab=1"),
+        );
+        let forged = format!(
+            "dozer://editor/__file__/{}?proj=2&panel=files&tab=1&doc=x",
+            dozer_panel_preview::webview::encode_component(&b_file.display().to_string())
+        );
+        let reply = dozer_panel_preview::assets::handle_protocol(&dir, &files, &forged)
+            .unwrap_or_else(dozer_panel_preview::assets::not_found);
+        assert_ne!(reply.status, 200);
+        assert!(!String::from_utf8_lossy(&reply.body).contains("B-SECRET"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn navigation_policy_allows_the_protocol_and_srcdoc_but_nothing_external() {

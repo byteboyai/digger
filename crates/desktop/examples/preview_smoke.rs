@@ -4,8 +4,10 @@
 //! 顶部三个按钮(关闭当前页签 / 放大(藏起 webview)/ 全部销毁),底部状态行
 //! 显示存活句柄数。
 //!
-//! `--selftest`:无交互地逐项打开夹具,等 host 就绪,断言存活句柄数与期望一致,
-//! 末尾销毁全部并再次断言;任何一步不符即非零退出。用于在无人盯屏时回归。
+//! `--selftest`:无交互地逐项打开夹具,等 host 就绪,断言存活句柄数与期望一致;
+//! 关掉全部页签后回到 0、重开仍是同一批;接着跑生命周期压力(开/关 50 次、
+//! 切项目 20 次、放大/还原 20 次、一次开 50 个页签)并逐步核对句柄数。任何
+//! 一步不符即非零退出。用于在无人盯屏时回归。
 //!
 //! 面板区域 = 整块 webview 矩形(顶栏高度留给产品壳,这里不画)。
 
@@ -25,32 +27,96 @@ const TOP_BAR: f64 = 48.0;
 const STATUS_BAR: f64 = 26.0;
 const WINDOW: iced::Size = iced::Size::new(1100.0, 760.0);
 
-/// 自检用的夹具。`.py`/`.md`/`.html` 是真正会建 webview 的类型;`.json`/`.csv`
-/// 在 Digger 的能力下走原生降级页,不应产生句柄。
+/// 自检用的夹具(随仓库提交,示例不再依赖 `../dozer` 源码树)。
+/// `.md`/`.html`/`.png`/`.svg`/`.pdf` 是真正会建 webview 的类型(N5 起
+/// `.pdf` 进 flyfish);`.py`/`.txt` 走原生编辑器,`.json`/`.csv` 在 Digger
+/// 的能力下走原生降级页,都不产生句柄。
+fn fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/fixtures/preview")
+}
+
 fn fixtures() -> Vec<(PathBuf, &'static str)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
-    let dozer = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../dozer");
+    let dir = fixture_dir();
     [
-        (
-            "docs/superpowers/specs/2026-10-18-preview-engine-s5b2-design.md",
-            "md",
-        ),
-        ("README.md", "md"),
-        (
-            "../dozer/crates/dozer-panel-preview/assets/html_host.html",
-            "html",
-        ),
+        ("hello.py", "py"),
+        ("notes.md", "md"),
+        ("page.html", "html"),
+        ("pic.png", "png"),
+        ("logo.svg", "svg"),
+        ("data.json", "json"),
+        ("sheet.csv", "csv"),
+        ("doc.pdf", "pdf"),
+        ("带 空格 #1.txt", "txt"),
     ]
     .iter()
-    .map(|(p, kind)| (root.join(p), *kind))
-    .chain(std::iter::once((
-        dozer.join("crates/dozer-panel-preview/assets/flyfish/host.html"),
-        "html",
-    )))
-    .filter(|(p, _)| p.exists())
+    .map(|(name, kind)| (dir.join(name), *kind))
     .collect()
+}
+
+/// 示例的**开发态** `assets/` 目录。与产品同一份规则(库的源码树 / 打包态
+/// `Contents/Resources`),只是示例先按 `Cargo.lock` 钉住的 git 检出解析,
+/// 免得 `CARGO_MANIFEST_DIR` 指向 Digger 时退回到错误的路径。
+fn assets_dir() -> PathBuf {
+    if let Some(root) = std::env::var_os("DIGGER_PREVIEW_ASSETS") {
+        return PathBuf::from(root);
+    }
+    match dozer_panel_preview::assets::bundle_resources_root(
+        &std::env::current_exe().unwrap_or_default(),
+    ) {
+        Some(resources) => resources,
+        None => git_assets_dir(),
+    }
+}
+
+fn asset_roots() -> PathBuf {
+    assets_dir().join("flyfish")
+}
+
+/// `dozer-panel-preview` 的 `assets/` 目录:从本仓 `Cargo.lock` 的 `source`
+/// 取 git 检查点 sha,再到 `~/.cargo/git/checkouts/<仓库>-<hash>/` 下找同名检出。
+fn git_assets_dir() -> PathBuf {
+    git_assets_root().unwrap_or_else(|| {
+        dozer_panel_preview::assets::from_lib_source()
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default()
+    })
+}
+
+fn git_assets_root() -> Option<PathBuf> {
+    let lock =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
+            .ok()?;
+    let sha = lock
+        .split("name = \"dozer-panel-preview\"")
+        .nth(1)?
+        .lines()
+        .find_map(|line| line.strip_prefix("source = "))?
+        .rsplit_once('#')?
+        .1
+        .trim_end_matches('"')
+        .to_string();
+    let short = &sha[..7.min(sha.len())];
+    let mut checkouts: Vec<_> = std::fs::read_dir(cargo_home()?.join("git/checkouts"))
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|dir| {
+            dir.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("dozer-"))
+        })
+        .collect();
+    checkouts.sort();
+    checkouts.into_iter().find_map(|dir| {
+        let root = dir.join(short).join("crates/dozer-panel-preview/assets");
+        root.is_dir().then_some(root)
+    })
+}
+
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
 }
 
 /// 名字里带空格、`#`、中日文的夹具:走 `file URL → dozer:// → 白名单` 全程,
@@ -96,10 +162,7 @@ fn build() -> (App, Task<Msg>) {
     for (path, _) in &list {
         pane.open_path_provisional(path.clone());
     }
-    let host = preview_native::Host::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../dozer/crates/dozer-panel-preview/assets/flyfish"
-    ));
+    let host = preview_native::Host::new(asset_roots());
     // 预览里的编辑器要能读回原文件(保存/冲突检测走同一白名单)。
     for tab in pane.tabs() {
         if let TabKind::File(path) = &tab.kind {
@@ -332,17 +395,14 @@ fn main() -> iced::Result {
 /// 汇报。这样 `window::run` 与产品同路径。
 fn selftest() -> iced::Result {
     eprintln!("selftest: 启动"); // cli-output
-    let mut list = fixtures();
-    if let Some(awkward) = awkward_fixture() {
-        list.push(awkward);
+    let list = fixtures();
+    if let Err(reason) = selftest_preconditions(&list) {
+        eprintln!("selftest: FAIL {reason}"); // cli-output
+        std::process::exit(1);
     }
-    assert!(!list.is_empty(), "selftest: 没有可用夹具");
 
     let mut pane = PreviewPane::default();
-    let host = preview_native::Host::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../dozer/crates/dozer-panel-preview/assets/flyfish"
-    ));
+    let host = preview_native::Host::new(asset_roots());
     for (path, _) in &list {
         host.allow_file(path);
         pane.open_path_provisional(path.clone());
@@ -358,7 +418,10 @@ fn selftest() -> iced::Result {
         state: PreviewPanelState::new(pane),
         list,
         ready: std::collections::BTreeSet::new(),
-        deadline: Instant::now() + Duration::from_secs(30),
+        live_at_startup: 0,
+        maximized: false,
+        stress: None,
+        deadline: Instant::now() + Duration::from_secs(90),
         failure: None,
     };
 
@@ -396,12 +459,70 @@ fn selftest() -> iced::Result {
     .run()
 }
 
+/// 自检的前置条件。**缺夹具 / 缺资源一律算失败**,不再"找不到就跳过"——
+/// 跳过会让一条永远不成立的回归在 CI 里保持绿色。
+fn selftest_preconditions(list: &[(PathBuf, &'static str)]) -> Result<(), String> {
+    let dir = fixture_dir();
+    let absent: Vec<_> = list
+        .iter()
+        .map(|(path, _)| path)
+        .filter(|path| !path.is_file())
+        .map(|path| path.display().to_string())
+        .collect();
+    if !absent.is_empty() {
+        return Err(format!("夹具缺失({}):{absent:?}", dir.display()));
+    }
+    let root = assets_dir();
+    let missing = missing_assets(&root);
+    if !missing.is_empty() {
+        return Err(format!("资源根 {} 缺 {missing:?}", root.display()));
+    }
+    Ok(())
+}
+
+/// 示例进程里资源根的检查(产品侧是 `preview_assets::missing_in`,两边同一份名单)。
+#[allow(dead_code)]
+fn missing_assets(root: &std::path::Path) -> Vec<String> {
+    let dirs = ["editor", "flyfish", "image-annotate"]
+        .into_iter()
+        .filter(|dir| !root.join(dir).is_dir())
+        .map(|dir| format!("{dir}/"));
+    let files = ["flyfish/host.html"]
+        .into_iter()
+        .filter(|file| !root.join(file).is_file())
+        .map(str::to_string);
+    dirs.chain(files).collect()
+}
+
 fn selftest_update(app: &mut SelfTest, msg: Msg) -> Task<Msg> {
     app.update(msg)
 }
 
 fn selftest_view(app: &SelfTest) -> Element<'_, Msg> {
     app.view()
+}
+
+/// Task 10 Step 2 的压力阶段进度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum StressPhase {
+    #[default]
+    OpenClose,
+    SwitchProject,
+    Maximize,
+    Tabs,
+}
+
+#[derive(Debug, Default)]
+struct Stress {
+    phase: StressPhase,
+    /// 当前阶段已经完成的动作数。
+    done: usize,
+    /// 本阶段见过的最大存活句柄数。
+    peak: usize,
+    /// 开/关阶段:上一拍是"开"还是"关"。
+    close_next: bool,
+    /// 页签阶段:50 个页签是否已经开过(下一拍核对清单)。
+    opened: bool,
 }
 
 struct SelfTest {
@@ -412,6 +533,12 @@ struct SelfTest {
     state: PreviewPanelState,
     list: Vec<(PathBuf, &'static str)>,
     ready: std::collections::BTreeSet<usize>,
+    /// 第 0 步通过时的句柄数,第 2 步要证明"关掉全部页签就回到 0"。
+    live_at_startup: usize,
+    /// 放大:整块预览被 iced 盖住,webview 全部藏起但句柄仍在。
+    maximized: bool,
+    /// 压力测试的进度;`None` = 还没进压力阶段。
+    stress: Option<Stress>,
     deadline: Instant,
     failure: Option<String>,
 }
@@ -458,6 +585,14 @@ impl SelfTest {
 
     /// 每个"拍"检查一次期望;不满足就等下一拍(由 IPC/窗口事件驱动)。
     fn advance(&mut self) -> Task<Msg> {
+        if std::env::var_os("SMOKE_DBG").is_some() {
+            eprintln!(
+                "DBG tick step={} live={} stress={:?}",
+                self.step,
+                self.host.live_count(),
+                self.stress.as_ref().map(|s| (s.phase, s.done))
+            ); // cli-output
+        }
         if let Some(reason) = &self.failure {
             eprintln!("selftest: FAIL {reason}"); // cli-output
             std::process::exit(1);
@@ -477,27 +612,210 @@ impl SelfTest {
         if actual != expected {
             return Task::none();
         }
-        if self.step == 0 {
-            // 句柄数相等只证明 Create 执行了;还要至少收到一条 host IPC,
-            // 才证明协议应答 + 注入脚本 + classify_ipc 整条通路是通的。
-            if self.ready.is_empty() {
+        match self.step {
+            0 => {
+                // 句柄数相等只证明 Create 执行了;还要至少收到一条 host IPC,
+                // 才证明协议应答 + 注入脚本 + classify_ipc 整条通路是通的。
+                if self.ready.is_empty() {
+                    return Task::none();
+                }
+                if actual != Self::first_batch_handles() {
+                    self.failure = Some(format!(
+                        "第 0 步句柄数 {actual} != 首批期望 {}(.md/.svg/.pdf/.html/.png 各 1;.py/.json/.csv/.txt 不建 webview)",
+                        Self::first_batch_handles()
+                    ));
+                    return Task::none();
+                }
+                eprintln!("selftest: 第 0 步 ok(live={actual})"); // cli-output
+                self.live_at_startup = actual;
+                self.step = 1;
+                // 关掉全部页签(不是直接销毁句柄):走库的 `close_by_id` 链路,
+                // 期望清单随即变空,宿主在下一帧 `sync` 里销毁。
+                let ids: Vec<_> = self.state.pane.tabs().iter().map(|tab| tab.id).collect();
+                for id in ids {
+                    self.state.pane.close_by_id(id);
+                }
                 return Task::none();
             }
-            eprintln!("selftest: 第 0 步 ok(live={actual})"); // cli-output
-            self.step = 1;
-            self.host.destroy_all();
-            return Task::done(Msg::Resized(iced::Size::new(
-                self.size.0 as f32,
-                self.size.1 as f32,
-            )));
-        }
-        if self.step == 1 {
-            eprintln!("selftest: 第 1 步 ok(全部销毁后 live=0)"); // cli-output
-            self.step = 2;
-            return Task::none();
+            1 => {
+                eprintln!("selftest: 第 1 步 ok(关掉全部页签后 live=0)"); // cli-output
+                self.step = 2;
+                self.ready.clear();
+                // 重新打开同一批夹具,验证"关掉再开"仍然每个各一个 webview。
+                for (path, _) in &self.list {
+                    self.state.pane.open_path_provisional(path.clone());
+                }
+                return Task::none();
+            }
+            2 => {
+                if self.ready.is_empty() {
+                    return Task::none();
+                }
+                if actual != self.live_at_startup {
+                    self.failure = Some(format!(
+                        "第 2 步重开后 live={actual} != {}(首次 {})",
+                        Self::first_batch_handles(),
+                        self.live_at_startup
+                    ));
+                    return Task::none();
+                }
+                eprintln!("selftest: 第 2 步 ok(重开后 live={actual})"); // cli-output
+                self.step = 3;
+                // 压力阶段从"全关"的干净状态开始,免得把首批的句柄算进峰值。
+                let ids: Vec<_> = self.state.pane.tabs().iter().map(|tab| tab.id).collect();
+                for id in ids {
+                    self.state.pane.close_by_id(id);
+                }
+                self.stress = Some(Stress::default());
+                return Task::none();
+            }
+            3 => return self.advance_stress(actual),
+            _ => {}
         }
         eprintln!("selftest: PASS"); // cli-output
         std::process::exit(0);
+    }
+
+    /// 自动化生命周期检查(Task 10 Step 2)。每到一个"稳定点"(句柄数与期望
+    /// 一致)就发下一步动作:
+    ///
+    /// - 连续开 / 关预览页签 50 次;
+    /// - 切"项目"20 次(每次把整块预览换成另一组文件再换回,等价于产品里切
+    ///   项目页签时的 `set_current_project` + 全关);
+    /// - 放大 / 还原 20 次(放大时 webview 全藏起,但句柄数不变);
+    /// - 一次打开 50 个页签。
+    ///
+    /// 每一拍都核对句柄数,峰值也记下来:`sync` 是异步的,但期望清单与句柄表
+    /// 收敛后必须一致,且不能越积越多。
+    fn advance_stress(&mut self, actual: usize) -> Task<Msg> {
+        let expected = self.expected_handles();
+        let Some(stress) = self.stress.as_mut() else {
+            return Task::none();
+        };
+        if actual != expected {
+            return Task::none();
+        }
+        // 开/关切项目阶段要求句柄收敛到期望且至少收到过一次 IPC;许多页签
+        // 阶段只要求收敛;放大阶段每拍只做"放大"或"还原"其中一下。
+        // 放大阶段只做可见性切换;页签阶段(一次 50 个 `Loading` 页签)宿主建得
+        // 慢,不等 IPC——句柄数相等就够,就绪由下一步的整体流程证明。
+        if !matches!(stress.phase, StressPhase::Maximize | StressPhase::Tabs)
+            && self.ready.is_empty()
+            && actual > 0
+        {
+            return Task::none();
+        }
+        stress.peak = stress.peak.max(actual);
+        eprintln!(
+            "DBG phase={:?} done={} actual={actual} expected={expected}",
+            stress.phase, stress.done
+        ); // cli-output
+        match stress.phase {
+            StressPhase::OpenClose => {
+                if stress.done == 50 {
+                    eprintln!("selftest: 压力 开/关 50 次 ok(peak={})", stress.peak); // cli-output
+                    stress.phase = StressPhase::SwitchProject;
+                    stress.done = 0;
+                    stress.peak = 0;
+                    return Task::none();
+                }
+                stress.done += 1;
+                if stress.close_next {
+                    let ids: Vec<_> = self.state.pane.tabs().iter().map(|t| t.id).collect();
+                    for id in ids {
+                        self.state.pane.close_by_id(id);
+                    }
+                    self.ready.clear();
+                } else {
+                    for (path, _) in &self.list {
+                        self.state.pane.open_path_provisional(path.clone());
+                    }
+                }
+                stress.close_next = !stress.close_next;
+                Task::none()
+            }
+            StressPhase::SwitchProject => {
+                if stress.done == 20 {
+                    eprintln!("selftest: 压力 切项目 20 次 ok(peak={})", stress.peak); // cli-output
+                    stress.phase = StressPhase::Maximize;
+                    stress.done = 0;
+                    stress.peak = 0;
+                    return Task::none();
+                }
+                // 切走:全关(产品里是销毁整块预览);切回:只开前两个夹具。
+                stress.done += 1;
+                if stress.close_next {
+                    let ids: Vec<_> = self.state.pane.tabs().iter().map(|t| t.id).collect();
+                    for id in ids {
+                        self.state.pane.close_by_id(id);
+                    }
+                    self.ready.clear();
+                } else {
+                    for (path, _) in self.list.iter().take(2) {
+                        self.state.pane.open_path_provisional(path.clone());
+                    }
+                }
+                stress.close_next = !stress.close_next;
+                Task::none()
+            }
+            StressPhase::Maximize => {
+                if self.maximized {
+                    // 上一拍已经切到"放大"并记过数,这一拍先还原,`sync` 在
+                    // `update` 末尾把可见性改回来;下一拍再切"放大"。
+                    self.maximized = false;
+                    return Task::none();
+                }
+                if stress.done == 20 {
+                    eprintln!("selftest: 压力 放大/还原 20 次 ok(peak={})", stress.peak); // cli-output
+                    stress.phase = StressPhase::Tabs;
+                    stress.done = 0;
+                    stress.peak = 0;
+                    return Task::none();
+                }
+                // 放大时 `sync` 把全部 webview 的 `visible` 置 false,句柄数不变。
+                self.maximized = true;
+                stress.done += 1;
+                Task::none()
+            }
+            StressPhase::Tabs => {
+                if stress.opened {
+                    // 全部 50 个页签都必须进了期望清单——即 tab 栏溢出只裁显示、
+                    // 不丢页签,切到溢出的那个仍能建出对应宿主。
+                    if expected != Self::MANY_TABS {
+                        self.failure = Some(format!(
+                            "50 页签时期望清单 {expected} != {}",
+                            Self::MANY_TABS
+                        ));
+                        return Task::none();
+                    }
+                    eprintln!("selftest: 压力 50 个页签 ok(live={actual})"); // cli-output
+                    self.host.destroy_all();
+                    self.step = 4;
+                    return Task::none();
+                }
+                // 同一路径重复打开会被库去重;用不同的临时文件名凑 50 个页签
+                // (进程退出前清理)。
+                for i in 0..Self::MANY_TABS {
+                    let copy = std::env::temp_dir().join(format!("digger stress {i}.md"));
+                    let _ = std::fs::write(&copy, format!("# stress {i}\n"));
+                    self.host.allow_file(&copy);
+                    self.state.pane.open_path_provisional(copy);
+                }
+                stress.opened = true;
+                Task::none()
+            }
+        }
+    }
+
+    /// 一次打开的页签数(Task 10 Step 2 的"50 个页签打开不崩溃")。
+    const MANY_TABS: usize = 50;
+
+    /// 首批夹具里真正建 webview 的数量:`.py`(原生编辑器,不建宿主)之外
+    /// 的渲染型各一——`.md` / `.svg` / `.pdf`(flyfish)、`.html`(隔离渲染)、
+    /// `.png`(image-annotate),共 5 个。`.json` / `.csv` 在 Digger 的能力下
+    /// 是原生降级页,`.txt` 走原生编辑器,都不建宿主。
+    fn first_batch_handles() -> usize {
+        5
     }
 
     fn expected_handles(&self) -> usize {
