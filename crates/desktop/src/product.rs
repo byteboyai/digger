@@ -107,8 +107,6 @@ pub enum Msg {
     /// 双击顶栏空白处:缩放窗口(系统标题栏没了,这个手势要自己补)。
     ZoomToggle,
     ShutdownFinished(Result<(), String>),
-    /// 无副作用的一次消息(把工作让给后面排队的任务)。
-    Noop,
     ForceExit,
     CloseRequested,
     Exit,
@@ -237,6 +235,7 @@ fn collect_preview_desired(
     shell: &ShellModel,
     rects: &bytehost_chrome::ShellRects,
     project: &dozer_model::ProjectInfo,
+    overlay_open: bool,
 ) -> Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> {
     let mut desired: Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> = Vec::new();
     let mut tab_bar = (0.0_f32, 0.0_f32);
@@ -264,7 +263,28 @@ fn collect_preview_desired(
         }
     }
     preview.set_tab_bar_width(tab_bar.0, tab_bar.1);
+    hide_for_overlay(&mut desired, overlay_open);
     desired
+}
+
+/// 有 iced 浮层(页签溢出菜单、Files 右键菜单 / 对话框、Project 删除确认卡)展开时,原生 webview
+/// 会盖在它上面。Dozer 的做法(`app_modal_open` / `tab_overflow_open` / `panel_popup_open`)是浮层开着
+/// 就把 webview 真隐藏、关掉再显示,而不是销毁:页签状态与页面都留着。这里同款:清单项保留,只把
+/// `visible` 与 `park_offscreen` 置假,`plan()` 产出 `Update { visible: false }`。
+fn hide_for_overlay(
+    desired: &mut [(
+        dozer_panel_preview::PreviewWebviewSpec,
+        bytehost_core::LogicalRect,
+    )],
+    overlay_open: bool,
+) {
+    if !overlay_open {
+        return;
+    }
+    for (spec, _) in desired.iter_mut() {
+        spec.visible = false;
+        spec.park_offscreen = false;
+    }
 }
 
 impl ProductShell {
@@ -720,6 +740,25 @@ impl ProductShell {
         ])
     }
 
+    /// 此刻有没有 iced 浮层会被原生预览 webview 盖住:任一预览面板的页签溢出菜单、Files 的右键菜单 /
+    /// 对话框、Project 的删除确认卡。
+    fn preview_overlay_open(&self) -> bool {
+        let Some(project) = self.projects.current_project() else {
+            return false;
+        };
+        let overflow = |panel: ViewerPanel| {
+            self.preview
+                .as_ref()
+                .and_then(|hub| hub.state(panel, project.id))
+                .is_some_and(|state| state.overflow_anchor.is_some())
+        };
+        overflow(ViewerPanel::Files)
+            || overflow(ViewerPanel::Project)
+            || self.files.menu().is_some()
+            || self.files.has_modal()
+            || self.project.delete_card(project.id).is_some()
+    }
+
     /// 预览面板的原生页面:配对第二块(预览)的位置 = 骨架算好的 slot 再扣掉页签条 +
     /// 内容区自己画出来的内边距(与库的 `view::pane` 同口径,见 [`preview_webview_rect`])。
     /// 面板不可见 / 没有当前项目 / 正在关闭时清单为空,宿主销毁全部页面(D4)。
@@ -734,6 +773,7 @@ impl ProductShell {
         let Some(window) = self.window else {
             return Vec::new();
         };
+        let overlay_open = self.preview_overlay_open();
         let Some(mut preview) = self.preview.take() else {
             return Vec::new();
         };
@@ -742,14 +782,16 @@ impl ProductShell {
         let Some(project) = preview_project(self.projects.current_project(), closing) else {
             let host = preview.host().clone();
             self.preview = Some(preview);
-            // N1:同 `preview_native_tasks`——`.discard()` 会把 Task 丢掉,
-            // 空清单的同步(销毁全部预览页)从来没执行过。
-            return vec![Task::stream(iced::futures::stream::once(async move {
-                let _ = window::run(window, move |w| host.sync(w, &[]));
-                Msg::Noop
-            }))];
+            return vec![native_preview_task(window, host, Vec::new(), Vec::new())];
         };
-        let tasks = Self::preview_native_tasks(&mut preview, &self.shell, rects, &project, window);
+        let tasks = Self::preview_native_tasks(
+            &mut preview,
+            &self.shell,
+            rects,
+            &project,
+            window,
+            overlay_open,
+        );
         self.preview = Some(preview);
         tasks
     }
@@ -760,35 +802,16 @@ impl ProductShell {
         rects: &bytehost_chrome::ShellRects,
         project: &dozer_model::ProjectInfo,
         window: window::Id,
+        overlay_open: bool,
     ) -> Vec<Task<Msg>> {
-        let desired = collect_preview_desired(preview, shell, rects, project);
-        // 建 / 挪 / 销毁在窗口线程内同步完成;注入排在同一闭包里、紧随其后。
+        let desired = collect_preview_desired(preview, shell, rects, project, overlay_open);
+        // 建 / 挪 / 销毁在窗口线程内同步完成;脚本注入排在它之后。
         let host = preview.host().clone();
         let mut scripts = Vec::new();
         for panel in [ViewerPanel::Files, ViewerPanel::Project] {
             scripts.extend(preview.host_scripts(panel, project.id));
         }
-        // N1:建 / 挪 / 销毁必须真的执行。此前 `window::run(..).discard()` 把
-        // Task 直接丢掉,`host.sync` 从不运行,预览 webview 永远不出现;只有
-        // 恰好有脚本要注入时才因为走 stream 分支而侥幸生效。
-        //
-        // 现在两者都进同一条 stream:先 sync(建页面),再让出一帧让布局落定,
-        // 最后把排在它后面的注入脚本推进去。没有脚本时也要跑 sync。
-        let host_sender = preview.host_sender();
-        vec![Task::stream(iced::futures::stream::once(async move {
-            let _ = window::run(window, move |w| host.sync(w, &desired));
-            if scripts.is_empty() {
-                return Msg::Noop;
-            }
-            // 让出这一帧:建页面的 `window::run` 先排队执行。
-            tokio::task::yield_now().await;
-            let _ = window::run(window, move |_| {
-                for (webview_id, script) in scripts {
-                    host_sender.push_script(webview_id, script);
-                }
-            });
-            Msg::Noop
-        }))]
+        vec![native_preview_task(window, host, desired, scripts)]
     }
 
     fn info_view(&self) -> Element<'_, Msg> {
@@ -1104,6 +1127,34 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// 预览原生页面的同步任务:建 / 挪 / 销毁在窗口线程里一次完成,有脚本时紧接着注入。
+///
+/// N1:`window::run(..)` 返回的 `Task` 必须**作为返回值交给 iced 运行时**。把它在 `async` 块里
+/// `let _ =` 构造后丢掉(此前的写法)不会发出任何窗口动作,页面永远建不出来。注入用 `chain`
+/// 排在同步之后,保证新建的句柄已经存在。
+fn native_preview_task(
+    window: window::Id,
+    host: crate::adapters::preview_native::Host,
+    desired: Vec<(
+        dozer_panel_preview::PreviewWebviewSpec,
+        bytehost_core::LogicalRect,
+    )>,
+    scripts: Vec<(usize, String)>,
+) -> Task<Msg> {
+    let injector = host.clone();
+    let sync = window::run(window, move |w| host.sync(w, &desired)).discard();
+    if scripts.is_empty() {
+        return sync;
+    }
+    let inject = window::run(window, move |_| {
+        for (webview_id, script) in scripts {
+            injector.push_script(webview_id, script);
+        }
+    })
+    .discard();
+    sync.chain(inject)
+}
+
 /// G-C5:预览原生页面该服务于哪个项目。正在关闭时**任何**项目都不服务,
 /// 调用方据此同步空清单销毁页面;`None` 项目同理。
 fn preview_project(
@@ -1163,7 +1214,6 @@ impl Product<Msg> for ProductShell {
                 Task::batch([resized, guard])
             }
             Msg::Shell(m) => self.on_shell(m),
-            Msg::Noop => Task::none(),
             Msg::ZoomToggle => self
                 .window
                 .map(window::toggle_maximize)
@@ -1826,30 +1876,109 @@ mod tests {
         );
     }
 
-    /// N1:预览同步任务必须真的被返回给运行时。
-    ///
-    /// `Product` 里的 `PreviewHub` 需要真实窗口才能构造,所以这里做源码级
-    /// 断言:每个 `host.sync(..)` 调用都必须包在 `Task::stream` 里(即真的
-    /// 变成要执行的任务),不能被 `.discard()` 丢掉。曾经的写法
-    /// `window::run(..).discard()` 让预览 webview 永远建不出来。
+    /// N1:预览的建 / 挪 / 销毁任务必须真的把窗口动作交给 iced 运行时。
+    /// 用运行时同款的 `task::into_stream` 取出 Task 的动作流:`window::run(..)` 被构造后丢掉
+    /// (此前 `async` 块里 `let _ = window::run(..)` 的写法)时流里一个窗口动作都没有。
+    fn first_window_action_count(task: Task<Msg>) -> usize {
+        use iced::futures::StreamExt;
+        let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+            return 0;
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut count = 0;
+            while let Ok(Some(action)) =
+                tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await
+            {
+                if matches!(action, iced_runtime::Action::Window(_)) {
+                    count += 1;
+                }
+            }
+            count
+        })
+    }
+
     #[test]
-    fn every_preview_sync_is_returned_as_a_running_task() {
-        let source = include_str!("product.rs");
-        let mut checked = 0usize;
-        for (at, _) in source.match_indices("host.sync(") {
-            checked += 1;
-            let line_start = source[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
-            let line_end = source[at..]
-                .find('\n')
-                .map(|i| at + i)
-                .unwrap_or(source.len());
-            let line = &source[line_start..line_end];
-            assert!(
-                !line.contains(".discard()"),
-                "`host.sync` 的 Task 被 `.discard()` 丢掉了,预览不会被创建或销毁:\n{line}"
-            );
-        }
-        assert!(checked > 0, "找不到任何 `host.sync` 调用:审计规则已失效");
+    fn the_native_sync_task_hands_a_window_action_to_the_runtime() {
+        let host = crate::adapters::preview_native::Host::new(std::env::temp_dir());
+        let id = window::Id::unique();
+        // 空清单(无项目 / 关闭):销毁旧页面也必须真的发出动作。
+        let task = native_preview_task(id, host.clone(), Vec::new(), Vec::new());
+        assert!(
+            first_window_action_count(task) >= 1,
+            "同步任务没有产生任何窗口动作:预览页不会被创建或销毁"
+        );
+        // 有脚本要注入:同步在前,注入用 chain 排在它后面;至少同步这一步要发出。
+        let task = native_preview_task(
+            id,
+            host,
+            Vec::new(),
+            vec![(1, "window.__x = 1;".to_string())],
+        );
+        assert!(first_window_action_count(task) >= 1);
+    }
+
+    /// 反面对照:`let _ = window::run(..)`(构造后丢弃)正好是 0 个窗口动作,上面的断言会因此失败。
+    #[test]
+    fn a_dropped_window_run_emits_nothing() {
+        let id = window::Id::unique();
+        let task: Task<Msg> = Task::stream(iced::futures::stream::once(async move {
+            let _ = window::run(id, |_| ());
+            Msg::Tick
+        }));
+        assert_eq!(first_window_action_count(task), 0);
+    }
+
+    /// 浮层开着时原生 webview 必须真隐藏(Dozer 同款),关掉后恢复;页签与页面都留着,不销毁。
+    #[test]
+    fn an_open_overlay_hides_every_preview_webview_and_closing_it_restores_them() {
+        let rect = LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let spec = |id: usize, park: bool| dozer_panel_preview::PreviewWebviewSpec {
+            id,
+            url: "dozer://flyfish/host.html".into(),
+            visible: !park,
+            editor_binding: None,
+            reserve: None,
+            loading_generation: None,
+            park_offscreen: park,
+        };
+        let mut desired = vec![(spec(1, false), rect), (spec(2, true), rect)];
+        hide_for_overlay(&mut desired, false);
+        assert!(
+            desired[0].0.visible && desired[1].0.park_offscreen,
+            "无浮层不动"
+        );
+        hide_for_overlay(&mut desired, true);
+        assert!(
+            desired.iter().all(|(s, _)| !s.visible && !s.park_offscreen),
+            "浮层开着:全部真隐藏,连停放中的也不能留在屏幕上"
+        );
+        // 清单项还在(没有销毁):`plan` 对已存在的句柄只会发 Update 不会发 Destroy。
+        let live = std::collections::BTreeMap::from([(
+            1usize,
+            crate::adapters::preview_native::LiveView {
+                url: "dozer://flyfish/host.html".into(),
+                rect,
+                visible: true,
+            },
+        )]);
+        let ops = crate::adapters::preview_native::plan(&live, &desired[..1]);
+        assert!(matches!(
+            ops.as_slice(),
+            [crate::adapters::preview_native::Op::Update {
+                id: 1,
+                visible: false,
+                ..
+            }]
+        ));
     }
 
     fn test_temp_dir(tag: &str) -> std::path::PathBuf {
@@ -2178,7 +2307,7 @@ mod tests {
         // 之前是 0:证明宽度不是构造时就有的。
         assert_eq!(hub.tab_bar_px(ViewerPanel::Files), 0.0);
 
-        let _ = collect_preview_desired(&mut hub, &shell, &rects, &project);
+        let _ = collect_preview_desired(&mut hub, &shell, &rects, &project, false);
 
         let expected = (pair.w - PREVIEW_CHROME_RESERVE_PX).max(0.0);
         assert!(expected > 0.0, "配对预览块得有宽度: {pair:?}");
@@ -2210,7 +2339,7 @@ mod tests {
         );
         // 空清单分支必须真的同步(否则旧页面留在窗口上)。
         assert!(
-            body.contains("host.sync(w, &[])"),
+            body.contains("native_preview_task(window, host, Vec::new(), Vec::new())"),
             "无项目 / 关闭中必须同步空清单,把旧页面销毁"
         );
         // 以及行为断言本身。
