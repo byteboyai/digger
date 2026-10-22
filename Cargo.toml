@@ -59,6 +59,8 @@ dozer-panel-preview = { git = "https://github.com/byteboyai/dozer", tag = "libs-
 # 预览库背后的路由/画像/存储纯逻辑(`dozer-panel-preview` 的公开面已重导出大部分)。
 dozer-preview-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
 dozer-panel-host = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
+# 同源终端输入 / 渲染库(S6d-1):本地开发由 .cargo/config.toml patch 到叠分支。
+dozer-panel-term = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
 # 面板的 git 快照(分支/脏标/remote)与「修复项目」的 git init 共用同一个 tag,图里只有一份。
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
 # Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。

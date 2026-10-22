@@ -39,6 +39,7 @@ dozer-panel-files.workspace = true
 dozer-panel-preview.workspace = true
 dozer-preview-core.workspace = true
 dozer-panel-host.workspace = true
+dozer-panel-term.workspace = true
 bytegit.workspace = true
 
 byteui.workspace = true
@@ -50,6 +51,7 @@ iced_widget = { version = "0.14", default-features = false }
 # 渲染后端:iced_renderer 在 release 下必须启用 wgpu/tiny-skia 之一,否则 `compile_error!`。
 # 经 `iced` facade 的 `wgpu` feature 启用(与 Dozer 同栈,见 workspace 依赖)。
 iced_renderer = { version = "0.14", default-features = false }
+iced_wgpu = { version = "0.14", default-features = false }
 wry.workspace = true
 objc2-foundation.workspace = true
 serde.workspace = true

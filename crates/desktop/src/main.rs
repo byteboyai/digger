@@ -5,6 +5,9 @@
 
 mod adapters;
 mod apps;
+// `code_font`/`terminal_style` 由 S6d-2 的终端视图消费;本期只交付并测试。
+#[allow(dead_code)]
+mod fonts;
 mod lifecycle_selftest;
 mod markdown;
 mod paths;
@@ -43,7 +46,9 @@ fn view(shell: &ProductShell) -> Element<'_, Msg> {
 }
 
 fn main() -> iced::Result {
+    fonts::sanitize_font_db();
     iced::application(boot, update, view)
+        .font(fonts::JETBRAINS_MONO)
         .title("Digger")
         .window(iced::window::Settings {
             exit_on_close_request: false,

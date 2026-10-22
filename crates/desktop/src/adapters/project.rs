@@ -445,6 +445,42 @@ impl dozer_services::DaemonService for UnavailableService {
     }
 }
 
+impl dozer_services::SessionService for UnavailableService {
+    fn list_sessions(&self) -> BoxFuture<'_, Result<Vec<dozer_model::SessionInfo>, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn create(
+        &self,
+        _spec: dozer_services::SessionSpec,
+    ) -> BoxFuture<'_, Result<dozer_model::SessionInfo, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn attach(
+        &self,
+        _id: String,
+        _from_offset: u64,
+    ) -> BoxFuture<'_, Result<dozer_services::SessionAttach, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn write(&self, _id: String, _data: Vec<u8>) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn resize(
+        &self,
+        _id: String,
+        _cols: u16,
+        _rows: u16,
+    ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn kill(&self, _id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn close_with_summary(&self, _id: String) -> BoxFuture<'_, Result<(), ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+}
+
 impl ProjectPanel {
     /// 构造:注入服务束 + 结果回流通道。运行时句柄由 [`ProductShell::boot`](crate::product::boot)
     /// 在进入 iced 运行时后经 [`ProjectPanel::attach_handle`] 补挂。
@@ -474,6 +510,7 @@ impl ProjectPanel {
             bookmark: Arc::new(UnavailableService::new("Project 面板不用书签服务")),
             locale: Arc::new(UnavailableService::new("Project 面板不用语言服务")),
             daemon: Arc::new(UnavailableService::new("Project 面板不用 daemon 服务")),
+            session: Arc::new(UnavailableService::new("Project 面板不用 session 服务")),
         };
         Self {
             focus: None,
