@@ -14,11 +14,13 @@
 //! - **读失败 ≠ 空**:账本损坏是 `Err`,与"确实没有记录"(`Ok(vec![])`)区分开,不静默吞。
 
 mod ledger;
+mod migrate;
 mod projects;
 mod runner;
 mod service;
 
 pub use ledger::{CompletionEvent, TaskUsageRecord, UsageLedger, UsageLedgerError};
+pub use migrate::{MigrationOutcome, journal_mode, migrate_legacy_projects, set_wal_mode};
 pub use projects::ProjectHost;
 pub use runner::{Clock, RunningTask, RunningTasks, SystemClock, TaskOutcome, TaskRunner};
 pub use service::{LedgerUsageService, UnavailableUsageService};

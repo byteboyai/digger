@@ -12,6 +12,8 @@ dozer-model.workspace = true
 dozer-services.workspace = true
 # Project 注册表与共享记忆的存储与进程内服务(Dozer 与 Digger 共用)。
 dozer-store-project.workspace = true
+# S6a:迁移旧 projects.db 到 digger.db,以及设置 WAL 模式。版本必须与 Dozer 一致。
+rusqlite.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true
