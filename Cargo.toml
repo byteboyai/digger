@@ -65,6 +65,13 @@ dozer-panel-term = { git = "https://github.com/byteboyai/dozer", tag = "libs-202
 bytegit = { git = "https://github.com/byteboyai/bytegit", tag = "v0.8.1", features = ["watch"] }
 # Project 注册表与 Project 级共享记忆的存储和进程内服务(Dozer 与 Digger 共用同一份代码,各开各的数据库文件)。
 dozer-store-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
+# S6a:守护进程 / hook / 客户端 / 核心路径库(本地 patch 到 dozer-mcp-product;tag 占位)。
+dozer-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
+dozerd = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
+dozer-hook = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
+dozer-client = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-20a" }
+# rusqlite 版本必须与 Dozer 一致(0.32.1),否则 Cargo.lock 出现两份。
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 iced = { version = "0.14", default-features = false, features = ["tokio", "wgpu"] }
 # iced 的 core 类型(如 `text::Shaping`);iced 0.14 未公开重导出,组合根按需直接依赖同一版本。
