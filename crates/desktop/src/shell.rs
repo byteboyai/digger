@@ -42,10 +42,14 @@ pub fn project_id() -> PanelId {
 pub fn files_id() -> PanelId {
     id("digger.files")
 }
+pub fn agent_id() -> PanelId {
+    id("digger.agent")
+}
 
 /// 产品的全部面板。落盘时清单里有而文件里没有的面板,会回到它的默认栏(新版本新增面板不会重置用户布局)。
 pub fn all_panels() -> Vec<PanelId> {
     vec![
+        agent_id(),
         markdown_id(),
         info_id(),
         apps_id(),
@@ -64,6 +68,7 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
         "digger.usage" => ("用量", IconKind::BarChart3),
         "digger.project" => ("项目", IconKind::Briefcase),
         "digger.files" => ("文件", IconKind::FolderTree),
+        "digger.agent" => ("Agent", IconKind::Brain),
         _ => return None,
     };
     Some(PanelMeta {
@@ -88,7 +93,7 @@ pub fn list_min_width() -> f32 {
 /// ——配对的第一块(列表)默认渲染在前,预览在后(右)。列表可拖窄收起,收起后预览独占整块。
 pub fn rules(panel: &PanelId) -> Option<PanelRules> {
     match panel.as_str() {
-        "digger.usage" => Some(PanelRules {
+        "digger.usage" | "digger.agent" => Some(PanelRules {
             default_side: Side::Right,
             pane: Some(PaneRules {
                 spec: PaneSpec::new(false, true),
@@ -126,9 +131,9 @@ pub fn defaults() -> Defaults {
     Defaults {
         rails: [
             vec![project_id(), files_id(), markdown_id(), info_id()],
-            vec![apps_id(), usage_id()],
+            vec![agent_id(), apps_id(), usage_id()],
         ],
-        selected: [markdown_id(), usage_id()],
+        selected: [markdown_id(), agent_id()],
         left_width: 640.0,
         window: (w, h),
         min_window: (
@@ -159,13 +164,43 @@ pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
 fn load_file(path: &Path) -> Loaded {
     let json = std::fs::read_to_string(path)
         .ok()
-        .map(|j| files_after_project(&project_first_on_left(&j)));
+        .map(|j| agent_first_on_right(&files_after_project(&project_first_on_left(&j))));
     persist::load(
         json.as_deref(),
         &all_panels(),
         &defaults(),
         &metrics_from_theme(),
     )
+}
+
+/// 旧布局文件里没有 Agent 面板:读盘前把它放到右栏最前面,不碰任何一侧的选中面板(S6d-1 Q1 只管新用户)。
+/// 文件已经含它(任一侧)、不是 JSON 对象、或解析不了,原样返回,所以重复迁移是幂等的;
+/// 只改读进来的文本,不写盘,更高版本的文件因此仍然原样保留。右栏缺失当作空栏。
+fn agent_first_on_right(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_owned();
+    };
+    let wire = agent_id();
+    let Some(object) = value.as_object_mut() else {
+        return json.to_owned();
+    };
+    let placed = ["left", "right"].iter().any(|side| {
+        object
+            .get(*side)
+            .and_then(|v| v.as_array())
+            .is_some_and(|ids| ids.iter().any(|i| i.as_str() == Some(wire.as_str())))
+    });
+    if placed {
+        return json.to_owned();
+    }
+    let right = object
+        .entry("right")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let Some(right) = right.as_array_mut() else {
+        return json.to_owned();
+    };
+    right.insert(0, serde_json::Value::String(wire.as_str().to_owned()));
+    value.to_string()
 }
 
 /// 旧布局文件里没有 Project 面板:读盘前把它放到左栏最前面(S5a D5)。骨架对"清单里有而文件里没有"
@@ -295,9 +330,9 @@ mod tests {
             [project_id(), files_id(), markdown_id(), info_id()],
             "project first, then files, then the content panels, like Dozer"
         );
-        assert_eq!(model.rail(Side::Right), [apps_id(), usage_id()]);
+        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         assert_eq!(model.selected(Side::Left), &markdown_id());
-        assert_eq!(model.selected(Side::Right), &usage_id());
+        assert_eq!(model.selected(Side::Right), &agent_id());
         assert_eq!(d.left_width, 640.0);
     }
 
@@ -319,7 +354,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [apps_id(), usage_id(), project_id()]
+            [agent_id(), apps_id(), usage_id(), project_id()]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -362,7 +397,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [apps_id(), usage_id()],
+            [agent_id(), apps_id(), usage_id()],
             "the new panels land on their default side"
         );
         assert_eq!(model.left_width(), 500.0);
@@ -396,7 +431,7 @@ mod tests {
             [project_id(), files_id(), info_id(), markdown_id()],
             "files lands right after the project panel, everything else keeps its order"
         );
-        assert_eq!(model.rail(Side::Right), [apps_id(), usage_id()]);
+        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -408,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn only_usage_project_and_files_are_pairs_and_usage_matches_dozers_usage_pane() {
+    fn only_usage_agent_project_and_files_are_pairs_and_usage_matches_dozers_usage_pane() {
         let r = rules(&usage_id()).expect("usage has rules");
         assert_eq!(
             r.default_side,
@@ -425,6 +460,100 @@ mod tests {
         assert_eq!(pane.min_first_px, list_min_width());
         for p in [markdown_id(), info_id(), apps_id()] {
             assert!(rules(&p).is_none(), "{p} stays a single-column panel");
+        }
+    }
+
+    #[test]
+    fn agent_panel_id_is_the_persisted_wire_name() {
+        assert_eq!(agent_id().as_str(), "digger.agent");
+        assert_eq!(meta(&agent_id()).unwrap().icon, IconKind::Brain);
+        assert!(all_panels().contains(&agent_id()));
+    }
+
+    #[test]
+    fn agent_is_a_pair_panel_and_usage_still_is_too() {
+        for panel in [agent_id(), usage_id()] {
+            let r = rules(&panel).unwrap_or_else(|| panic!("{panel} is a pair"));
+            assert_eq!(r.default_side, Side::Right);
+            let pane = r.pane.expect("pair");
+            assert_eq!(pane.spec, bytehost_desktop::PaneSpec::new(false, true));
+            assert_eq!(pane.min_first_px, list_min_width());
+        }
+        for p in [markdown_id(), info_id(), apps_id()] {
+            assert!(rules(&p).is_none(), "{p} stays single-column");
+        }
+    }
+
+    fn load_json(tag: &str, json: &str) -> (ShellModel, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("digger-shell-agent-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shell.json");
+        std::fs::write(&path, json).unwrap();
+        (load(&path).into_model(), dir)
+    }
+
+    #[test]
+    fn an_old_file_without_the_agent_panel_moves_it_to_the_front_of_the_right_rail_and_keeps_the_users_selection()
+     {
+        let (model, dir) = load_json(
+            "old",
+            r#"{ "left": ["digger.project","digger.files","digger.markdown","digger.info"], "right": ["digger.apps","digger.usage"], "selected_right": "digger.usage", "left_width": 500.0 }"#,
+        );
+        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
+        assert_eq!(
+            model.selected(Side::Right),
+            &usage_id(),
+            "the user's selection stays"
+        );
+        assert_eq!(model.left_width(), 500.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migration_is_idempotent_and_never_touches_a_file_that_already_has_the_agent() {
+        let once = agent_first_on_right(r#"{"left":[],"right":["digger.apps"]}"#);
+        assert_eq!(agent_first_on_right(&once), once, "second pass is a no-op");
+        for placed in [
+            r#"{"left":[],"right":["digger.apps","digger.agent"]}"#,
+            r#"{"left":["digger.agent"],"right":["digger.apps"]}"#,
+        ] {
+            assert_eq!(agent_first_on_right(placed), placed);
+        }
+    }
+
+    #[test]
+    fn a_file_with_an_empty_or_missing_right_rail_gets_the_agent_alone_in_front() {
+        for (tag, json) in [
+            ("empty", r#"{ "left": ["digger.markdown"], "right": [] }"#),
+            ("missing", r#"{ "left": ["digger.markdown"] }"#),
+        ] {
+            let (model, dir) = load_json(tag, json);
+            assert_eq!(model.rail(Side::Right)[0], agent_id(), "{tag}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn unparsable_or_non_object_files_pass_through_unchanged() {
+        for raw in ["", "not json", "[]", "null", r#"{"right":"digger.apps"}"#] {
+            assert_eq!(agent_first_on_right(raw), raw);
+        }
+    }
+
+    #[test]
+    fn pair_rects_for_agent_on_the_right_zone_have_a_nonnegative_size_at_the_minimum_window() {
+        let d = defaults();
+        let model = ShellModel::new(
+            d.rails.clone(),
+            d.selected.clone(),
+            d.left_width,
+            d.min_window,
+        )
+        .unwrap();
+        let p = pair_rects(&model, Side::Right).expect("the right side shows the agent");
+        for w in [p.first.w, p.second.w] {
+            assert!(w >= 0.0 && w.is_finite(), "{w}");
         }
     }
 
@@ -671,7 +800,7 @@ mod tests {
             first.rail(Side::Left),
             [project_id(), files_id(), info_id(), markdown_id()]
         );
-        assert_eq!(first.rail(Side::Right), [apps_id(), usage_id()]);
+        assert_eq!(first.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         drag_left_width_to(&mut first, 744.0);
         persist::save_atomic(&project, &first).unwrap();
         assert_eq!(std::fs::read(&global).unwrap(), global_bytes);

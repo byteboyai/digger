@@ -57,6 +57,7 @@ pub enum Msg {
     WindowReady(window::Id, Size),
     /// 窗口骨架的消息(点图标、拖分隔线、窗口缩放……),由 `bytehost-chrome` 的 `ShellModel` 处理。
     Shell(ShellMsg),
+    Agent(crate::adapters::agent::AgentShellMsg),
     /// 「应用」面板的消息(Task 14)。
     Apps(crate::apps::Message),
     /// 「用量」面板的库消息(Task 20)。
@@ -140,6 +141,7 @@ pub struct ProductShell {
     project: crate::adapters::project::ProjectPanel,
     /// 「文件」面板适配(共享 `dozer-panel-files` 库;四项能力 Digger 一期全关)。
     files: crate::adapters::files::FilesPanel,
+    agent: crate::adapters::agent::AgentShell,
     /// 预览状态层(S5b-2 P4):Files / Project 两个面板各一份库状态 + 原生宿主。
     /// 在 `boot` 里装上;纯逻辑测试可以不要(没有预览就没有页签可开)。
     preview: Option<crate::adapters::preview::PreviewHub>,
@@ -309,6 +311,7 @@ impl ProductShell {
             (shell::usage_id(), "用量"),
             (shell::project_id(), "项目"),
             (shell::files_id(), "文件"),
+            (shell::agent_id(), "Agent"),
         ] {
             catalog
                 .register(CatalogEntry {
@@ -378,6 +381,7 @@ impl ProductShell {
             projects,
             project,
             files,
+            agent: crate::adapters::agent::AgentShell::default(),
             preview: None,
             preview_displays: [
                 std::cell::Cell::new(preview_display(0.0, 0, 0)),
@@ -1138,6 +1142,10 @@ impl ShellHost<Msg> for ProductShell {
             "digger.markdown" => self.markdown_view(),
             "digger.project" => self.project_view(area),
             "digger.files" => self.files_view(area),
+            "digger.agent" => self
+                .agent
+                .view(self.projects.current_project_id().is_some())
+                .map(Msg::Agent),
             _ => column![].into(),
         }
     }
@@ -1294,6 +1302,7 @@ impl Product<Msg> for ProductShell {
                 Task::batch([resized, guard])
             }
             Msg::Shell(m) => self.on_shell(m),
+            Msg::Agent(m) => self.agent.update(m, Task::none).map(Msg::Agent),
             Msg::ZoomToggle => self
                 .window
                 .map(window::toggle_maximize)
@@ -2612,7 +2621,7 @@ mod tests {
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 6);
+        assert_eq!(shell.catalog.len(), 7);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
@@ -2629,10 +2638,28 @@ mod tests {
     }
 
     #[test]
-    fn the_default_shell_shows_the_editor_on_the_left_and_usage_on_the_right() {
+    fn the_agent_panel_is_registered_in_the_catalog_and_its_messages_reach_the_shell() {
+        let mut shell = fresh("agent-catalog");
+        let entry = shell.catalog.get(&shell::agent_id()).expect("registered");
+        assert_eq!(entry.title, "Agent");
+        assert!(shell.agent.status == crate::adapters::agent::Status::Ready);
+        let _ = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::Agent(crate::adapters::agent::AgentShellMsg::Ensured(
+                Err("x".into()),
+            ))),
+        );
+        assert_eq!(
+            shell.agent.status,
+            crate::adapters::agent::Status::Unavailable("x".into())
+        );
+    }
+
+    #[test]
+    fn the_default_shell_shows_the_editor_on_the_left_and_the_agent_on_the_right() {
         let shell = fresh("default");
         assert!(shell.panel_visible(&shell::markdown_id()));
-        assert!(shell.panel_visible(&shell::usage_id()));
+        assert!(shell.panel_visible(&shell::agent_id()));
         assert!(!shell.panel_visible(&shell::info_id()));
         assert!(!shell.panel_visible(&shell::apps_id()));
         assert_eq!(shell.shell.side_of(&shell::apps_id()), Some(Side::Right));
@@ -2653,7 +2680,7 @@ mod tests {
             !shell.panel_visible(&shell::markdown_id()),
             "covered by the right side's maximize"
         );
-        assert!(shell.panel_visible(&shell::usage_id()));
+        assert!(shell.panel_visible(&shell::agent_id()));
     }
 
     #[test]
