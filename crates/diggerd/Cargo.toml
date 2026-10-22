@@ -1,0 +1,18 @@
+[package]
+name = "diggerd"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Digger 守护进程:digger-paths 的产品身份 + dozerd 的库装配,功能全关(minimal)。"
+
+[[bin]]
+name = "diggerd"
+path = "src/main.rs"
+
+[dependencies]
+digger-paths = { path = "../paths" }
+dozerd.workspace = true
+dozer-core.workspace = true
+tokio.workspace = true
+anyhow = "1"

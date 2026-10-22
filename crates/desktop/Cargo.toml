@@ -23,6 +23,8 @@ bytehost-client = { workspace = true, features = ["in-process"] }
 bytehost-panel.workspace = true
 # Digger 的宿主适配层:执行器 / 请求身份 / 服务生命周期 / 产品信任策略。
 digger-app-host = { path = "../app-host" }
+# Digger 产品身份与数据根(S6a):config_dir / state_dir / product() 等统一由 digger-paths 提供。
+digger-paths = { path = "../paths" }
 # Digger 领域持久化:任务完成用量账本 + `UsageService` 实现(Task 20)。
 digger-store = { path = "../store" }
 # Markdown 编辑器的 Rust 一侧(纯库;本 crate 只做 webview / 几何 / iced 栏的宿主适配)。

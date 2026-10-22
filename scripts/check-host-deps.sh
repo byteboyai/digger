@@ -24,7 +24,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # 宿主适配层白名单:允许依赖 bytehost-* 的 crate。
-HOST_ADAPTER_CRATES="digger-desktop digger-app-host"
+HOST_ADAPTER_CRATES="digger-desktop digger-app-host diggerd digger-hook"
 
 # 业务层 crate 前缀:出现即不得依赖任何 bytehost-*。
 BUSINESS_PREFIX="^digger-(domain|store|persistence|runtime|writing|editor|project|agent)(-.*)?$"
