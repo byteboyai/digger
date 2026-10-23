@@ -225,6 +225,7 @@ impl DiggerHooks {
         Arc::clone(&self.warnings)
     }
 
+    #[allow(dead_code)] // 测试直接读;产品路径用 `warnings_handle`。
     pub fn take_warnings(&self) -> Vec<String> {
         self.warnings
             .lock()

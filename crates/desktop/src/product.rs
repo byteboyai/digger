@@ -2622,7 +2622,7 @@ mod tests {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let n = calls.0.load(Ordering::SeqCst);
-        assert!(n >= 1 && n <= 5, "刷新请求不应无限堆叠: {n}");
+        assert!((1..=5).contains(&n), "刷新请求不应无限堆叠: {n}");
     }
 
     /// N1b:预览展示上下文不能每帧泄漏。
