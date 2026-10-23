@@ -5,17 +5,15 @@ use iced::{Element, Task};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentShellMsg {
     Retry,
-    // 由 4b 的 `Daemon::ensure` 结果构造;本期只在测试里出现。
-    #[allow(dead_code)]
+    // 由 4b 的 `Daemon::ensure` 结果构造。
     Ensured(Result<(), String>),
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Status {
-    // 4b 接 daemon 之前的初始态;本期默认直接 Ready。
-    #[allow(dead_code)]
+    // S6a:启动序列开始时置 Checking,收到 Ensured 后 Ready/Unavailable。
+    #[default]
     Unknown,
     Checking,
-    #[default]
     Ready,
     Unavailable(String),
 }
@@ -36,8 +34,8 @@ impl AgentShell {
         match (&self.status, has_project) {
             (_, false) => Body::NoProject,
             (Status::Unavailable(reason), _) => Body::Unavailable(reason),
-            (Status::Checking, _) => Body::Checking,
-            (Status::Ready | Status::Unknown, _) => Body::Placeholder,
+            (Status::Checking | Status::Unknown, _) => Body::Checking,
+            (Status::Ready, _) => Body::Placeholder,
         }
     }
     pub fn view(&self, has_project: bool) -> Element<'_, AgentShellMsg> {
@@ -128,7 +126,8 @@ mod tests {
     }
 
     #[test]
-    fn the_default_shell_is_ready_because_this_phase_has_no_daemon_to_ask() {
-        assert_eq!(AgentShell::default().body(true), Body::Placeholder);
+    fn the_default_shell_is_unknown_and_shows_checking() {
+        // S6a:默认状态改为 Unknown(启动序列开始时置 Checking)。
+        assert_eq!(AgentShell::default().body(true), Body::Checking);
     }
 }

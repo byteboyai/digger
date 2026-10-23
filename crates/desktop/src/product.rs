@@ -1915,6 +1915,14 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    // S6a:守护进程拉起。异步调 ensure,结果转成 Msg::Agent::Ensured。
+    let daemon_task = Task::perform(
+        async {
+            let daemon = crate::daemon::Daemon::new();
+            daemon.ensure().await.map_err(|e| e.to_string())
+        },
+        |result| Msg::Agent(crate::adapters::agent::AgentShellMsg::Ensured(result)),
+    );
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
     for panel in shell::all_panels() {
@@ -1940,6 +1948,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             fs_task,
             delete_task,
             lifecycle_task,
+            daemon_task,
             Task::batch(initial),
         ]),
     )
@@ -2642,7 +2651,8 @@ mod tests {
         let mut shell = fresh("agent-catalog");
         let entry = shell.catalog.get(&shell::agent_id()).expect("registered");
         assert_eq!(entry.title, "Agent");
-        assert!(shell.agent.status == crate::adapters::agent::Status::Ready);
+        // S6a:默认状态改为 Unknown(启动序列开始时置 Checking)。
+        assert!(shell.agent.status == crate::adapters::agent::Status::Unknown);
         let _ = Product::update(
             &mut shell,
             HostMessage::Product(Msg::Agent(crate::adapters::agent::AgentShellMsg::Ensured(

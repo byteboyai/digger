@@ -42,6 +42,8 @@ dozer-panel-preview.workspace = true
 dozer-preview-core.workspace = true
 dozer-panel-host.workspace = true
 dozer-panel-term.workspace = true
+# S6a:守护进程客户端(协议握手 + 连接检查)。
+dozer-client.workspace = true
 bytegit.workspace = true
 
 byteui.workspace = true
@@ -61,6 +63,7 @@ serde_json.workspace = true
 tokio.workspace = true
 directories.workspace = true
 rfd = "0.15"
+libc = "0.2"
 
 [build-dependencies]
 dozer-panel-usage.workspace = true

@@ -15,6 +15,8 @@ mod preview_assets;
 mod product;
 mod projects;
 mod shell;
+// S6a:守护进程拉起与生命周期。
+mod daemon;
 
 use bytehost_desktop::HostMessage;
 use iced::{Element, Task};
