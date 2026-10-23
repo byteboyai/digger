@@ -38,6 +38,11 @@ fn terminal_padding() -> f32 {
     8.0
 }
 
+/// 折叠/展开 Agent 列表的消息(按钮与测试共用一条构造路径)。
+pub fn toggle_pane_message() -> Msg {
+    Msg::Shell(ShellMsg::TogglePane(shell::agent_id()))
+}
+
 /// 终端块区域样式(列表块的另一份在 `pane_style` 里):`agent_layout::grid`
 /// 与 `PanelDisplay` 必须用同一份内边距,否则网格与渲染差一圈。
 pub fn terminal_pane_style() -> PaneStyle {
@@ -129,7 +134,7 @@ impl<'a> PanelDisplay<'a, Msg> for AgentDisplay<'a> {
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim,
             ))
-            .on_press(Msg::Shell(ShellMsg::TogglePane(shell::agent_id()))),
+            .on_press(toggle_pane_message()),
             container(text(tip).size(byteui::theme::font::body()))
                 .padding(6)
                 .style(container::rounded_box),
@@ -305,6 +310,31 @@ mod tests {
             tab_bar_px: 400.0,
             list_on_left: false,
         }
+    }
+
+    #[test]
+    fn list_collapse_button_toggles_the_pane_of_the_agent_panel() {
+        assert!(matches!(
+            toggle_pane_message(),
+            Msg::Shell(ShellMsg::TogglePane(ref id)) if id == &shell::agent_id()
+        ));
+    }
+
+    #[test]
+    fn plain_tab_close_sends_close_for_that_tab() {
+        let style = style();
+        let panel = AgentPanel::new();
+        let d = display(&panel, &style);
+        // 页签的 × 由库用 `host.wrap(Message::CloseTab(idx))` 构造;这里钉住
+        // 包装只加项目 id、不改页签下标,所以点第 2 个页签关的就是第 2 个。
+        assert!(matches!(
+            d.wrap(Message::CloseTab(2)),
+            Msg::Agent(7, Message::CloseTab(2))
+        ));
+        assert!(matches!(
+            d.wrap(Message::CloseTab(0)),
+            Msg::Agent(7, Message::CloseTab(0))
+        ));
     }
 
     #[test]

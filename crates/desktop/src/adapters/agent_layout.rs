@@ -95,6 +95,20 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_list_shows_only_the_terminal_block() {
+        // 收起时骨架给出的第一块宽 0、第二块是整块内容;`pair_view` 的收起分支
+        // 只渲染第二块,所以终端块 = 整块面板,列表没有可见区域。
+        let content = Rect::new(100.0, 20.0, 500.0, 400.0);
+        let pair = PairRects {
+            first: Rect::new(content.right(), content.y, 0.0, content.h),
+            second: content,
+            divider: Rect::new(content.right(), content.y, 0.0, content.h),
+        };
+        assert_eq!(pair.first.w, 0.0);
+        assert_eq!(terminal_block(content, true, Some(pair)), content);
+    }
+
+    #[test]
     fn collapsed_list_uses_the_whole_panel_and_expanded_uses_the_second_block() {
         let content = Rect::new(100.0, 20.0, 500.0, 400.0);
         let first = Rect::new(600.0, 20.0, 200.0, 400.0);

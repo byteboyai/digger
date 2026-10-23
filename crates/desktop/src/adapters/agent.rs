@@ -486,6 +486,7 @@ mod tests {
         writes: Vec<(String, Vec<u8>)>,
         list_calls: usize,
         create_error: Option<String>,
+        create_delay: Duration,
         attach_tx: HashMap<String, tokio::sync::mpsc::UnboundedSender<SessionEvent>>,
         attach_snapshot: Vec<u8>,
     }
@@ -503,6 +504,9 @@ mod tests {
         fn fail_create(&self, message: &str) {
             self.get().create_error = Some(message.into());
         }
+        fn slow_create(&self, delay: Duration) {
+            self.get().create_delay = delay;
+        }
     }
 
     impl SessionService for FakeSessions {
@@ -516,6 +520,7 @@ mod tests {
             let mut state = self.get();
             state.creates.push(spec.clone());
             let error = state.create_error.clone();
+            let delay = state.create_delay;
             let info = SessionInfo {
                 id: format!("created-{}", state.creates.len()),
                 name: spec.name,
@@ -533,6 +538,9 @@ mod tests {
             state.attach_tx.insert(id, tx);
             drop(state);
             Box::pin(async move {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
                 match error {
                     Some(message) => Err(ServiceError::new(ServiceErrorKind::Rejected, message)),
                     None => Ok(info),
@@ -743,12 +751,17 @@ mod tests {
         flush(&mut panel, 7, &project);
         let state = fake.get();
         assert_eq!(state.creates.len(), 1);
+        assert_eq!(
+            state.creates[0].command,
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
+            "create 起的是用户 shell,agent CLI 由后续键入启动"
+        );
         assert_eq!(state.creates[0].cwd, "/tmp/p7");
         assert_eq!(state.creates[0].agent, AgentKind::Claude);
         assert_eq!((state.creates[0].cols, state.creates[0].rows), (90, 30));
-        assert!(
-            state.writes[0].1.starts_with(b"claude"),
-            "the launch command is typed after attach"
+        assert_eq!(
+            state.writes[0].1, b"claude\n",
+            "attach 之后把选择器的启动命令写进 PTY"
         );
     }
 
@@ -769,6 +782,65 @@ mod tests {
             iced_runtime::task::into_stream(panel.ensure_started(&project, (80, 24))).is_some()
         );
         assert!(panel.starting.contains(&7));
+    }
+
+    #[tokio::test]
+    async fn switching_away_and_back_during_restore_does_not_double_start() {
+        let fake = FakeSessions::default();
+        fake.push_session(session("s1", 7, true));
+        let project = project(7, "/tmp/p7");
+        let mut panel = make_panel(&fake);
+        let task = panel.ensure_started(&project, (80, 24));
+        // 恢复在途时切走(面板不可见)又切回(再次可见):入口仍是 ensure_started。
+        assert!(
+            iced_runtime::task::into_stream(panel.ensure_started(&project, (80, 24))).is_none(),
+            "回到同一项目时不得再启动一次"
+        );
+        let restored = drain(task).await;
+        assert_eq!(fake.get().list_calls, 1, "list_sessions 只调一次");
+        let (pid, sessions) = restored_of(restored).expect("restore result");
+        let _ = panel.on_restored(pid, Some(&project), sessions, (80, 24));
+        assert_eq!(panel.states[&7].tabs.len(), 1);
+        assert!(fake.get().creates.is_empty(), "没有第二个 shell");
+    }
+
+    #[tokio::test]
+    async fn a_new_project_starts_with_the_current_grid_so_its_first_session_is_created_at_the_right_size()
+     {
+        let fake = FakeSessions::default();
+        let project = project(7, "/tmp/p7");
+        let mut panel = make_panel(&fake);
+        // 恢复开始时窗口是 100×40;恢复结果到达时窗口已经变成 80×24。
+        let task = panel.ensure_started(&project, (100, 40));
+        let (pid, sessions) = restored_of(drain(task).await).expect("restore result");
+        let _ = panel.on_restored(pid, Some(&project), sessions, (80, 24));
+        settle().await;
+        flush(&mut panel, pid, &project);
+        let state = fake.get();
+        assert_eq!(state.creates.len(), 1);
+        assert_eq!(
+            (state.creates[0].cols, state.creates[0].rows),
+            (100, 40),
+            "create 用的是恢复开始时的网格(start_grid),不是完成时的 80×24"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hundred_resizes_to_the_same_grid_send_once() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "s1", AgentKind::Unknown);
+        panel.states.insert(7, state);
+        let _ = panel.sync_grid(&project, (100, 40));
+        settle().await;
+        assert_eq!(fake.get().resizes.len(), 1, "首次网格要发");
+        for _ in 0..100 {
+            let _ = panel.sync_grid(&project, (100, 40));
+        }
+        settle().await;
+        assert_eq!(fake.get().resizes.len(), 1, "之后 100 次同网格只发过那一次");
     }
 
     #[tokio::test]
@@ -939,6 +1011,33 @@ mod tests {
         flush(&mut panel, pid, &project);
         assert!(!panel.states[&7].tabs[0].alive);
         assert!(fake.get().creates.is_empty(), "no reconnect / new shell");
+    }
+
+    #[tokio::test]
+    async fn closing_a_project_while_create_is_in_flight_leaves_an_orphan_session() {
+        // 审核 C:create 已发出、应答还没回来时关项目页签,`close_project` 会
+        // abort `state.pending`,拿不到 `SessionInfo.id`,于是没有机会 kill。
+        // 假服务在收到 create 时先记账再慢返回,模拟"守护进程已经建好会话"。
+        let fake = FakeSessions::default();
+        fake.slow_create(Duration::from_millis(500));
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        panel.states.insert(7, AgentPanelState::new());
+        let _ = panel.update(
+            7,
+            Message::PickerSelect(PickerLaunch::Agent(None)),
+            Some(&project),
+            (80, 24),
+        );
+        // 等后台任务走过 hook/ensure 并发出 create。
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(fake.get().creates.len(), 1, "create 请求已经发出");
+        let _ = panel.close_project(7);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            fake.get().kills.is_empty(),
+            "现状:会话已在守护进程里建好,但转发任务被 abort,没人 kill"
+        );
     }
 
     #[tokio::test]

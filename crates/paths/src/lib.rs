@@ -190,7 +190,16 @@ mod tests {
 
     #[test]
     fn config_dir_ends_with_digger() {
-        assert!(config_dir().to_string_lossy().contains("digger"));
+        // 默认根带产品名;`DIGGER_DATA_DIR` 覆盖时路径由调用方给,不含 "digger"
+        // 也合法(审核环境正是如此)。两种情形都要过,且不假设环境变量在两次
+        // 读取之间不变(测试并行,另有测试会临时设置/清理它)。
+        let c = config_dir();
+        let root = std::env::var_os("DIGGER_DATA_DIR");
+        assert!(
+            c.to_string_lossy().contains("digger")
+                || root.is_some_and(|root| c.as_os_str() == root.as_os_str()),
+            "config {c:?} 既不是默认的 digger 根,也不是 DIGGER_DATA_DIR 覆盖值"
+        );
     }
 
     #[test]
@@ -223,10 +232,14 @@ mod tests {
 
     #[test]
     fn state_and_logs_dirs_are_under_digger_root() {
-        assert!(state_dir().to_string_lossy().contains("digger"));
+        // 不假设根目录名字里含 "digger":`DIGGER_DATA_DIR` 覆盖时由调用方决定。
+        // 钉住的是相对结构:state 在 config 下,logs 在 state 下。
+        let config = config_dir();
+        let state = state_dir();
+        assert_eq!(state, config.join("state"));
         let l = logs_dir();
         assert_eq!(l.file_name().unwrap(), "logs");
-        assert!(l.starts_with(state_dir()));
+        assert_eq!(l, state.join("logs"));
     }
 
     #[test]
