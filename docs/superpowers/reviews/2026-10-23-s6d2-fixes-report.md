@@ -5,6 +5,7 @@
 ## 提交
 
 - `6eeeb38` test(agent): 补 S6d-2 审核缺口的测试;修 paths 测试对环境变量的依赖
+- `ecf32d5` fix(agent): 关项目页签时回收在途 create 的会话,不留孤儿
 
 未合并 `main`、未打 tag、未推送。库没有改动。
 
@@ -33,19 +34,20 @@
 
 ## C. `close_project` 与在途 create
 
-**结论:确认会留下孤儿会话。**
+**结论:确认会留下孤儿会话,已修复(产品侧,库未改)。**
 
-新增测试 `closing_a_project_while_create_is_in_flight_leaves_an_orphan_session`:假服务在收到 `create` 时先记账、500ms 后返回;50ms 时关项目页签。`close_project` 会 abort `state.pending`,此时 `create` 已经发出、守护进程侧会话已建立,但产品还没拿到 `SessionInfo.id`,因此 `kills` 为空,转发任务结束后也没有任何路径补 kill。测试保留为证据/护栏。
+复现测试 `closing_a_project_while_create_is_in_flight_kills_the_session_when_it_finishes`:假服务在收到 `create` 时先记账、500ms 后返回;50ms 时关项目页签。修复前 `close_project` abort `state.pending`,create 已发出、守护进程侧会话已建立,但产品拿不到 `SessionInfo.id`,`kills` 为空。
 
-**最小修复方案(产品侧即可,库不用改):**
+**修复(`ecf32d5`):**
 
-1. `AgentPanel` 增加 `closed: Arc<Mutex<HashSet<i64>>>`;`close_project` 插入 pid,并**不再 abort `state.pending`**。
-2. 各处 `emit` 闭包先查 `closed`:命中时不再把消息送入产品通道。
-3. 命中时若消息是 `Message::Attached { info, .. }`,立刻 `svc.kill(info.id)` 并把任务计入 `critical`(退出前会被 `drain_critical` 等到);其余消息直接丢弃。
-4. `ensure_started` 重新打开同一项目时把 pid 从 `closed` 移除。
-5. 顺带的相邻缺口:`create` 成功但 `attach` 失败时,库只发 `Failed`,产品拿不到会话 id,kill 不到——这一条需要库在 attach 失败路径返回/关闭会话,属于库侧话题,不在本清单范围内。
+1. `AgentPanel` 增加每项目的关闭代次 `epochs`;`emitter` 闭包捕获创建时的代次。
+2. `close_project` 先 `bump_epoch`,并**不再 abort `state.pending`**——任务随 `state` drop 而 detach,继续跑完 create/attach。
+3. 代次对不上时丢弃所有回投;若迟到的是 `Message::Attached { info, .. }`,立刻 `svc.kill(info.id)`,并把 kill 任务计入 `critical`(退出前 `drain_critical` 会等到)。
+4. 重新打开项目时新任务捕获新代次,旧一轮的迟到 `Attached` 仍按旧代次被回收。
 
-**修复前先向用户确认**(可能影响库的 create/attach 失败语义)。本轮未改代码。
+测试改名并改为断言修复后的行为:create 完成后 `kills == ["created-1"]`,状态里不再有该项目。
+
+**仍存在的相邻缺口(库侧,未修):** `create` 成功但 `attach` 失败时,库只发 `Failed`,产品拿不到会话 id,kill 不到。这需要库在 attach 失败路径返回/关闭会话,不在本清单范围内。
 
 ## 验证(最终代码)
 
@@ -55,11 +57,11 @@
 | 桌面 + paths 单包 | `cargo test -p digger-desktop -p digger-paths` | 退出 0;302 + 1 smoke + 11 通过 / 0 失败 |
 | clippy | `cargo clippy --workspace --all-targets` | 退出 0;仅基线 `block v0.1.6` 1 条 |
 | 格式 | `rustfmt --edition 2024 --check` 对本期改动文件 | 干净 |
-| 干净快照 | `git archive 6eeeb38` 解到 `/private/tmp/s6d2-fix-clean.XXXX`(目录名与 `DIGGER_DATA_DIR` 都不含 "digger",临时 `HOME`),自己的 `target` | 见下 |
+| 干净快照 | `git archive ecf32d5` 解到 `/private/tmp/s6d2-fix2-clean.Tsb5n5`(目录名与 `DIGGER_DATA_DIR` 都不含 "digger",临时 `HOME`),自己的 `target` | 见下 |
 
 ### 干净快照实测
 
-快照目录 `/private/tmp/s6d2-fix-clean.ldLgMQ`(不含 "digger"),数据根 `/private/tmp/s6d2-fix-data.j23np6`(不含 "digger"),临时 `HOME` `/private/tmp/s6d2-fix-home.3GKRak`,自己的 `target`:
+快照目录 `/private/tmp/s6d2-fix2-clean.Tsb5n5`(不含 "digger"),数据根 `/private/tmp/s6d2-fix2-data.nYFZJg`(不含 "digger"),临时 `HOME` `/private/tmp/s6d2-fix2-home.U2ibdo`,自己的 `target`,归档自 `ecf32d5`:
 
 | 命令 | 退出码 | 结果 |
 | --- | --- | --- |
