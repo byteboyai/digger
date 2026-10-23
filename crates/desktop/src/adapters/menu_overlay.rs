@@ -221,6 +221,47 @@ pub fn view_rows<'a>(
     iced_widget::stack![scrim, positioned].into()
 }
 
+/// 菜单外框 + 整窗透明遮罩(溢出菜单等自带行的调用方复用同一视觉)。
+/// `content` 是已经拼好的菜单主体;`width` 用于右上/下边缘钳制。
+pub fn shell<'a>(content: El<'a>, anchor: MenuAnchor, width: f32, on_dismiss: Msg) -> El<'a> {
+    let region = region();
+    let menu: El<'a> = container(content)
+        .width(Length::Fixed(width))
+        .padding(region.padding)
+        .style(move |_t: &iced_widget::Theme| container::Style {
+            background: region.background.map(Into::into),
+            border: region.border.unwrap_or_default(),
+            shadow: Shadow {
+                color: Color {
+                    a: 0.45,
+                    ..Color::BLACK
+                },
+                offset: Vector::new(0.0, 10.0),
+                blur_radius: 28.0,
+            },
+            ..container::Style::default()
+        })
+        .into();
+    let scrim: El<'a> = iced_widget::mouse_area(
+        container(iced_widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .on_press(on_dismiss)
+    .into();
+    let positioned: El<'a> = container(menu)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding {
+            top: anchor.y,
+            left: anchor.x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .into();
+    iced_widget::stack![scrim, positioned].into()
+}
+
 /// 已规整行的外形尺寸(宽恒为 `menu_item_width` + 内边距;高按行数估算)。
 fn rows_size(rows: &[OverlayRow]) -> (f32, f32) {
     let region = region();

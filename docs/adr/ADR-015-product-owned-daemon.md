@@ -89,6 +89,14 @@ Each product's hook binary only manages its own entries:
 1. **Binary size**: Digger now ships three binaries (digger, diggerd, digger-hook) instead of one
 2. **Runtime behavior**: Digger's daemon runs with minimal features; Dozer's daemon runs with all features
 
+## Agent 面板
+
+Agent 面板与会话也走这条产品自有守护进程:面板的会话服务接缝(`dozer_services::SessionService`)由 `Daemon::sessions()` 包装同一个 `dozer_client::Client`,连的是 `diggerd` 的 socket;hook 安装器 spawn 同目录的 `digger-hook install <agent>`,不碰 Dozer 的任何配置。
+
+- 关项目页签 = kill 该项目全部会话;关窗口只 detach(会话随 `diggerd` 存活);退出前等在途 kill(3 秒上限)。
+- `digger-hook` 与 `dozer-hook` 各自写自己产品的配置条目,同机并存不互相覆盖。
+- 页签部件与菜单弹层目前仍是 Digger 侧的临时复制(`agent_tabs.rs`、`menu_overlay.rs`),后续应迁入 byteui。
+
 ## Related ADRs
 
 - **ADR-014**: Agent Panel S6 Design (references this ADR for daemon architecture)

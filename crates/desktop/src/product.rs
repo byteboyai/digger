@@ -79,6 +79,18 @@ pub enum Msg {
     AgentPreedit(i64, Option<String>),
     /// 输入法提交的文本(走 `AgentPanel::commit_ime`,负责清预编辑)。
     AgentImeCommit(i64, String),
+    /// 光标移动(窗口坐标):悬停命中与拖拽阈值。
+    AgentCursor(iced::Point),
+    /// 光标离开窗口:清悬停与拖拽。
+    AgentCursorLeft,
+    /// 光标移到第 `index` 个页签上(拖拽换位用,不经库的消息)。
+    AgentTabHover(i64, usize),
+    /// 鼠标松开:结束页签拖拽。
+    AgentPointerRelease,
+    /// 关闭溢出下拉(点空白)。
+    AgentOverflowDismiss,
+    /// Esc:关最上层覆盖层(确认框 → 选择器 → 溢出菜单)。
+    AgentEscape,
     /// 「应用」面板的消息(Task 14)。
     Apps(crate::apps::Message),
     /// 「用量」面板的库消息(Task 20)。
@@ -1005,6 +1017,31 @@ impl ProductShell {
         )
     }
 
+    /// Agent 自己的浮层 / 确认框是否打开:打开时键盘不投终端。
+    pub(crate) fn agent_keys_blocked(&self) -> bool {
+        self.agent.overlay_is_open()
+            || self
+                .projects
+                .current_project()
+                .and_then(|p| self.agent.states.get(&p.id))
+                .is_some_and(|state| state.pending_close_tab.is_some())
+    }
+
+    /// 关闭溢出下拉:产品态清掉,并让库把 `term_tab_overflow_anchor` 也归零。
+    fn dismiss_agent_overflow(&mut self) {
+        if let Some((pid, _)) = self.agent.overflow {
+            let project = self.projects.project_by_id(pid);
+            let grid = self.current_agent_grid().unwrap_or((80, 24));
+            let _ = self.agent.update(
+                pid,
+                dozer_panel_agent::update::Message::OverflowDismiss,
+                project.as_ref(),
+                grid,
+            );
+        }
+        self.agent.overflow = None;
+    }
+
     /// Agent 面板的配对视图:列表(库的 `agent_list`)+ 终端条(库的
     /// `terminal_pane`)。只有守护进程可用且当前项目已有状态时才拼配对;其余
     /// 沿用 S6d-1 的壳(无项目 / 连接中 / 不可用 + 重试)。
@@ -1020,8 +1057,10 @@ impl ProductShell {
         crate::adapters::agent::set_current_agent_project(pid);
         let block =
             crate::adapters::agent_layout::terminal_block(area.rect, area.collapsed, area.pair);
-        let tab_bar_px =
-            (block.w - 8.0 * 2.0 - byteui::theme::geometry::tab_button_size()).max(0.0);
+        let tab_bar_px = crate::adapters::agent_tabs::tab_bar_avail_px(
+            block.w,
+            byteui::theme::icon_size::scale(),
+        );
         let display = crate::adapters::agent_display::AgentDisplay {
             panel: &self.agent,
             pid,
@@ -1617,6 +1656,50 @@ impl Product<Msg> for ProductShell {
                     .filter(|p| self.projects.open_ids().contains(&p.id));
                 self.agent.commit_ime(pid, &text, project.as_ref())
             }
+            Msg::AgentCursor(point) => {
+                self.last_cursor = point;
+                self.agent.set_cursor(point);
+                Task::none()
+            }
+            Msg::AgentCursorLeft => {
+                self.agent.clear_hover();
+                self.agent.clear_drag();
+                Task::none()
+            }
+            Msg::AgentTabHover(pid, index) => {
+                if self.agent.is_dragging() && self.projects.current_project_id() == Some(pid) {
+                    let _ = self.agent.on_drag_move(pid, index);
+                }
+                Task::none()
+            }
+            Msg::AgentPointerRelease => {
+                self.agent.on_pointer_released();
+                Task::none()
+            }
+            Msg::AgentOverflowDismiss => {
+                self.dismiss_agent_overflow();
+                Task::none()
+            }
+            Msg::AgentEscape => {
+                let pid = self.projects.current_project_id();
+                let grid = self.current_agent_grid().unwrap_or((80, 24));
+                let project = pid.and_then(|pid| self.projects.project_by_id(pid));
+                if self.agent.confirm_is_open(pid) {
+                    if let Some(pid) = pid {
+                        let _ = self.agent.update(
+                            pid,
+                            dozer_panel_agent::update::Message::CloseCancel,
+                            project.as_ref(),
+                            grid,
+                        );
+                    }
+                } else if self.agent.picker.is_some() {
+                    self.agent.close_picker();
+                } else {
+                    self.dismiss_agent_overflow();
+                }
+                Task::none()
+            }
             Msg::ZoomToggle => self
                 .window
                 .map(window::toggle_maximize)
@@ -1637,7 +1720,14 @@ impl Product<Msg> for ProductShell {
                 }
                 Task::none()
             }
-            Msg::Tick => self.apps.update(crate::apps::Message::Tick).map(Msg::Apps),
+            Msg::Tick => {
+                // 悬停提示到期:消息本身会触发重绘(`tooltip_deadline` 只用于判断)。
+                let _tooltip_due = self
+                    .agent
+                    .tooltip_deadline()
+                    .is_some_and(|deadline| std::time::Instant::now() >= deadline);
+                self.apps.update(crate::apps::Message::Tick).map(Msg::Apps)
+            }
             Msg::NativeUsage(event) => {
                 self.usage.native.update(event);
                 Task::none()
@@ -1897,12 +1987,7 @@ impl Product<Msg> for ProductShell {
         publish_panes(self.shell.panes());
         crate::CURRENT_WINDOW.with(|w| w.set(Some(self.shell.window())));
         crate::CURRENT_CURSOR.with(|c| c.set(self.last_cursor));
-        let agent_blocked = self.agent.picker.is_some()
-            || self
-                .projects
-                .current_project()
-                .and_then(|p| self.agent.states.get(&p.id))
-                .is_some_and(|state| state.pending_close_tab.is_some());
+        let agent_blocked = self.agent_keys_blocked();
         crate::AGENT_KEYS_BLOCKED.with(|b| b.set(agent_blocked));
 
         if self.closing {
@@ -1986,16 +2071,17 @@ impl Product<Msg> for ProductShell {
             }
             _ => body,
         };
-        // Agent 选择器浮层(库的 `picker_entries`):盖在正文之上,点空白 / Esc 关闭。
-        if self.panel_visible(&shell::agent_id())
-            && let Some(overlay) = crate::adapters::agent_display::picker_overlay(
-                &self.agent,
-                (self.shell.window().0, self.shell.window().1),
-            )
-        {
-            iced::widget::stack![body, overlay].into()
+        // Agent 选择器 / 溢出下拉浮层:盖在正文之上,点空白 / Esc 关闭。
+        let window = (self.shell.window().0, self.shell.window().1);
+        let agent_overlay = if self.panel_visible(&shell::agent_id()) {
+            crate::adapters::agent_display::picker_overlay(&self.agent, window)
+                .or_else(|| crate::adapters::agent_display::overflow_overlay(&self.agent, window))
         } else {
-            body
+            None
+        };
+        match agent_overlay {
+            Some(overlay) => iced::widget::stack![body, overlay].into(),
+            None => body,
         }
     }
 
@@ -2095,6 +2181,12 @@ fn agent_event(
         iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Msg::AgentPointer(
             crate::CURRENT_CURSOR.with(std::cell::Cell::get),
         )),
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Msg::AgentCursor(position))
+        }
+        iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Msg::AgentCursorLeft),
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_)) => Some(Msg::AgentPointerRelease),
+        iced::Event::Window(iced::window::Event::Unfocused) => Some(Msg::AgentCursorLeft),
         iced::Event::Window(iced::window::Event::FileDropped(path)) => Some(Msg::AgentDrop(path)),
         _ => None,
     }
@@ -2184,8 +2276,13 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
             .then_some(Msg::FilesMenuDismiss)
         }));
     }
-    // Agent 选择器打开时 Esc 关闭(条目列表在库视图里,不创建会话)。
-    if shell.agent.picker.is_some() {
+    // Agent 覆盖层(选择器 / 溢出下拉)或关页签确认打开时 Esc 关最上层。
+    let agent_confirm = shell
+        .projects
+        .current_project()
+        .and_then(|p| shell.agent.states.get(&p.id))
+        .is_some_and(|state| state.pending_close_tab.is_some());
+    if shell.agent.overlay_is_open() || agent_confirm {
         subs.push(iced::event::listen_with(|evt, _status, _id| {
             matches!(
                 evt,
@@ -2194,7 +2291,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
                     ..
                 })
             )
-            .then_some(Msg::AgentPickerClose)
+            .then_some(Msg::AgentEscape)
         }));
     }
     if shell.shell.animating() {
@@ -3078,6 +3175,43 @@ mod tests {
                 .surfaces
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn dismiss_layer_press_closes_the_menu() {
+        let mut shell = fresh("agent-overflow-dismiss");
+        shell.agent.overflow = Some((7, (10.0, 10.0)));
+        let _ = Product::update(&mut shell, HostMessage::Product(Msg::AgentOverflowDismiss));
+        assert!(shell.agent.overflow.is_none());
+    }
+
+    #[test]
+    fn escape_closes_the_topmost_overlay_then_nothing_else() {
+        use crate::adapters::agent::PickerMenu;
+        let mut shell = fresh("agent-escape");
+        shell.agent.open_picker(PickerMenu { pid: 7, at: None });
+        let _ = Product::update(&mut shell, HostMessage::Product(Msg::AgentEscape));
+        assert!(shell.agent.picker.is_none());
+        shell.agent.overflow = Some((7, (10.0, 10.0)));
+        let _ = Product::update(&mut shell, HostMessage::Product(Msg::AgentEscape));
+        assert!(shell.agent.overflow.is_none());
+        // 没有覆盖层时 Esc 什么都不做(不 panic)。
+        let _ = Product::update(&mut shell, HostMessage::Product(Msg::AgentEscape));
+        assert!(!shell.agent.overlay_is_open());
+    }
+
+    #[test]
+    fn confirm_dialog_blocks_terminal_keys() {
+        use dozer_panel_agent::state::AgentPanelState;
+        let mut shell = fresh("agent-confirm-blocks");
+        assert!(!shell.agent_keys_blocked());
+        let mut state = AgentPanelState::new();
+        state.pending_close_tab = Some("s1".into());
+        shell.agent.states.insert(7, state);
+        assert!(shell.agent.confirm_is_open(Some(7)));
+        // 覆盖层同样阻断键盘。
+        shell.agent.open_overflow(7, (0.0, 0.0));
+        assert!(shell.agent_keys_blocked());
     }
 
     #[test]

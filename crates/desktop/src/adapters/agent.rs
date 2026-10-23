@@ -9,6 +9,7 @@
 
 use dozer_model::ProjectInfo;
 use dozer_panel_agent::adapter::{AgentCapabilities, HookInstaller};
+use dozer_panel_agent::display::AgentHover;
 use dozer_panel_agent::launch::PickerLaunch;
 use dozer_panel_agent::restore::RestoredSession;
 use dozer_panel_agent::state::AgentPanelState;
@@ -20,7 +21,7 @@ use iced::{Element, Task};
 use iced_widget::core::Rectangle;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +110,13 @@ pub struct PickerMenu {
     pub at: Option<(f32, f32)>,
 }
 
+/// 被按下、准备拖动的页签(Dozer 的拖拽状态机在产品侧,库只做换位)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TabDrag {
+    pub source: usize,
+    pub press_pos: iced::Point,
+}
+
 /// 一条键盘事件在终端上的语义(纯决策,`on_key` 只负责把动作变成 `Task`)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyAction {
@@ -148,6 +156,9 @@ pub fn decide_key(
 /// 退出前等待 kill 的总预算。
 pub const EXIT_KILL_BUDGET: Duration = Duration::from_secs(3);
 
+/// 悬停满这么久后显示延迟提示(D3:精度是 1 秒 `Tick`)。
+pub const TOOLTIP_DELAY: Duration = Duration::from_secs(2);
+
 /// 每项目状态的 Agent 面板。
 pub struct AgentPanel {
     pub shell: AgentShell,
@@ -173,10 +184,18 @@ pub struct AgentPanel {
     pub terminal_rect: Option<Rectangle>,
     /// 输入法预编辑文本(供 `PanelDisplay::ime_preedit`);失焦 / 切走时清空。
     pub preedit: Option<String>,
+    /// 当前悬停槽位与进入时刻(D3:阶跃高亮 + 2 秒延迟提示)。
+    hover: Option<(AgentHover, Instant)>,
+    /// 最近一次光标位置(窗口坐标):页签拖拽阈值与命中判断用。
+    pub cursor: iced::Point,
+    /// 按下页签后武装的拖拽;越过阈值才换位。
+    drag: Option<TabDrag>,
     last_grid: HashMap<i64, (u16, u16)>,
     /// 恢复开始时那一刻的网格:新会话按它创建,恢复完成前窗口又变了则用完成时的。
     start_grid: HashMap<i64, (u16, u16)>,
     pub picker: Option<PickerMenu>,
+    /// 溢出下拉的锚点与所属项目;与 `picker` 互斥(同一时刻只有一个覆盖层)。
+    pub overflow: Option<(i64, (f32, f32))>,
 }
 
 impl Default for AgentPanel {
@@ -205,9 +224,13 @@ impl AgentPanel {
             focus: false,
             terminal_rect: None,
             preedit: None,
+            hover: None,
+            cursor: iced::Point::new(0.0, 0.0),
+            drag: None,
             last_grid: HashMap::new(),
             start_grid: HashMap::new(),
             picker: None,
+            overflow: None,
         }
     }
 
@@ -363,6 +386,15 @@ impl AgentPanel {
         let Some(project) = project.filter(|p| p.id == pid) else {
             return Task::none();
         };
+        // 悬停由产品记账(库的 `Message::Hover` 分支是空的)。
+        if let Message::Hover(slot, hovered) = &message {
+            self.on_hover(*slot, *hovered, Instant::now());
+            return Task::none();
+        }
+        // 按下页签 = 选中并武装拖拽;卡片用 `SelectTabNoDrag`,不武装。
+        if let Message::SelectTab(idx) = &message {
+            self.on_select_tab(pid, *idx);
+        }
         let Some(handle) = self.handle() else {
             return Task::none();
         };
@@ -393,6 +425,8 @@ impl AgentPanel {
         // Digger 一期忽略跨面板联动(没有会话列表 / git / 磁盘占用面板)。
         let _ = state.take_host_events();
         let picker_open = state.agent_picker_open;
+        let overflow_anchor = state.term_tab_overflow_anchor;
+        let tabs_empty = state.tabs.is_empty();
         for notice in notices {
             let text = dozer_panel_agent::i18n::resolver()
                 .resolve(&notice.text, "en")
@@ -405,11 +439,29 @@ impl AgentPanel {
         }
         for request in requests {
             let dozer_panel_agent::adapter::AgentRequest::ShowPicker { at } = request;
-            self.picker = Some(PickerMenu { pid, at });
+            self.open_picker(PickerMenu { pid, at });
         }
         if !picker_open && self.picker.is_some_and(|p| p.pid == pid) {
-            self.picker = None;
+            self.close_picker();
         }
+        if let Some(at) = overflow_anchor {
+            // 库视图传的锚点是 `(0,0)`(拿不到按钮位置):按终端块右上角估一个。
+            let scale = byteui::theme::icon_size::scale();
+            let anchor = if at == (0.0, 0.0) {
+                self.terminal_rect
+                    .map(|rect| (rect.x + rect.width - 240.0 * scale, rect.y + 40.0 * scale))
+                    .unwrap_or(at)
+            } else {
+                at
+            };
+            self.open_overflow(pid, anchor);
+        } else if self.overflow.is_some() {
+            self.overflow = None;
+        }
+        if tabs_empty {
+            self.overflow = None;
+        }
+        self.validate_hover(pid);
         Task::none()
     }
 
@@ -424,6 +476,39 @@ impl AgentPanel {
         {
             state.agent_picker_open = false;
         }
+        self.overflow = None;
+    }
+
+    /// 打开选择器(与溢出下拉互斥)。
+    pub fn open_picker(&mut self, menu: PickerMenu) {
+        self.overflow = None;
+        self.picker = Some(menu);
+    }
+
+    /// 打开溢出下拉(与选择器互斥);项目没有状态时不打开。
+    pub fn open_overflow(&mut self, pid: i64, anchor: (f32, f32)) {
+        if self.states.contains_key(&pid) {
+            self.picker = None;
+            self.overflow = Some((pid, anchor));
+            if let Some(state) = self.states.get_mut(&pid) {
+                state.term_tab_overflow_anchor = Some(anchor);
+            }
+        }
+    }
+
+    pub fn close_overlay(&mut self) {
+        self.picker = None;
+        self.overflow = None;
+    }
+
+    pub fn overlay_is_open(&self) -> bool {
+        self.picker.is_some() || self.overflow.is_some()
+    }
+
+    /// 关页签确认框由库的 `pending_close_tab` 决定,不放在覆盖层字段里。
+    pub fn confirm_is_open(&self, pid: Option<i64>) -> bool {
+        pid.and_then(|pid| self.states.get(&pid))
+            .is_some_and(|state| state.pending_close_tab.is_some())
     }
 
     /// 终端块矩形(窗口坐标),由 `update_host` 每轮几何同步时写入。
@@ -445,6 +530,10 @@ impl AgentPanel {
         if !visible {
             self.focus = false;
             self.preedit = None;
+            self.clear_hover();
+            self.clear_drag();
+            self.close_picker();
+            self.close_overlay();
         }
     }
 
@@ -452,6 +541,132 @@ impl AgentPanel {
     pub fn reset_input_state(&mut self) {
         self.focus = false;
         self.preedit = None;
+        self.clear_hover();
+        self.clear_drag();
+        self.close_picker();
+        self.close_overlay();
+    }
+
+    /// 悬停进入 / 离开。离开事件只清「正是当前槽位」的记录:事件顺序可能是
+    /// 新槽位的 enter 先于旧槽位的 leave,不能把新悬停清掉。
+    pub fn on_hover(&mut self, slot: AgentHover, entered: bool, now: Instant) {
+        if entered {
+            self.hover = Some((slot, now));
+        } else if self.hover.is_some_and(|(current, _)| current == slot) {
+            self.hover = None;
+        }
+    }
+
+    pub fn clear_hover(&mut self) {
+        self.hover = None;
+    }
+
+    /// D3:阶跃高亮——进入即满、离开即空,不做插值。
+    pub fn hover_progress(&self, slot: AgentHover) -> f32 {
+        if self.hover.is_some_and(|(current, _)| current == slot) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn hover_tooltip_ready_at(&self, slot: AgentHover, now: Instant) -> bool {
+        self.hover.is_some_and(|(current, entered)| {
+            current == slot && now.saturating_duration_since(entered) >= TOOLTIP_DELAY
+        })
+    }
+
+    pub fn hover_tooltip_ready(&self, slot: AgentHover) -> bool {
+        self.hover_tooltip_ready_at(slot, Instant::now())
+    }
+
+    /// 提示的到期时刻;没有悬停时为 `None`(调用方据此决定是否需要重绘)。
+    pub fn tooltip_deadline(&self) -> Option<Instant> {
+        self.hover.map(|(_, entered)| entered + TOOLTIP_DELAY)
+    }
+
+    pub fn set_cursor(&mut self, point: iced::Point) {
+        self.cursor = point;
+    }
+
+    /// 按下页签(`SelectTab`)时武装拖拽;卡片点选走 `SelectTabNoDrag`,不武装
+    /// (否则光标划过页签条就会换位——Dozer 2026-08-17 修过的真实 bug)。
+    pub fn on_select_tab(&mut self, pid: i64, idx: usize) {
+        if self
+            .states
+            .get(&pid)
+            .is_some_and(|state| idx < state.tabs.len())
+        {
+            self.drag = Some(TabDrag {
+                source: idx,
+                press_pos: self.cursor,
+            });
+        }
+    }
+
+    /// 光标移到第 `to` 个页签上。没有武装、未越过阈值、目标越界或原地不动时
+    /// 什么都不做;换位成功以新位置继续拖。
+    pub fn on_drag_move(&mut self, pid: i64, to: usize) -> bool {
+        let Some(drag) = self.drag else {
+            return false;
+        };
+        if !byteui::interaction::tab_strip::tab_drag_past_threshold(
+            (drag.press_pos.x, drag.press_pos.y),
+            (self.cursor.x, self.cursor.y),
+        ) {
+            return false;
+        }
+        let Some(state) = self.states.get_mut(&pid) else {
+            self.drag = None;
+            return false;
+        };
+        if state.tabs.len() < 2 || to >= state.tabs.len() || to == drag.source {
+            return false;
+        }
+        if dozer_panel_agent::update::reorder_term_tab(state, drag.source, to) {
+            self.hover = None;
+            self.drag = Some(TabDrag {
+                source: to,
+                press_pos: drag.press_pos,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 鼠标松开:结束拖拽(在窗口外松开也走这里)。
+    pub fn on_pointer_released(&mut self) {
+        self.drag = None;
+    }
+
+    pub fn clear_drag(&mut self) {
+        self.drag = None;
+    }
+
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// 页签数量变化后,悬停槽位若已不存在(关闭 / 换位后越界)就清掉。
+    fn validate_hover(&mut self, pid: i64) {
+        let Some((slot, _)) = self.hover else {
+            return;
+        };
+        let count = self
+            .states
+            .get(&pid)
+            .map(|state| state.tabs.len())
+            .unwrap_or(0);
+        let stale = match slot {
+            AgentHover::TabItem(idx) | AgentHover::TabClose(idx) | AgentHover::OverflowRow(idx) => {
+                idx >= count
+            }
+            AgentHover::PickerToggle | AgentHover::TabOverflow => false,
+        };
+        if stale {
+            self.hover = None;
+        }
     }
 
     /// 输入法预编辑(只接受当前项目的回投,迟到的旧项目消息丢弃)。
@@ -542,6 +757,12 @@ impl AgentPanel {
     /// 成功,任务随后发来的 `Attached` 由 `emitter` 回收(kill),不留孤儿。
     pub fn close_project(&mut self, pid: i64) -> Task<crate::product::Msg> {
         self.bump_epoch(pid);
+        self.clear_drag();
+        self.clear_hover();
+        if self.picker.is_some_and(|p| p.pid == pid) {
+            self.close_picker();
+        }
+        self.close_overlay();
         self.starting.remove(&pid);
         self.start_grid.remove(&pid);
         self.last_grid.remove(&pid);
@@ -1409,6 +1630,257 @@ mod tests {
         settle().await;
         assert_eq!(fake.get().writes.len(), 1);
         assert_eq!(fake.get().writes[0].0, "a1", "只写当前项目的活动会话");
+    }
+
+    fn tab_ids(panel: &AgentPanel, pid: i64) -> Vec<String> {
+        panel.states[&pid]
+            .tabs
+            .iter()
+            .map(|tab| tab.info.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn entering_a_slot_makes_its_progress_one_and_others_zero() {
+        let mut panel = make_panel(&FakeSessions::default());
+        let now = Instant::now();
+        panel.on_hover(AgentHover::TabItem(1), true, now);
+        assert_eq!(panel.hover_progress(AgentHover::TabItem(1)), 1.0);
+        assert_eq!(panel.hover_progress(AgentHover::TabItem(0)), 0.0);
+        assert_eq!(panel.hover_progress(AgentHover::TabClose(1)), 0.0);
+    }
+
+    #[test]
+    fn leaving_a_slot_that_is_not_the_current_one_changes_nothing() {
+        let mut panel = make_panel(&FakeSessions::default());
+        let now = Instant::now();
+        // 事件顺序:新槽位 enter 先于旧槽位 leave。
+        panel.on_hover(AgentHover::TabItem(2), true, now);
+        panel.on_hover(AgentHover::TabItem(1), false, now);
+        assert_eq!(panel.hover_progress(AgentHover::TabItem(2)), 1.0);
+        panel.on_hover(AgentHover::TabItem(2), false, now);
+        assert_eq!(panel.hover_progress(AgentHover::TabItem(2)), 0.0);
+    }
+
+    #[test]
+    fn tooltip_is_ready_only_after_two_seconds_on_the_same_slot() {
+        let mut panel = make_panel(&FakeSessions::default());
+        let start = Instant::now();
+        panel.on_hover(AgentHover::PickerToggle, true, start);
+        assert!(!panel.hover_tooltip_ready_at(AgentHover::PickerToggle, start));
+        assert!(!panel.hover_tooltip_ready_at(
+            AgentHover::PickerToggle,
+            start + Duration::from_millis(1999)
+        ));
+        assert!(panel.hover_tooltip_ready_at(AgentHover::PickerToggle, start + TOOLTIP_DELAY));
+        assert!(!panel.hover_tooltip_ready_at(AgentHover::TabItem(0), start + TOOLTIP_DELAY));
+        assert_eq!(panel.tooltip_deadline(), Some(start + TOOLTIP_DELAY));
+    }
+
+    #[tokio::test]
+    async fn removing_or_reordering_tabs_clears_a_hover_whose_index_no_longer_exists() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        insert_tab(&mut state, "c", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.on_hover(AgentHover::TabItem(2), true, Instant::now());
+        let _ = panel.update(7, Message::CloseTab(2), Some(&project), (80, 24));
+        assert_eq!(panel.hover_progress(AgentHover::TabItem(2)), 0.0);
+        assert_eq!(panel.hover, None);
+    }
+
+    #[test]
+    fn cursor_leaving_the_window_clears_hover() {
+        let mut panel = make_panel(&FakeSessions::default());
+        panel.on_hover(AgentHover::TabOverflow, true, Instant::now());
+        panel.clear_hover();
+        assert_eq!(panel.hover_progress(AgentHover::TabOverflow), 0.0);
+    }
+
+    #[test]
+    fn no_hover_means_no_tooltip_deadline() {
+        let panel = make_panel(&FakeSessions::default());
+        assert_eq!(panel.tooltip_deadline(), None);
+        assert_eq!(panel.hover_progress(AgentHover::PickerToggle), 0.0);
+    }
+
+    #[tokio::test]
+    async fn select_tab_arms_the_drag_but_select_without_drag_does_not() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.cursor = iced::Point::new(0.0, 0.0);
+
+        let _ = panel.update(7, Message::SelectTabNoDrag(0), Some(&project), (80, 24));
+        assert!(!panel.is_dragging(), "卡片点选不武装拖拽");
+
+        let _ = panel.update(7, Message::SelectTab(0), Some(&project), (80, 24));
+        assert!(panel.is_dragging());
+    }
+
+    #[tokio::test]
+    async fn no_reorder_before_the_movement_threshold() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        insert_tab(&mut state, "c", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.cursor = iced::Point::new(10.0, 10.0);
+        panel.on_select_tab(7, 0);
+        panel.set_cursor(iced::Point::new(11.0, 10.0));
+        assert!(!panel.on_drag_move(7, 2));
+        assert_eq!(tab_ids(&panel, 7), ["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn reorder_moves_the_tab_and_keeps_the_dragged_tab_under_the_cursor() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        insert_tab(&mut state, "c", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.cursor = iced::Point::new(0.0, 0.0);
+        panel.on_select_tab(7, 0);
+        panel.set_cursor(iced::Point::new(80.0, 0.0));
+        assert!(panel.on_drag_move(7, 2));
+        assert_eq!(tab_ids(&panel, 7), ["b", "c", "a"]);
+        // 续拖以新位置 2 为准,再拖到 1。
+        assert!(panel.on_drag_move(7, 1));
+        assert_eq!(tab_ids(&panel, 7), ["b", "a", "c"]);
+        assert_eq!(panel.states[&7].tabs[panel.states[&7].active].info.id, "a");
+    }
+
+    #[tokio::test]
+    async fn out_of_range_targets_are_ignored() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.cursor = iced::Point::new(0.0, 0.0);
+        panel.on_select_tab(7, 0);
+        panel.set_cursor(iced::Point::new(80.0, 0.0));
+        assert!(!panel.on_drag_move(7, 9));
+        assert_eq!(tab_ids(&panel, 7), ["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn release_clears_the_drag_even_when_released_outside_the_window() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.on_select_tab(7, 0);
+        panel.on_pointer_released();
+        assert!(!panel.is_dragging());
+    }
+
+    #[tokio::test]
+    async fn closing_the_dragged_tab_or_switching_project_clears_the_drag() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.on_select_tab(7, 0);
+        panel.reset_input_state();
+        assert!(!panel.is_dragging());
+
+        panel.on_select_tab(7, 0);
+        let _ = panel.close_project(7);
+        assert!(!panel.is_dragging());
+    }
+
+    #[tokio::test]
+    async fn a_single_tab_can_not_be_dragged() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.cursor = iced::Point::new(0.0, 0.0);
+        panel.on_select_tab(7, 0);
+        panel.set_cursor(iced::Point::new(80.0, 0.0));
+        assert!(!panel.on_drag_move(7, 0));
+        assert_eq!(tab_ids(&panel, 7), ["a"]);
+    }
+
+    #[tokio::test]
+    async fn hover_is_cleared_after_a_reorder() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.on_hover(AgentHover::TabItem(0), true, Instant::now());
+        panel.cursor = iced::Point::new(0.0, 0.0);
+        panel.on_select_tab(7, 0);
+        panel.set_cursor(iced::Point::new(80.0, 0.0));
+        assert!(panel.on_drag_move(7, 1));
+        assert_eq!(panel.hover, None);
+    }
+
+    #[tokio::test]
+    async fn closing_a_row_keeps_the_menu_open_with_one_fewer_row_and_closes_it_at_zero() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.open_overflow(7, (100.0, 100.0));
+        let _ = panel.update(7, Message::CloseTab(0), Some(&project), (80, 24));
+        assert_eq!(panel.states[&7].tabs.len(), 1);
+        assert!(panel.overflow.is_some(), "还有页签时菜单保持打开");
+        let _ = panel.update(7, Message::CloseTab(0), Some(&project), (80, 24));
+        assert_eq!(panel.states[&7].tabs.len(), 0);
+        assert!(panel.overflow.is_none(), "关到 0 个时菜单自动关闭");
+    }
+
+    #[tokio::test]
+    async fn overlays_are_mutually_exclusive() {
+        let mut panel = make_panel(&FakeSessions::default());
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.open_picker(PickerMenu { pid: 7, at: None });
+        assert!(panel.picker.is_some() && panel.overflow.is_none());
+        panel.open_overflow(7, (10.0, 10.0));
+        assert!(panel.picker.is_none() && panel.overflow.is_some());
+        panel.open_picker(PickerMenu { pid: 7, at: None });
+        assert!(panel.overflow.is_none() && panel.picker.is_some());
+    }
+
+    #[tokio::test]
+    async fn switching_panels_or_projects_closes_overlays() {
+        let mut panel = make_panel(&FakeSessions::default());
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.open_overflow(7, (10.0, 10.0));
+        panel.on_visibility(false);
+        assert!(panel.overflow.is_none());
+        panel.open_picker(PickerMenu { pid: 7, at: None });
+        panel.reset_input_state();
+        assert!(panel.picker.is_none() && panel.overflow.is_none());
     }
 
     #[tokio::test]

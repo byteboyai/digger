@@ -11,6 +11,7 @@ pub mod agent_display;
 #[allow(dead_code)]
 pub mod agent_keys;
 pub mod agent_layout;
+pub mod agent_tabs;
 pub mod files;
 pub mod menu_overlay;
 pub mod project;

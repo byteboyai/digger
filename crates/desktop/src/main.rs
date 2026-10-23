@@ -3,42 +3,11 @@
 //! 组合根委托:`product::boot` 建产品壳并设主题,`Product::update`/`view`
 //! 经宿主泛型包装驱动(`HostMessage<M>` 证明产品消息不进入宿主 enum)。
 
-mod adapters;
-mod apps;
-// `code_font`/`terminal_style` 由 S6d-2 的终端视图消费;本期只交付并测试。
-#[allow(dead_code)]
-mod fonts;
-mod lifecycle_selftest;
-mod markdown;
-mod paths;
-mod preview_assets;
-mod product;
-mod projects;
-mod shell;
-// S6a:守护进程拉起与生命周期。
-mod daemon;
+use digger_desktop::product::{self, Msg, ProductShell};
+use digger_desktop::{daemon, fonts};
 
 use bytehost_desktop::HostMessage;
 use iced::{Element, Task};
-
-use product::{Msg, ProductShell};
-
-// 下面这个 thread local(以及 `product::CURRENT_PANES`)是给 `PanelDisplay`
-// 适配器**取外部状态**的绕法:库的 `PanelDisplay` 方法签名(`fn background(&self)`
-// 等)没有地方传窗口尺寸 / 分栏状态,而适配器本身是 `&self` 的零状态展示对象。
-// 因此由产品每帧 `view` 前刷新一份快照,适配器只读。约束:**只读、每帧覆盖、
-// 不跨帧累积**——见 `pane_snapshot_does_not_outlive_the_frame`。
-thread_local! {
-    /// 最近一次已知的窗口逻辑尺寸:只给 `PanelDisplay` 这类拿不到 `ProductShell` 的展示适配器用。
-    pub(crate) static CURRENT_WINDOW: std::cell::Cell<Option<(f32, f32)>> =
-        const { std::cell::Cell::new(None) };
-    /// 最近一次光标位置:订阅里的鼠标事件不带坐标,只能由 `view` 每帧写入。
-    pub(crate) static CURRENT_CURSOR: std::cell::Cell<iced::Point> =
-        const { std::cell::Cell::new(iced::Point { x: 0.0, y: 0.0 }) };
-    /// Agent 自己的浮层(选择器 / 关页签确认)是否打开:打开时键盘不投终端。
-    pub(crate) static AGENT_KEYS_BLOCKED: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
 
 fn boot() -> (ProductShell, Task<Msg>) {
     product::boot()
