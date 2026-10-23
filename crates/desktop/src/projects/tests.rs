@@ -260,3 +260,53 @@ fn hovering_a_tab_marks_a_topbar_control_hovered_and_leaving_clears_it() {
         "leaving the tab gives the blank topbar back to the native drag"
     );
 }
+
+#[test]
+fn open_with_migrates_the_legacy_registry_into_the_given_db_and_enables_wal() {
+    let d = dir();
+    let legacy = d.path().join("projects.db");
+    let db = d.path().join("state").join("digger.db");
+    {
+        let c = rusqlite::Connection::open(&legacy).unwrap();
+        c.execute_batch(
+            "CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, last_active_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO projects VALUES (3, '/old/book', 'Old book', 10, 5);",
+        )
+        .unwrap();
+    }
+    let state = ProjectsState::open_with(d.path(), &db, &legacy);
+    assert!(state.notice().is_none(), "{:?}", state.notice());
+    let host = state.project_host().expect("host");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let listed = rt.block_on(host.projects.list_projects()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, 3);
+    assert_eq!(digger_store::journal_mode(&db).unwrap(), "wal");
+    assert!(!legacy.exists());
+    assert!(d.path().join("projects.db.migrated").exists());
+}
+
+#[test]
+fn a_failed_migration_shows_unavailable_instead_of_falling_back() {
+    let d = dir();
+    let legacy = d.path().join("projects.db");
+    std::fs::write(&legacy, b"not a sqlite file").unwrap();
+    let state = ProjectsState::open_with(d.path(), &d.path().join("digger.db"), &legacy);
+    assert!(state.project_host().is_none());
+    assert!(state.notice().is_some());
+}
+
+#[test]
+fn production_registry_path_is_the_daemons_db_path() {
+    assert_eq!(
+        digger_paths::projects_db_path(),
+        digger_paths::product().db_path()
+    );
+    assert_eq!(
+        digger_paths::projects_db_path().parent(),
+        Some(digger_paths::state_dir().as_path()),
+        "the registry lives in the state dir, the same place diggerd opens it"
+    );
+}

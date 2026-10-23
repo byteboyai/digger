@@ -48,6 +48,8 @@ fn view(shell: &ProductShell) -> Element<'_, Msg> {
 }
 
 fn main() -> iced::Result {
+    // 先于一切 `dozer_client::Client`:握手比对的是进程级产品身份。
+    daemon::install_product();
     fonts::sanitize_font_db();
     iced::application(boot, update, view)
         .font(fonts::JETBRAINS_MONO)

@@ -353,3 +353,13 @@ S6a Part C is **complete and verified**. Digger now has its own daemon infrastru
 - S6b: Agent panel UI implementation
 - S6c: Hook installation UI
 - S6d: Agent transcript integration
+
+## 审核修复(2026-10-23,依据 `dozer/docs/superpowers/reviews/2026-10-23-s6a-partc-review.md`)
+
+- **B1**:`ProjectsState::open_with(dir, db_path, legacy_db)` 经 `ProjectHost::open_in`(迁移 → WAL → 打开);产品传 `projects_db_path()` / `legacy_projects_db_path()`。注:macOS 上 `state_dir()` 回落到与 `config_dir()` 同一目录,所以生产里两处路径巧合相同;`DIGGER_DATA_DIR` 下才分叉(`config/` vs `config/state/`)。
+- **B2**:迁移改为先用 `ProjectHost::open` 建表(不抄 schema)、`ATTACH ?1` 参数化、旧库缺 `created_ms`/`description`/记忆表时兼容、与目标已有行冲突整体回滚并报错(legacy 留原位)、失败不留新建的 `digger.db`;`set_wal_mode` 在库不存在时建库。
+- **新发现 B5(此前审核遗漏)**:GUI 从未 `dozer_core::paths::install(digger_paths::product())`,而客户端握手拿进程级身份比对,默认是 "dozer"——真连 `diggerd` 会被判成"别的产品"。`main` 现于启动时调用 `daemon::install_product()`;用假守护进程的 `ensure` 测试暴露了它。
+- **B3**:补 `ensure` 已在跑/协议不一致/拉起失败/三次重试放弃 4 个测试(`ensure_with` 注入拉起与间隔);`which` 改为自查 PATH;并发测试经 `open_in`、断言 WAL、300 轮。`eprintln!` 沿用仓库现有做法(原审核该条撤回)。
+- **B4**(命令行部分,隔离 HOME):`digger-hook`/`dozer-hook install claude` 条目并存,重复安装各 1 份不重复,卸载 digger 只移除自己的;`diggerd` 起来后在 `<DIGGER_DATA_DIR>/state` 建 `diggerd.sock`+`digger.db`。GUI 点击项仍待用户。
+- 测试名变化:删 `spawn_does_not_inherit_stdin`(名不副实)、`already_migrated_when_target_has_data`(语义改为冲突报错);新增 `conflicting_target_rows_fail_without_overwriting_and_keep_legacy`、`an_id_collision_with_an_existing_target_project_is_an_error`、`a_failed_migration_leaves_no_new_digger_db`、`legacy_without_created_ms_and_description_columns_still_migrates`、`a_legacy_path_with_a_quote_is_attached_safely`、`open_with_migrates_…`、`a_failed_migration_shows_unavailable_…`、`production_registry_path_is_the_daemons_db_path`、`install_product_makes_this_process_digger`、4 个 `daemon` 测试、`find_diggerd_prefers_the_given_dir_over_path`。
+- 验证(最终代码):`cargo test --workspace` 退出码 0,**423 通过 / 0 失败 / 0 ignored**;`cargo clippy --workspace --all-targets` 仅 `block v0.1.6` 基线警告。

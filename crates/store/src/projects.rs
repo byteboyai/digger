@@ -40,10 +40,12 @@ impl ProjectHost {
     /// 迁移失败时返回 `Unavailable`,调用方显示"项目功能不可用:迁移失败 …",不静默回退。
     /// WAL 设置失败只记日志、不算迁移失败(尽力而为)。
     pub fn open_in(db_path: &Path, legacy_db: &Path) -> Result<Self, ServiceError> {
-        // 迁移旧 projects.db(若存在)。
         migrate_legacy_projects(legacy_db, db_path)?;
 
-        // 设 WAL 模式(尽力而为)。
+        // 先于任何 store 连接设 WAL(切换需要独占);库文件还不存在时由它建出空库。
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if let Err(e) = set_wal_mode(db_path) {
             eprintln!("digger-store: 设 WAL 模式失败(已忽略): {e}");
         }
@@ -219,9 +221,10 @@ mod tests {
         std::fs::create_dir_all(&proj_a_dir).unwrap();
         std::fs::create_dir_all(&proj_b_dir).unwrap();
 
-        // 先用 ProjectHost::open 建好 schema(避免并发建表的 race)。
+        // 先经 open_in 建好 schema 并设 WAL(避免并发建表的 race)。
+        let legacy = dir.path().join("projects.db");
         {
-            let host = ProjectHost::open(&db).unwrap();
+            let host = ProjectHost::open_in(&db, &legacy).unwrap();
             // 先写一个 project 验证基本功能。
             let result = block_on(
                 host.projects
@@ -236,10 +239,9 @@ mod tests {
                 "should have 1 project after initial write"
             );
         }
-        // 设 WAL。
-        crate::set_wal_mode(&db).unwrap();
+        assert_eq!(crate::journal_mode(&db).unwrap(), "wal");
 
-        let iterations = 50;
+        let iterations = 300;
         let db_clone = db.clone();
 
         // 线程 A:写 projects(不同的子目录)。

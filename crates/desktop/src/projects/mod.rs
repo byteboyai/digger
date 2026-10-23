@@ -123,8 +123,18 @@ pub struct ProjectsState {
 impl ProjectsState {
     /// 在数据目录 `dir` 里打开注册表与页签文件。生产传 `paths::config_dir()`;测试传各自的临时目录。
     pub fn open_in(dir: &Path) -> Self {
+        Self::open_with(
+            dir,
+            &dir.join(paths::PROJECTS_DB_FILE),
+            &dir.join("projects.db"),
+        )
+    }
+
+    /// 页签文件在 `dir`,注册表在 `db_path`(生产:`projects_db_path()`,与 `diggerd` 同一文件),
+    /// 并先把 `legacy_db`(旧 `projects.db`)迁入。迁移失败显示"项目功能不可用",不静默回退。
+    pub fn open_with(dir: &Path, db_path: &Path, legacy_db: &Path) -> Self {
         let loaded = ProjectTabs::load(&dir.join(paths::PROJECT_TABS_FILE));
-        let (host, notice) = match ProjectHost::open(&dir.join(paths::PROJECTS_DB_FILE)) {
+        let (host, notice) = match ProjectHost::open_in(db_path, legacy_db) {
             Ok(host) => (Some(host), None),
             Err(e) => (
                 None,

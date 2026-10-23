@@ -29,6 +29,14 @@ impl DaemonError {
     }
 }
 
+/// 把本进程装成 Digger 产品身份(`dozer_core::paths::install`)。必须在任何 `Client` 之前调用:
+/// 客户端握手拿进程级身份去比对守护进程的产品名,不装就是 "dozer",连上 `diggerd` 会被判成别的产品。
+pub fn install_product() {
+    if let Err(e) = dozer_core::paths::install(digger_paths::product()) {
+        eprintln!("安装 Digger 产品身份失败: {e:?}");
+    }
+}
+
 /// Digger 守护进程管理器:负责确保 `diggerd` 在跑并能响应请求。
 pub struct Daemon {
     client: Client,
@@ -38,7 +46,10 @@ pub struct Daemon {
 impl Daemon {
     /// 构造一个指向 Digger 产品 socket 的守护进程管理器。
     pub fn new() -> Self {
-        let socket = digger_paths::product().socket_path();
+        Self::with_socket(digger_paths::product().socket_path())
+    }
+
+    pub fn with_socket(socket: PathBuf) -> Self {
         let client = Client::new(socket.clone());
         Self { client, socket }
     }
@@ -48,6 +59,16 @@ impl Daemon {
     /// 先尝试连接并握手;连不上就 spawn 一个 `diggerd`,隔 1 秒重试最多 3 次。
     /// 失败时返回可读错误,调用方显示提示但不阻断主窗口启动。
     pub async fn ensure(&self) -> Result<(), DaemonError> {
+        self.ensure_with(|| Self::spawn(None), std::time::Duration::from_secs(1))
+            .await
+    }
+
+    /// `ensure` 的内核:拉起动作与重试间隔可注入(测试用)。
+    async fn ensure_with(
+        &self,
+        spawn: impl FnOnce() -> std::io::Result<()>,
+        retry_gap: std::time::Duration,
+    ) -> Result<(), DaemonError> {
         // 先尝试连接。
         match self.try_connect().await {
             Ok(()) => return Ok(()),
@@ -57,11 +78,11 @@ impl Daemon {
         }
 
         // spawn 一个新的 diggerd。
-        Self::spawn(None).map_err(|e| DaemonError::new(format!("拉起 diggerd 失败: {e}")))?;
+        spawn().map_err(|e| DaemonError::new(format!("拉起 diggerd 失败: {e}")))?;
 
         // 重试最多 3 次,每次隔 1 秒。
         for attempt in 1..=3 {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(retry_gap).await;
             match self.try_connect().await {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -154,12 +175,13 @@ fn find_diggerd(exe_dir: Option<&Path>) -> std::io::Result<PathBuf> {
         }
     }
 
-    // 最后试 PATH(用 which)。
-    let output = Command::new("which").arg("diggerd").output()?;
-    if output.status.success() {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Ok(PathBuf::from(path));
+    // 最后在 PATH 里找(GUI 启动的 PATH 很短,不借 shell)。
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("diggerd");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
     }
 
@@ -201,12 +223,118 @@ mod tests {
         assert!(result.is_err() || result.unwrap().is_err());
     }
 
+    use dozer_core::protocol::{PROTOCOL_VERSION, Reply, Request, decode_line, encode_line};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+
     #[test]
-    fn spawn_does_not_inherit_stdin() {
-        // 这个测试只验证 spawn 函数签名正确,实际 spawn 需要真实的 diggerd 二进制。
-        // 在 CI 里没有 diggerd,所以只检查 find_diggerd 的错误路径。
+    fn install_product_makes_this_process_digger() {
+        install_product();
+        assert_eq!(dozer_core::paths::product().name, "digger");
+    }
+
+    fn sock(tag: &str) -> PathBuf {
+        PathBuf::from(format!("/tmp/dg-{tag}-{}.sock", std::process::id()))
+    }
+
+    /// 假守护进程:Hello 回 `protocol`,ListProjects 回空列表。
+    fn fake_daemon(path: &Path, protocol: u32) {
+        let _ = fs::remove_file(path);
+        let listener = UnixListener::bind(path).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let mut lines = BufReader::new(r).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let reply = match decode_line::<Request>(&line) {
+                            Ok(Request::Hello { .. }) => Reply::Hello {
+                                protocol,
+                                product: "digger".into(),
+                            },
+                            Ok(Request::ListProjects) => Reply::Projects { projects: vec![] },
+                            _ => Reply::Error {
+                                message: "unexpected".into(),
+                            },
+                        };
+                        let _ = w.write_all(encode_line(&reply).as_bytes()).await;
+                    }
+                });
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn ensure_returns_ok_when_a_daemon_already_answers_and_never_spawns() {
+        install_product();
+        let s = sock("ok");
+        fake_daemon(&s, PROTOCOL_VERSION);
+        let spawned = Arc::new(AtomicUsize::new(0));
+        let n = spawned.clone();
+        let r = Daemon::with_socket(s.clone())
+            .ensure_with(
+                move || {
+                    n.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                std::time::Duration::from_millis(10),
+            )
+            .await;
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(spawned.load(Ordering::SeqCst), 0);
+        let _ = fs::remove_file(s);
+    }
+
+    #[tokio::test]
+    async fn protocol_mismatch_is_reported_as_such() {
+        install_product();
+        let s = sock("mismatch");
+        fake_daemon(&s, PROTOCOL_VERSION + 1);
+        let r = Daemon::with_socket(s.clone())
+            .ensure_with(|| Ok(()), std::time::Duration::from_millis(10))
+            .await;
+        let msg = r.unwrap_err().to_string();
+        assert!(msg.contains("协议") || msg.contains("无法连接"), "{msg}");
+        let _ = fs::remove_file(s);
+    }
+
+    #[tokio::test]
+    async fn a_failed_spawn_yields_a_readable_error_naming_diggerd() {
+        let s = sock("nospawn");
+        let _ = fs::remove_file(&s);
+        let r = Daemon::with_socket(s)
+            .ensure_with(
+                || {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "找不到 diggerd",
+                    ))
+                },
+                std::time::Duration::from_millis(10),
+            )
+            .await;
+        assert!(r.unwrap_err().to_string().contains("diggerd"));
+    }
+
+    #[tokio::test]
+    async fn a_spawn_that_never_brings_up_a_socket_gives_up_after_three_retries() {
+        let s = sock("never");
+        let _ = fs::remove_file(&s);
+        let r = Daemon::with_socket(s)
+            .ensure_with(|| Ok(()), std::time::Duration::from_millis(5))
+            .await;
+        assert!(r.unwrap_err().to_string().contains("diggerd"));
+    }
+
+    #[test]
+    fn find_diggerd_prefers_the_given_dir_over_path() {
         let dir = tempdir().unwrap();
-        let result = find_diggerd(Some(dir.path()));
-        assert!(result.is_err());
+        fs::write(dir.path().join("diggerd"), b"").unwrap();
+        assert_eq!(
+            find_diggerd(Some(dir.path())).unwrap(),
+            dir.path().join("diggerd")
+        );
     }
 }

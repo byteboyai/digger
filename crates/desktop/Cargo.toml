@@ -25,6 +25,7 @@ bytehost-panel.workspace = true
 digger-app-host = { path = "../app-host" }
 # Digger 产品身份与数据根(S6a):config_dir / state_dir / product() 等统一由 digger-paths 提供。
 digger-paths = { path = "../paths" }
+dozer-core.workspace = true
 # Digger 领域持久化:任务完成用量账本 + `UsageService` 实现(Task 20)。
 digger-store = { path = "../store" }
 # Markdown 编辑器的 Rust 一侧(纯库;本 crate 只做 webview / 几何 / iced 栏的宿主适配)。
@@ -70,5 +71,6 @@ dozer-panel-usage.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+rusqlite.workspace = true
 # 测试里用运行时同款的 `task::into_stream` 数一个 Task 发出的窗口动作(`iced::runtime` 不对外公开)。
 iced_runtime = "0.14"

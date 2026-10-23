@@ -355,7 +355,16 @@ impl ProductShell {
             .parent()
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(paths::config_dir);
-        let projects = crate::projects::ProjectsState::open_in(&data_dir);
+        let projects = if data_dir == paths::config_dir() {
+            // 生产:注册表就是 diggerd 用的那个文件,并迁入旧 projects.db。
+            crate::projects::ProjectsState::open_with(
+                &data_dir,
+                &digger_paths::projects_db_path(),
+                &digger_paths::legacy_projects_db_path(),
+            )
+        } else {
+            crate::projects::ProjectsState::open_in(&data_dir)
+        };
         let project = crate::adapters::project::ProjectPanel::new(projects.project_host());
         let files = crate::adapters::files::FilesPanel::new(
             data_dir.join(dozer_panel_files::external_apps::CONFIG_FILE),
