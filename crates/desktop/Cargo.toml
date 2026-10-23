@@ -43,6 +43,8 @@ dozer-panel-preview.workspace = true
 dozer-preview-core.workspace = true
 dozer-panel-host.workspace = true
 dozer-panel-term.workspace = true
+# S6d-2:Agent 面板库(每项目会话状态、恢复、页签/列表/终端视图、选择器与确认框)。
+dozer-panel-agent.workspace = true
 # S6a:守护进程客户端(协议握手 + 连接检查)。
 dozer-client.workspace = true
 bytegit.workspace = true

@@ -4,8 +4,10 @@
 //! 关闭 Digger 窗口不终止 `diggerd`(会话要随守护进程存活,与 Dozer 一致)。
 
 use dozer_client::Client;
+use dozer_services::SessionService;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 /// 守护进程拉起/连接失败的可读错误。
 #[derive(Debug)]
@@ -52,6 +54,12 @@ impl Daemon {
     pub fn with_socket(socket: PathBuf) -> Self {
         let client = Client::new(socket.clone());
         Self { client, socket }
+    }
+
+    /// 会话服务接缝(`dozer_services::SessionService`):包装同一个 `Client`,
+    /// 连的还是 `diggerd` 的 socket。库只依赖 trait,不依赖 `dozer-client`。
+    pub fn sessions(&self) -> Arc<dyn SessionService> {
+        Arc::new(self.client.clone())
     }
 
     /// 确保守护进程在跑并能响应请求。
@@ -255,6 +263,7 @@ mod tests {
                                 product: "digger".into(),
                             },
                             Ok(Request::ListProjects) => Reply::Projects { projects: vec![] },
+                            Ok(Request::ListSessions) => Reply::Sessions { sessions: vec![] },
                             _ => Reply::Error {
                                 message: "unexpected".into(),
                             },
@@ -336,5 +345,19 @@ mod tests {
             find_diggerd(Some(dir.path())).unwrap(),
             dir.path().join("diggerd")
         );
+    }
+
+    #[tokio::test]
+    async fn sessions_service_talks_to_the_daemon_socket() {
+        install_product();
+        let s = sock("sessions");
+        fake_daemon(&s, PROTOCOL_VERSION);
+        let svc = Daemon::with_socket(s.clone()).sessions();
+        let sessions = svc
+            .list_sessions()
+            .await
+            .expect("list over the fake socket");
+        assert!(sessions.is_empty());
+        let _ = fs::remove_file(s);
     }
 }

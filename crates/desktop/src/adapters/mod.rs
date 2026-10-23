@@ -4,10 +4,13 @@
 //! 只定义窄接缝,产品侧提供实现。这里有 Usage 与 Project 两个面板的适配。
 
 pub mod agent;
+pub mod agent_hooks;
 pub mod agent_ime;
-// 键位转换由 S6d-2 的终端输入接线消费;本期只交付并测试。
+// 键位转换由 S6d-2 的终端输入接线消费(S6d-2 Task 5 待输入法探针结果)。
+pub mod agent_display;
 #[allow(dead_code)]
 pub mod agent_keys;
+pub mod agent_layout;
 pub mod files;
 pub mod menu_overlay;
 pub mod project;

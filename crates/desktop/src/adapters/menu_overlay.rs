@@ -46,6 +46,7 @@ impl<M> MenuOverlay<M> {
 
 /// 菜单外形尺寸:宽恒为 `menu_item_width`(与 Dozer 常宽菜单一致),高按条目数估算
 /// (项高 + 上下内边距 + 项间距),供 [`MenuAnchor::clamped`] 用。分隔线只占一条。
+#[allow(dead_code)] // 保留给需要预先量尺寸的调用方;菜单视图走 `rows_size`。
 pub fn menu_size<M>(items: &[dozer_panel_files::menu::MenuItem<M>]) -> (f32, f32) {
     let region = region();
     let row_h = row_height();
@@ -105,10 +106,7 @@ pub fn view<'a, M: Clone + 'a>(
             .height(Length::Fill)
             .into();
     }
-    let region = region();
-    let (w, h) = menu_size(&overlay.items);
-    let anchor = overlay.anchor.clamped((w, h), window);
-    let body: Vec<El<'a>> = overlay
+    let rows = overlay
         .items
         .iter()
         .cloned()
@@ -118,6 +116,57 @@ pub fn view<'a, M: Clone + 'a>(
                 label,
                 enabled,
                 msg,
+            } => OverlayRow::Entry {
+                icon,
+                label,
+                enabled,
+                msg: Box::new(map(msg)),
+                tint: None,
+            },
+            dozer_panel_files::menu::MenuItem::Separator => OverlayRow::Separator,
+        })
+        .collect();
+    view_rows(rows, overlay.anchor, window, on_dismiss)
+}
+
+/// 与具体面板无关的一行(Agent 选择器等复用同一套外框与行样式)。
+pub enum OverlayRow {
+    Entry {
+        icon: Option<byteui::interaction::icons::IconKind>,
+        label: String,
+        enabled: bool,
+        msg: Box<Msg>,
+        /// 图标自己的颜色(Agent 选择器用);`None` 跟随文字色。
+        tint: Option<Color>,
+    },
+    Separator,
+}
+
+/// 按已规整的行渲染浮层。空行表不弹(返回一层的空容器)。
+pub fn view_rows<'a>(
+    rows: Vec<OverlayRow>,
+    anchor: MenuAnchor,
+    window: (f32, f32),
+    on_dismiss: Msg,
+) -> El<'a> {
+    if rows.is_empty() {
+        return iced_widget::container(iced_widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    }
+    let region = region();
+    let (w, h) = rows_size(&rows);
+    let anchor = anchor.clamped((w, h), window);
+    let body: Vec<El<'a>> = rows
+        .into_iter()
+        .map(|row| match row {
+            OverlayRow::Entry {
+                icon,
+                label,
+                enabled,
+                msg,
+                tint,
             } => {
                 let color = if enabled {
                     byteui::theme::color::current().body
@@ -125,13 +174,13 @@ pub fn view<'a, M: Clone + 'a>(
                     byteui::theme::color::current().dim
                 };
                 item_row(
-                    icon_leading(icon, color),
+                    icon_leading(icon, tint.unwrap_or(color)),
                     label,
                     color,
-                    enabled.then(|| map(msg)),
+                    enabled.then_some(*msg),
                 )
             }
-            dozer_panel_files::menu::MenuItem::Separator => separator(),
+            OverlayRow::Separator => separator(),
         })
         .collect();
     let menu: El<'a> = container(column(body).spacing(region.gap))
@@ -170,6 +219,23 @@ pub fn view<'a, M: Clone + 'a>(
         })
         .into();
     iced_widget::stack![scrim, positioned].into()
+}
+
+/// 已规整行的外形尺寸(宽恒为 `menu_item_width` + 内边距;高按行数估算)。
+fn rows_size(rows: &[OverlayRow]) -> (f32, f32) {
+    let region = region();
+    let row_h = row_height();
+    let gap = byteui::theme::geometry::menu_gap();
+    let width =
+        byteui::theme::geometry::menu_item_width() + region.padding.left + region.padding.right;
+    let mut height = region.padding.top + region.padding.bottom;
+    for row in rows {
+        height += match row {
+            OverlayRow::Entry { .. } => row_h + gap,
+            OverlayRow::Separator => 1.0 + gap,
+        };
+    }
+    (width, height)
 }
 
 fn icon_leading<'a>(

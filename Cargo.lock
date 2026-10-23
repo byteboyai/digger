@@ -1031,6 +1031,7 @@ dependencies = [
  "dozer-client",
  "dozer-core",
  "dozer-model",
+ "dozer-panel-agent",
  "dozer-panel-files",
  "dozer-panel-host",
  "dozer-panel-preview",
@@ -1264,6 +1265,25 @@ version = "0.1.0"
 source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-23b#e88d4f7ddf150a6e9d7c55864677715ff8a0c399"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "dozer-panel-agent"
+version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-23b#e88d4f7ddf150a6e9d7c55864677715ff8a0c399"
+dependencies = [
+ "bytegit",
+ "byteui",
+ "dozer-i18n",
+ "dozer-model",
+ "dozer-panel-host",
+ "dozer-panel-term",
+ "dozer-services",
+ "iced_renderer",
+ "iced_widget",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3390,7 +3410,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

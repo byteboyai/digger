@@ -178,6 +178,16 @@ impl ProjectsState {
         self.current_project().map(|p| p.id)
     }
 
+    /// 已开页签的项目 id(顺序即页签顺序)。Agent 面板据此判断项目是否还开着。
+    pub fn open_ids(&self) -> &[i64] {
+        self.tabs.open()
+    }
+
+    /// 按 id 取注册表里的项目(不受当前页签影响)。
+    pub fn project_by_id(&self, id: i64) -> Option<ProjectInfo> {
+        self.registry.iter().find(|p| p.id == id).cloned()
+    }
+
     #[cfg(test)]
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_ref().map(|(_, text)| text.as_str())

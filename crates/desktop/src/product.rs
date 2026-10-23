@@ -20,7 +20,7 @@ use byteui::interaction::icons::{self, IconKind};
 use byteui::theme::{color, font, icon_size};
 use dozer_panel_preview::ViewerPanel;
 
-use iced::widget::{column, container, row, text};
+use iced::widget::{button, column, container, row, text};
 use iced::{Element, Length, Size, Subscription, Task, window};
 use iced_widget::core::Border;
 
@@ -52,12 +52,21 @@ fn preview_display(
 const PREVIEW_CHROME_RESERVE_PX: f32 = 32.0 * 3.0 + 4.0 * 3.0;
 
 /// 产品消息。**不进入**宿主 enum(宿主只认 `HostMessage<M>`)。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Msg {
     WindowReady(window::Id, Size),
     /// 窗口骨架的消息(点图标、拖分隔线、窗口缩放……),由 `bytehost-chrome` 的 `ShellModel` 处理。
     Shell(ShellMsg),
-    Agent(crate::adapters::agent::AgentShellMsg),
+    /// Agent 面板壳(守护进程可用性)的消息。
+    AgentShell(crate::adapters::agent::AgentShellMsg),
+    /// Agent 面板的库消息,带项目 id(S6d-2):路由只投给该项目的状态。
+    Agent(i64, dozer_panel_agent::update::Message),
+    /// 某项目在 `diggerd` 里的存活会话恢复完成(接收端不可 `Clone`,只取一次)。
+    AgentRestored(i64, crate::adapters::agent::RestoredResult),
+    /// 关闭 Agent 面板顶部的错误提示。
+    AgentNoticeDismiss,
+    /// 关闭 Agent 选择器浮层(点空白 / Esc),不创建会话。
+    AgentPickerClose,
     /// 「应用」面板的消息(Task 14)。
     Apps(crate::apps::Message),
     /// 「用量」面板的库消息(Task 20)。
@@ -141,7 +150,10 @@ pub struct ProductShell {
     project: crate::adapters::project::ProjectPanel,
     /// 「文件」面板适配(共享 `dozer-panel-files` 库;四项能力 Digger 一期全关)。
     files: crate::adapters::files::FilesPanel,
-    agent: crate::adapters::agent::AgentShell,
+    agent: crate::adapters::agent::AgentPanel,
+    /// 终端字体与尺寸(S6d-1 `fonts::terminal_style`):壳持有,Agent 展示适配与
+    /// 网格换算都借它,免得每帧泄漏一份。
+    term_style: dozer_panel_term::style::TermStyle,
     /// 预览状态层(S5b-2 P4):Files / Project 两个面板各一份库状态 + 原生宿主。
     /// 在 `boot` 里装上;纯逻辑测试可以不要(没有预览就没有页签可开)。
     preview: Option<crate::adapters::preview::PreviewHub>,
@@ -390,7 +402,8 @@ impl ProductShell {
             projects,
             project,
             files,
-            agent: crate::adapters::agent::AgentShell::default(),
+            agent: crate::adapters::agent::AgentPanel::new(),
+            term_style: crate::fonts::terminal_style(),
             preview: None,
             preview_displays: [
                 std::cell::Cell::new(preview_display(0.0, 0, 0)),
@@ -453,6 +466,17 @@ impl ProductShell {
             && let Err(e) = shell::save_window_size(&self.shell_path, &self.shell)
         {
             self.boot_note = format!("窗口大小未保存:{e}");
+        }
+    }
+
+    /// 消失的项目页签:abort 转发并 kill 该项目全部会话。
+    fn close_agent_for(&mut self, before: &[i64]) {
+        for id in before
+            .iter()
+            .copied()
+            .filter(|id| !self.projects.open_ids().contains(id))
+        {
+            let _ = self.agent.close_project(id);
         }
     }
 
@@ -555,6 +579,13 @@ impl ProductShell {
             // 进入「文件」面板:把树根挂到当前项目并拉一次 git 文件状态。
             self.activate_files_panel();
         }
+        if *panel == shell::agent_id() {
+            // 首次可见才恢复/新建该项目的会话(D1 懒启动)。
+            if let Some(project) = self.projects.current_project().cloned() {
+                let grid = self.current_agent_grid().unwrap_or((80, 24));
+                return self.agent.ensure_started(&project, grid);
+            }
+        }
         Task::none()
     }
 
@@ -612,6 +643,7 @@ impl ProductShell {
             .projects
             .update(crate::projects::Message::Close(project.id));
         let _ = close;
+        let _ = self.agent.close_project(project.id);
         self.on_current_project_changed(before, before != Some(project.id));
         let (project, tx) = (project.clone(), self.delete_tx.clone());
         self.project
@@ -675,6 +707,9 @@ impl ProductShell {
             self.visible_before.get(i).copied().unwrap_or(false) && !visible_now[i]
         }) {
             self.apps.close_selected();
+        }
+        if self.agent.picker.is_some() && !self.panel_visible(&shell::agent_id()) {
+            self.agent.picker = None;
         }
         self.visible_before = visible_now;
         if resized {
@@ -953,6 +988,119 @@ impl ProductShell {
         )
     }
 
+    /// Agent 面板的配对视图:列表(库的 `agent_list`)+ 终端条(库的
+    /// `terminal_pane`)。只有守护进程可用且当前项目已有状态时才拼配对;其余
+    /// 沿用 S6d-1 的壳(无项目 / 连接中 / 不可用 + 重试)。
+    fn agent_view(&self, area: &BodyArea) -> Element<'_, Msg> {
+        let Some(project) = self.projects.current_project() else {
+            return self.agent.shell.view(false).map(Msg::AgentShell);
+        };
+        if !self.agent.pair_ready(Some(project.id)) {
+            return self.agent.shell.view(true).map(Msg::AgentShell);
+        }
+        let state = &self.agent.states[&project.id];
+        let pid = project.id;
+        crate::adapters::agent::set_current_agent_project(pid);
+        let block =
+            crate::adapters::agent_layout::terminal_block(area.rect, area.collapsed, area.pair);
+        let tab_bar_px =
+            (block.w - 8.0 * 2.0 - byteui::theme::geometry::tab_button_size()).max(0.0);
+        let display = crate::adapters::agent_display::AgentDisplay {
+            panel: &self.agent,
+            pid,
+            term_style: &self.term_style,
+            locale: "en",
+            tab_bar_px,
+            list_on_left: area.pair.is_some_and(|p| p.first.x <= p.second.x),
+        };
+        let list_w = area.pair.map(|p| p.first.w).unwrap_or(area.rect.w);
+        let no_tasks = &NO_TASKS;
+        let list: Element<'_, Msg> = dozer_panel_agent::view::list::agent_list(
+            state,
+            &display,
+            &dozer_panel_agent::card::CardCtx {
+                titles: no_tasks,
+                project_branch: None,
+                project_dirty: false,
+            },
+            Length::Fixed(list_w),
+            Border::default(),
+        );
+        let term: Element<'_, Msg> = dozer_panel_agent::view::terminal::terminal_pane(
+            state,
+            &display,
+            dozer_panel_agent::display::TerminalSlots {
+                floating: None,
+                footer: None,
+            },
+            Length::Fill,
+            Border::default(),
+        );
+        let tokens = color::current();
+        let body: Element<'_, Msg> = pair_view(
+            area,
+            list,
+            term,
+            Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
+            tokens.bg,
+            tokens.term_bg,
+        );
+        let body = match &self.agent.notice {
+            Some(notice) => {
+                let line: Element<'_, Msg> = row![
+                    text(notice.clone())
+                        .size(byteui::theme::font::caption())
+                        .color(tokens.red)
+                        .width(Length::Fill),
+                    button(text("×").color(tokens.dim)).on_press(Msg::AgentNoticeDismiss),
+                ]
+                .spacing(8)
+                .padding([6, 12])
+                .align_y(iced::Alignment::Center)
+                .into();
+                column![line, body].height(Length::Fill).into()
+            }
+            None => body,
+        };
+        // 关页签确认:库的 `close_confirm_spec`(只有 Running/AwaitingInput 才产生)。
+        let confirm =
+            dozer_panel_agent::picker::close_confirm_spec(state, "en", |m| Msg::Agent(pid, m)).map(
+                |spec| {
+                    centered_modal(
+                        byteui::feedback::dialog::confirm(spec),
+                        Msg::Agent(pid, dozer_panel_agent::update::Message::CloseCancel),
+                    )
+                },
+            );
+        match confirm {
+            Some(card) => iced::widget::stack![body, card].into(),
+            None => body,
+        }
+    }
+
+    /// 当前项目的 Agent 网格(终端块减去内边距与页签条)。Agent 面板不是该侧
+    /// 选中面板时没有可测量的配对几何,返回 `None`(沿用上次网格,不发错尺寸)。
+    fn current_agent_grid(&self) -> Option<(u16, u16)> {
+        let side = self.shell.side_of(&shell::agent_id())?;
+        if self.shell.selected(side) != &shell::agent_id() {
+            return None;
+        }
+        let rects = self.shell.rects(&metrics_from_theme());
+        let content = rects.content(side)?;
+        let pair = shell::pair_rects(&self.shell, side);
+        let block = crate::adapters::agent_layout::terminal_block(
+            content,
+            pane_collapsed_of(&shell::agent_id()),
+            pair,
+        );
+        Some(crate::adapters::agent_layout::grid(
+            block,
+            &crate::adapters::agent_display::terminal_pane_style(),
+            crate::adapters::agent_layout::tab_bar_height(),
+            &self.term_style,
+        ))
+    }
+
     /// 文件面板的库消息入口。
     ///
     /// 库里有几条消息的 `update` 是 `unreachable!`——它们**必须由宿主拦截**(跨内核边界):
@@ -1130,6 +1278,34 @@ fn top_bar_slots<'a>(projects: &'a crate::projects::ProjectsState) -> TopBarSlot
     }
 }
 
+/// 拉起/连接 `diggerd`(boot 与「重试」共用同一条路径)。
+fn daemon_ensure_task() -> Task<Msg> {
+    daemon_ensure_shell_task().map(Msg::AgentShell)
+}
+
+/// 同上,但给 `AgentShell::update` 的重试回调用(它只认壳消息)。
+fn daemon_ensure_shell_task() -> Task<crate::adapters::agent::AgentShellMsg> {
+    Task::perform(
+        async {
+            let daemon = crate::daemon::Daemon::new();
+            daemon.ensure().await.map_err(|e| e.to_string())
+        },
+        crate::adapters::agent::AgentShellMsg::Ensured,
+    )
+}
+
+/// Agent 卡片"当前工作内容"的反查源:Digger 一期没有待办派发记录。
+struct NoTasks;
+
+/// 静态实例:库的 `CardCtx` 借 `'a`,返回的元素不能引用函数栈上的临时值。
+static NO_TASKS: NoTasks = NoTasks;
+
+impl dozer_panel_agent::adapter::TaskTitleSource for NoTasks {
+    fn task_title_for_session(&self, _session_id: &str) -> Option<String> {
+        None
+    }
+}
+
 impl ShellHost<Msg> for ProductShell {
     fn lift(msg: ShellMsg) -> Msg {
         Msg::Shell(msg)
@@ -1151,10 +1327,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.markdown" => self.markdown_view(),
             "digger.project" => self.project_view(area),
             "digger.files" => self.files_view(area),
-            "digger.agent" => self
-                .agent
-                .view(self.projects.current_project_id().is_some())
-                .map(Msg::Agent),
+            "digger.agent" => self.agent_view(area),
             _ => column![].into(),
         }
     }
@@ -1311,7 +1484,53 @@ impl Product<Msg> for ProductShell {
                 Task::batch([resized, guard])
             }
             Msg::Shell(m) => self.on_shell(m),
-            Msg::Agent(m) => self.agent.update(m, Task::none).map(Msg::Agent),
+            Msg::AgentShell(m) => {
+                let task = self
+                    .agent
+                    .shell
+                    .update(m, daemon_ensure_shell_task)
+                    .map(Msg::AgentShell);
+                // 守护进程刚就绪:Agent 面板若已可见,补一次懒启动(启动时它可能
+                // 先于 `Ensured` 变成可见,那一次什么都没启动)。
+                let mut enter = Task::none();
+                if self.agent.shell.status == crate::adapters::agent::Status::Ready
+                    && self.panel_visible(&shell::agent_id())
+                    && let Some(project) = self.projects.current_project().cloned()
+                {
+                    let grid = self.current_agent_grid().unwrap_or((80, 24));
+                    enter = self.agent.ensure_started(&project, grid);
+                }
+                Task::batch([task, enter])
+            }
+            Msg::Agent(pid, m) => {
+                let project = self.projects.project_by_id(pid);
+                // 项目页签已关:迟到的 Agent 消息一律丢弃。
+                let project = project.filter(|p| self.projects.open_ids().contains(&p.id));
+                let grid = self.current_agent_grid().unwrap_or((80, 24));
+                self.agent.update(pid, m, project.as_ref(), grid)
+            }
+            Msg::AgentRestored(pid, payload) => {
+                let sessions = payload
+                    .lock()
+                    .ok()
+                    .and_then(|mut s| s.take())
+                    .unwrap_or_default();
+                let project = self
+                    .projects
+                    .project_by_id(pid)
+                    .filter(|p| self.projects.open_ids().contains(&p.id));
+                let grid = self.current_agent_grid().unwrap_or((80, 24));
+                self.agent
+                    .on_restored(pid, project.as_ref(), sessions, grid)
+            }
+            Msg::AgentNoticeDismiss => {
+                self.agent.dismiss_notice();
+                Task::none()
+            }
+            Msg::AgentPickerClose => {
+                self.agent.close_picker();
+                Task::none()
+            }
             Msg::ZoomToggle => self
                 .window
                 .map(window::toggle_maximize)
@@ -1367,9 +1586,20 @@ impl Product<Msg> for ProductShell {
                 // 打开/切换项目:若「项目」面板此刻就在眼前,立刻把它切到新项目
                 // (否则要等下一次切入才拉数据——用户刚打开的项目看着是空的)。
                 let before = self.projects.current_project_id();
+                let open_before: Vec<i64> = self.projects.open_ids().to_vec();
                 let task = self.projects.update(m).map(Msg::Projects);
+                // 消失的项目页签:abort 转发并 kill 该项目全部会话(会话语义同 Dozer)。
+                self.close_agent_for(&open_before);
                 self.on_current_project_changed(before, true);
-                task
+                // 切到已开项目且 Agent 面板仍可见:恢复它的会话(同一项目只启动一次)。
+                let mut enter = Task::none();
+                if self.panel_visible(&shell::agent_id())
+                    && let Some(project) = self.projects.current_project().cloned()
+                {
+                    let grid = self.current_agent_grid().unwrap_or((80, 24));
+                    enter = self.agent.ensure_started(&project, grid);
+                }
+                Task::batch([task, enter])
             }
             Msg::ProjectFocusFrame(id) => {
                 let Some(project) = self
@@ -1485,6 +1715,7 @@ impl Product<Msg> for ProductShell {
                     let close = self
                         .projects
                         .update(crate::projects::Message::Close(project_id));
+                    let _ = self.agent.close_project(project_id);
                     self.on_current_project_changed(before, before != Some(project_id));
                     // 被删项目的布局文件不留孤儿。
                     if let Some(path) = self.project_shell_path_for(project_id) {
@@ -1563,6 +1794,8 @@ impl Product<Msg> for ProductShell {
                 self.closing = true;
                 self.save_shell();
                 self.apps.prepare_shutdown();
+                // 关窗口只 detach:abort 转发,会话随 `diggerd` 存活。
+                self.agent.prepare_shutdown();
                 Task::none()
             }
         }
@@ -1640,7 +1873,7 @@ impl Product<Msg> for ProductShell {
             body
         };
         // 「文件」面板的右键菜单:盖在最上层,点空白或 Esc 关闭。
-        match self.files.menu() {
+        let body: Element<'_, Msg> = match self.files.menu() {
             Some(menu) if self.panel_visible(&shell::files_id()) => {
                 let window = (self.shell.window().0, self.shell.window().1);
                 iced::widget::stack![
@@ -1655,6 +1888,17 @@ impl Product<Msg> for ProductShell {
                 .into()
             }
             _ => body,
+        };
+        // Agent 选择器浮层(库的 `picker_entries`):盖在正文之上,点空白 / Esc 关闭。
+        if self.panel_visible(&shell::agent_id())
+            && let Some(overlay) = crate::adapters::agent_display::picker_overlay(
+                &self.agent,
+                (self.shell.window().0, self.shell.window().1),
+            )
+        {
+            iced::widget::stack![body, overlay].into()
+        } else {
+            body
         }
     }
 
@@ -1683,12 +1927,27 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
     };
     // 退出分支自己将销毁与 shutdown 串行；其他更新后同步内容与几何。
     let native = shell.sync_native();
+    // Agent 终端网格(每条消息一次廉价比较:同网格不发、0 不发)。
+    let grid = match (
+        shell.projects.current_project().cloned(),
+        shell.current_agent_grid(),
+    ) {
+        (Some(project), Some(grid)) => shell.agent.sync_grid(&project, grid),
+        _ => Task::none(),
+    };
     if shell.closing && !shell.shutdown_started && shell.apps.native_idle() {
         shell.shutdown_started = true;
-        Task::batch([task, native])
-            .chain(Task::perform(shell.apps.shutdown(), Msg::ShutdownFinished))
+        let drain = shell.agent.drain_critical();
+        let apps = shell.apps.shutdown();
+        Task::batch([task, native, grid]).chain(Task::perform(
+            async move {
+                let (apps, ()) = tokio::join!(apps, drain);
+                apps
+            },
+            Msg::ShutdownFinished,
+        ))
     } else {
-        Task::batch([task, native])
+        Task::batch([task, native, grid])
     }
 }
 
@@ -1775,6 +2034,19 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
             .then_some(Msg::FilesMenuDismiss)
         }));
     }
+    // Agent 选择器打开时 Esc 关闭(条目列表在库视图里,不创建会话)。
+    if shell.agent.picker.is_some() {
+        subs.push(iced::event::listen_with(|evt, _status, _id| {
+            matches!(
+                evt,
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                })
+            )
+            .then_some(Msg::AgentPickerClose)
+        }));
+    }
     if shell.shell.animating() {
         subs.push(
             iced::time::every(std::time::Duration::from_millis(16))
@@ -1836,6 +2108,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         .project
         .attach_handle(tokio::runtime::Handle::current());
     shell.files.attach_handle(tokio::runtime::Handle::current());
+    shell.agent.attach_handle(tokio::runtime::Handle::current());
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
     // 缺资源时宿主只会整块白屏:启动即点名报出,与 selftest 同一份名单。
@@ -1924,14 +2197,15 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
-    // S6a:守护进程拉起。异步调 ensure,结果转成 Msg::Agent::Ensured。
-    let daemon_task = Task::perform(
-        async {
-            let daemon = crate::daemon::Daemon::new();
-            daemon.ensure().await.map_err(|e| e.to_string())
-        },
-        |result| Msg::Agent(crate::adapters::agent::AgentShellMsg::Ensured(result)),
-    );
+    // S6a:守护进程拉起。异步调 ensure,结果转成 Msg::AgentShell::Ensured。
+    let daemon_task = daemon_ensure_task();
+    // Agent 面板的后台回投(输出/状态/Attached/失败):一条持续到进程结束的 iced 流。
+    let agent_task = match shell.agent.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|(pid, m)| (Msg::Agent(pid, m), rx))
+        })),
+        None => Task::none(),
+    };
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
     for panel in shell::all_panels() {
@@ -1958,6 +2232,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             delete_task,
             lifecycle_task,
             daemon_task,
+            agent_task,
             Task::batch(initial),
         ]),
     )
@@ -2656,20 +2931,37 @@ mod tests {
     }
 
     #[test]
+    fn escape_and_outside_click_close_the_picker_without_creating() {
+        use crate::adapters::agent::PickerMenu;
+        let mut shell = fresh("agent-picker-close");
+        let mut state = dozer_panel_agent::state::AgentPanelState::new();
+        state.agent_picker_open = true;
+        shell.agent.states.insert(7, state);
+        shell.agent.picker = Some(PickerMenu { pid: 7, at: None });
+        let _ = Product::update(&mut shell, HostMessage::Product(Msg::AgentPickerClose));
+        assert!(shell.agent.picker.is_none());
+        assert!(!shell.agent.states[&7].agent_picker_open);
+        assert!(
+            shell.agent.states[&7].tabs.is_empty(),
+            "nothing was created"
+        );
+    }
+
+    #[test]
     fn the_agent_panel_is_registered_in_the_catalog_and_its_messages_reach_the_shell() {
         let mut shell = fresh("agent-catalog");
         let entry = shell.catalog.get(&shell::agent_id()).expect("registered");
         assert_eq!(entry.title, "Agent");
         // S6a:默认状态改为 Unknown(启动序列开始时置 Checking)。
-        assert!(shell.agent.status == crate::adapters::agent::Status::Unknown);
+        assert!(shell.agent.shell.status == crate::adapters::agent::Status::Unknown);
         let _ = Product::update(
             &mut shell,
-            HostMessage::Product(Msg::Agent(crate::adapters::agent::AgentShellMsg::Ensured(
-                Err("x".into()),
-            ))),
+            HostMessage::Product(Msg::AgentShell(
+                crate::adapters::agent::AgentShellMsg::Ensured(Err("x".into())),
+            )),
         );
         assert_eq!(
-            shell.agent.status,
+            shell.agent.shell.status,
             crate::adapters::agent::Status::Unavailable("x".into())
         );
     }
