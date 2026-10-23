@@ -572,6 +572,46 @@ impl ProjectPanel {
         dozer_panel_project::on_activate(state, &ctx);
     }
 
+    /// 测试:预先建出某个项目的面板状态(不发任何请求)。
+    #[cfg(test)]
+    pub fn seed_state(&mut self, project: &ProjectInfo) {
+        let _ = self.state_of(project);
+    }
+
+    /// 测试:读回某个项目当前的记忆标题。
+    #[cfg(test)]
+    pub fn memory_titles_for_test(&self, project_id: i64) -> Vec<String> {
+        self.states
+            .get(&project_id)
+            .map(|state| state.memories().iter().map(|m| m.title.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// 某个项目的面板状态是否已经存在(从未切入过就没有,不替它建)。
+    pub fn has_state(&self, project_id: i64) -> bool {
+        self.states.contains_key(&project_id)
+    }
+
+    /// 只刷新共享记忆列表(库的 `on_activate`),不碰 README / git / 磁盘占用。
+    /// 回合结束时由产品调用:Agent 刚写进 `digger.db` 的记忆无需切换面板即可看到。
+    pub fn refresh_memories(&mut self, project: &ProjectInfo) {
+        let Some(handle) = self.handle.clone() else {
+            return;
+        };
+        let Some(state) = self.states.get_mut(&project.id) else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let ctx = dozer_panel_host::ActivationCtx {
+            project_id: project.id,
+            project_path: Some(PathBuf::from(&project.path)),
+            io: dozer_panel_host::PanelIo::new(self.services.clone(), handle, move |message| {
+                let _ = tx.send(message);
+            }),
+        };
+        dozer_panel_project::on_activate(state, &ctx);
+    }
+
     /// 当前聚焦的项目 id(最近一次 `activate` 的那个)。
     pub fn focused_project(&self) -> Option<i64> {
         self.focus
@@ -972,6 +1012,172 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let host = digger_store::ProjectHost::open(&dir.join("projects.db")).unwrap();
         ProjectPanel::new(Some(&host))
+    }
+
+    use dozer_services::{MemoryService, ProjectService};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct Counting {
+        memory: AtomicUsize,
+        project: AtomicUsize,
+    }
+
+    struct CountingMemory {
+        count: Arc<Counting>,
+        items: Vec<dozer_model::MemoryInfo>,
+    }
+
+    fn unavailable() -> ServiceError {
+        ServiceError::new(ServiceErrorKind::Unavailable, "test")
+    }
+
+    impl MemoryService for CountingMemory {
+        fn list_memories(
+            &self,
+            _project_id: i64,
+        ) -> BoxFuture<'_, Result<Vec<dozer_model::MemoryInfo>, ServiceError>> {
+            self.count.memory.fetch_add(1, Ordering::SeqCst);
+            let items = self.items.clone();
+            Box::pin(async move { Ok(items) })
+        }
+        fn get_memory(
+            &self,
+            _: i64,
+            _: i64,
+        ) -> BoxFuture<'_, Result<dozer_model::MemoryDetail, ServiceError>> {
+            Box::pin(async { Err(unavailable()) })
+        }
+        fn write_memory(
+            &self,
+            _: i64,
+            _: String,
+            _: String,
+            _: String,
+            _: String,
+            _: String,
+        ) -> BoxFuture<'_, Result<dozer_model::MemoryDetail, ServiceError>> {
+            Box::pin(async { Err(unavailable()) })
+        }
+        fn delete_memory(
+            &self,
+            _: i64,
+            _: i64,
+            _: String,
+        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+            Box::pin(async { Err(unavailable()) })
+        }
+    }
+
+    struct CountingProjects(Arc<Counting>);
+
+    impl ProjectService for CountingProjects {
+        fn rename_project(
+            &self,
+            _: i64,
+            _: String,
+        ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
+            self.0.project.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(None) })
+        }
+        fn remove_project(&self, _: i64) -> BoxFuture<'_, Result<(), ServiceError>> {
+            self.0.project.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+        fn open_project(
+            &self,
+            _: String,
+        ) -> BoxFuture<'_, Result<Option<ProjectInfo>, ServiceError>> {
+            self.0.project.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(None) })
+        }
+        fn list_projects(&self) -> BoxFuture<'_, Result<Vec<ProjectInfo>, ServiceError>> {
+            self.0.project.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    fn fake_host(
+        count: Arc<Counting>,
+        items: Vec<dozer_model::MemoryInfo>,
+    ) -> digger_store::ProjectHost {
+        digger_store::ProjectHost {
+            projects: Arc::new(CountingProjects(count.clone())),
+            memory: Arc::new(CountingMemory { count, items }),
+        }
+    }
+
+    fn info(id: i64, path: &Path) -> ProjectInfo {
+        ProjectInfo {
+            id,
+            path: path.to_string_lossy().into_owned(),
+            name: "p".into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_memories_does_not_touch_readme_git_or_disk_usage() {
+        let repo = tempfile::tempdir().unwrap();
+        let count = Arc::new(Counting::default());
+        let host = fake_host(count.clone(), Vec::new());
+        let mut p = ProjectPanel::new(Some(&host));
+        p.attach_handle(tokio::runtime::Handle::current());
+        let project = info(7, repo.path());
+        p.seed_state(&project);
+        p.refresh_memories(&project);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(count.memory.load(Ordering::SeqCst), 1);
+        assert_eq!(count.project.load(Ordering::SeqCst), 0, "不碰项目注册表");
+        assert_eq!(
+            std::fs::read_dir(repo.path()).unwrap().count(),
+            0,
+            "不写 README / .dozer / 任何文件"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_memory_written_through_the_store_appears_after_the_refresh() {
+        let repo = tempfile::tempdir().unwrap();
+        let db = repo.path().join("digger.db");
+        let host = digger_store::ProjectHost::open(&db).unwrap();
+        host.memory
+            .write_memory(
+                7,
+                "写到库里的".into(),
+                "project".into(),
+                "".into(),
+                "正文".into(),
+                "test".into(),
+            )
+            .await
+            .expect("write memory");
+        assert_eq!(
+            host.memory.list_memories(7).await.unwrap().len(),
+            1,
+            "写入后库内应有一条"
+        );
+        let mut p = ProjectPanel::new(Some(&host));
+        p.attach_handle(tokio::runtime::Handle::current());
+        let mut rx = p.take_receiver().expect("receiver");
+        let project = info(7, repo.path());
+        p.seed_state(&project);
+        p.refresh_memories(&project);
+        for _ in 0..50 {
+            while let Ok(message) = rx.try_recv() {
+                p.update(Some(&project), message);
+            }
+            if p.memory_titles_for_test(7)
+                .iter()
+                .any(|t| t == "写到库里的")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(p.memory_titles_for_test(7), ["写到库里的"]);
     }
 
     #[test]

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Builds crates/desktop (bin: digger) + diggerd + digger-hook and wraps them
+# Builds crates/desktop (bin: digger) + diggerd + digger-hook + digger-mcp and wraps them
 # into a Digger.app bundle using crates/desktop/packaging/macos/Info.plist.
 #
 # S6a: Digger now ships with its own daemon (diggerd) and hook binary
-# (digger-hook), mirroring Dozer's dozerd/dozer-hook siblings. All three
+# (digger-hook) and its MCP server (digger-mcp), mirroring Dozer's siblings. All four
 # binaries go into Contents/MacOS/.
 #
 # This produces an UNSIGNED, ad-hoc-signed candidate bundle. Signing /
@@ -28,7 +28,7 @@ BIN_NAME="digger"
 # S6a: build all three binaries in one cargo invocation.
 BUILD_JSON=$(
   cargo build "${CARGO_PROFILE_FLAG[@]}" \
-    -p digger-desktop -p diggerd -p digger-hook \
+    -p digger-desktop -p diggerd -p digger-hook -p digger-mcp \
     --message-format=json
 )
 
@@ -57,6 +57,13 @@ if [ -z "$DIGGER_HOOK_PATH" ] || [ ! -x "$DIGGER_HOOK_PATH" ]; then
   exit 1
 fi
 
+# S6e: MCP 二进制。缺了它,Agent 的 MCP 注册会指向不存在的文件。
+DIGGER_MCP_PATH=$(extract_bin_path "digger-mcp")
+if [ -z "$DIGGER_MCP_PATH" ] || [ ! -x "$DIGGER_MCP_PATH" ]; then
+  echo "error: could not locate built 'digger-mcp' executable" >&2
+  exit 1
+fi
+
 OUT_DIR="$(dirname "$(dirname "$BIN_PATH")")/bundle/macos"
 APP_DIR="$OUT_DIR/$APP_NAME.app"
 
@@ -69,6 +76,7 @@ cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$BIN_NAME"
 # hook events (session start/stop, tool use) won't reach the daemon.
 cp "$DIGGERD_PATH" "$APP_DIR/Contents/MacOS/diggerd"
 cp "$DIGGER_HOOK_PATH" "$APP_DIR/Contents/MacOS/digger-hook"
+cp "$DIGGER_MCP_PATH" "$APP_DIR/Contents/MacOS/digger-mcp"
 cp "$PACKAGING_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
 if [ -f "$PACKAGING_DIR/AppIcon.icns" ]; then
   cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"

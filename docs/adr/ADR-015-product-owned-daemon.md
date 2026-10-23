@@ -89,6 +89,14 @@ Each product's hook binary only manages its own entries:
 1. **Binary size**: Digger now ships three binaries (digger, diggerd, digger-hook) instead of one
 2. **Runtime behavior**: Digger's daemon runs with minimal features; Dozer's daemon runs with all features
 
+## MCP
+
+`digger-mcp` 是 Digger 自己的 MCP 服务,和 `digger-hook` 一样随 `Digger.app/Contents/MacOS/` 交付。它只暴露三个记忆工具(`write_memory` / `list_memories` / `get_memory`),读写的是 `diggerd` 里的项目共享记忆(`digger.db`),与 Project 面板同一份;不会出现"调用后无可见效果"的工具。
+
+- 与 `dozer-mcp` 并存:两者的配置条目分别是 `digger` / `dozer`,安装与卸载互不覆盖;Dozer 会话里启动 `digger-mcp`、Digger 会话里启动 `dozer-mcp` 时都进入**零工具安静模式**(握手成功、工具为空、不写 stderr),Agent 的 MCP 状态里不是失败。
+- 自动注册的克制(D7):每个 Digger 进程内每种 Agent 只执行一次 `digger-mcp install`;同名手写条目被保护(退出码 3)时不覆盖、只提示一次;缺二进制 / 超时 / 非零退出都不阻塞建会话。
+- 回合结束且 Project 面板可见时刷新记忆列表(只调库的 `on_activate`,不补 README / git / 磁盘占用)——这是相对 Dozer 的有意改进。
+
 ## Related ADRs
 
 - **ADR-014**: Agent Panel S6 Design (references this ADR for daemon architecture)

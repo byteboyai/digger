@@ -83,6 +83,12 @@ fi
 
 step "校验 bundle"
 codesign --verify --deep --strict "$OUT"
+for bin in digger diggerd digger-hook digger-mcp; do
+  if [[ ! -x "$OUT/Contents/MacOS/$bin" ]]; then
+    echo "error: bundle 缺少可执行文件 $bin" >&2
+    exit 1
+  fi
+done
 PLIST_VER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$OUT/Contents/Info.plist")
 if [[ "$PLIST_VER" != "$VERSION" ]]; then
   echo "error: bundle 版本 $PLIST_VER 与 Cargo.toml $VERSION 不一致" >&2

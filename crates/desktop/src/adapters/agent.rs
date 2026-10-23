@@ -162,6 +162,10 @@ pub struct AgentPanel {
     rx: Mutex<Option<UnboundedReceiver<(i64, Message)>>>,
     /// 顶部一行错误提示(红字,可关闭)。Digger 一期没有 Toast。
     pub notice: Option<String>,
+    /// hook/MCP 安装器登记的待展示警告(与 `DiggerHooks` 共享)。
+    hook_warnings: Arc<Mutex<Vec<String>>>,
+    /// 库交给产品跟随处理的跨面板事件(`TurnEnded` 等),按项目排队。
+    host_events: Vec<(i64, dozer_panel_agent::adapter::AgentHostEvent)>,
     /// 退出前必须等完的 kill 任务。
     critical: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// 每个项目的关闭代次:关项目页签时 +1。新建会话/恢复的 emit 闭包捕获当时的
@@ -188,18 +192,28 @@ impl Default for AgentPanel {
 impl AgentPanel {
     pub fn new() -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let hook_warnings;
         Self {
             shell: AgentShell::default(),
             states: HashMap::new(),
             starting: HashSet::new(),
             svc: crate::daemon::Daemon::new().sessions(),
-            hooks: Arc::new(crate::adapters::agent_hooks::DiggerHooks::new()),
-            // 能力全关(设计 D5):不总结、不装 MCP。
-            caps: AgentCapabilities::default(),
+            hooks: {
+                let hooks = crate::adapters::agent_hooks::DiggerHooks::new();
+                hook_warnings = hooks.warnings_handle();
+                Arc::new(hooks)
+            },
+            // S6e:MCP 自动注册打开;总结关闭(与 Dozer 的关闭语义不同)。
+            caps: AgentCapabilities {
+                summary_on_close: false,
+                mcp_install: true,
+            },
             handle: tokio::runtime::Handle::try_current().ok(),
             tx,
             rx: Mutex::new(Some(rx)),
             notice: None,
+            hook_warnings,
+            host_events: Vec::new(),
             critical: Arc::new(Mutex::new(Vec::new())),
             epochs: Arc::new(Mutex::new(HashMap::new())),
             focus: false,
@@ -217,6 +231,18 @@ impl AgentPanel {
         let mut panel = Self::new();
         panel.svc = svc;
         panel.hooks = hooks;
+        panel
+    }
+
+    /// 测试/嵌入:显式注入服务、hook 安装器与共享警告队列。
+    #[allow(dead_code)]
+    pub fn with_hooks(
+        svc: Arc<dyn SessionService>,
+        hooks: Arc<dyn HookInstaller>,
+        warnings: Arc<Mutex<Vec<String>>>,
+    ) -> Self {
+        let mut panel = Self::with_services(svc, hooks);
+        panel.hook_warnings = warnings;
         panel
     }
 
@@ -390,8 +416,9 @@ impl AgentPanel {
         dozer_panel_agent::update::update(state, message, &ctx, emit);
         let notices = state.take_outbox();
         let requests = state.take_requests();
-        // Digger 一期忽略跨面板联动(没有会话列表 / git / 磁盘占用面板)。
-        let _ = state.take_host_events();
+        for event in state.take_host_events() {
+            self.host_events.push((pid, event));
+        }
         let picker_open = state.agent_picker_open;
         for notice in notices {
             let text = dozer_panel_agent::i18n::resolver()
@@ -410,11 +437,38 @@ impl AgentPanel {
         if !picker_open && self.picker.is_some_and(|p| p.pid == pid) {
             self.picker = None;
         }
+        self.drain_hook_warnings();
         Task::none()
+    }
+
+    /// 测试:塞入一条跨面板事件。
+    #[cfg(test)]
+    pub fn push_host_event_for_test(
+        &mut self,
+        pid: i64,
+        event: dozer_panel_agent::adapter::AgentHostEvent,
+    ) {
+        self.host_events.push((pid, event));
+    }
+
+    /// 取走跨面板事件(由 `product` 在回合结束时刷新 Project 面板记忆)。
+    pub fn drain_host_events(&mut self) -> Vec<(i64, dozer_panel_agent::adapter::AgentHostEvent)> {
+        std::mem::take(&mut self.host_events)
     }
 
     pub fn dismiss_notice(&mut self) {
         self.notice = None;
+    }
+
+    fn drain_hook_warnings(&mut self) {
+        let warnings = self
+            .hook_warnings
+            .lock()
+            .map(|mut warnings| std::mem::take(&mut *warnings))
+            .unwrap_or_default();
+        for warning in warnings {
+            self.notice = Some(warning);
+        }
     }
 
     /// 关闭选择器浮层(点空白 / Esc):不改会话,只清掉库与产品的打开态。
@@ -1409,6 +1463,64 @@ mod tests {
         settle().await;
         assert_eq!(fake.get().writes.len(), 1);
         assert_eq!(fake.get().writes[0].0, "a1", "只写当前项目的活动会话");
+    }
+
+    #[test]
+    fn mcp_install_capability_is_on_but_summary_on_close_is_off() {
+        let panel = AgentPanel::new();
+        assert!(panel.caps.mcp_install);
+        assert!(!panel.caps.summary_on_close);
+    }
+
+    #[tokio::test]
+    async fn session_creation_still_proceeds_when_install_fails() {
+        let fake = FakeSessions::default();
+        let dir = tempfile::tempdir().unwrap();
+        let hook = dir.path().join("digger-hook");
+        let mcp = dir.path().join("digger-mcp");
+        std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(&mcp, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for path in [&hook, &mcp] {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let hooks = crate::adapters::agent_hooks::DiggerHooks::with_exes(
+            hook,
+            mcp,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        );
+        let warnings = hooks.warnings_handle();
+        let mut panel = AgentPanel::with_hooks(Arc::new(fake.clone()), Arc::new(hooks), warnings);
+        panel.shell.status = Status::Ready;
+        let project = project(7, "/tmp/p7");
+        panel.states.insert(7, AgentPanelState::new());
+        let _ = panel.update(
+            7,
+            Message::PickerSelect(PickerLaunch::Agent(Some(AgentKind::Claude))),
+            Some(&project),
+            (80, 24),
+        );
+        for _ in 0..200 {
+            if !fake.get().creates.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        flush(&mut panel, 7, &project);
+        assert_eq!(fake.get().creates.len(), 1, "安装失败不阻塞建会话");
+        assert!(
+            panel
+                .notice
+                .as_deref()
+                .unwrap_or("")
+                .contains("未能为 claude 注册"),
+            "{:?}",
+            panel.notice
+        );
     }
 
     #[tokio::test]
