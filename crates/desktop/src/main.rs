@@ -32,6 +32,12 @@ thread_local! {
     /// 最近一次已知的窗口逻辑尺寸:只给 `PanelDisplay` 这类拿不到 `ProductShell` 的展示适配器用。
     pub(crate) static CURRENT_WINDOW: std::cell::Cell<Option<(f32, f32)>> =
         const { std::cell::Cell::new(None) };
+    /// 最近一次光标位置:订阅里的鼠标事件不带坐标,只能由 `view` 每帧写入。
+    pub(crate) static CURRENT_CURSOR: std::cell::Cell<iced::Point> =
+        const { std::cell::Cell::new(iced::Point { x: 0.0, y: 0.0 }) };
+    /// Agent 自己的浮层(选择器 / 关页签确认)是否打开:打开时键盘不投终端。
+    pub(crate) static AGENT_KEYS_BLOCKED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 fn boot() -> (ProductShell, Task<Msg>) {

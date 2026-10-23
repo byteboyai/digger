@@ -14,6 +14,7 @@ use dozer_panel_agent::restore::RestoredSession;
 use dozer_panel_agent::state::AgentPanelState;
 use dozer_panel_agent::tabs::TabBackend;
 use dozer_panel_agent::update::{Message, UpdateCtx};
+use dozer_panel_term::input::{dropped_path_bytes, ime_commit};
 use dozer_services::SessionService;
 use iced::{Element, Task};
 use iced_widget::core::Rectangle;
@@ -108,6 +109,42 @@ pub struct PickerMenu {
     pub at: Option<(f32, f32)>,
 }
 
+/// 一条键盘事件在终端上的语义(纯决策,`on_key` 只负责把动作变成 `Task`)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyAction {
+    Copy(String),
+    Paste,
+    Input(Vec<u8>),
+    None,
+}
+
+/// 键位 → 动作。`ime_composing` 为真时一律不送终端:macOS 输入法组字期间
+/// iced 仍可能发 `KeyPressed`,不抑制就会出现拼音字母同时进终端(真机风险 1)。
+pub fn decide_key(
+    state: &AgentPanelState,
+    event: &iced::keyboard::Event,
+    ime_composing: bool,
+) -> KeyAction {
+    if state.tabs.get(state.active).is_none() || ime_composing {
+        return KeyAction::None;
+    }
+    let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+        return KeyAction::None;
+    };
+    if let Some(shortcut) = crate::adapters::agent_keys::shortcut(key, *modifiers) {
+        return match shortcut {
+            crate::adapters::agent_keys::AppShortcut::Copy => state
+                .active_selection_text()
+                .map(KeyAction::Copy)
+                .unwrap_or(KeyAction::None),
+            crate::adapters::agent_keys::AppShortcut::Paste => KeyAction::Paste,
+        };
+    }
+    crate::adapters::agent_keys::event_bytes(event, state.active_app_cursor_mode())
+        .map(KeyAction::Input)
+        .unwrap_or(KeyAction::None)
+}
+
 /// 退出前等待 kill 的总预算。
 pub const EXIT_KILL_BUDGET: Duration = Duration::from_secs(3);
 
@@ -132,9 +169,10 @@ pub struct AgentPanel {
     /// (create 已在守护进程里成功,不能留孤儿)。
     epochs: Arc<Mutex<HashMap<i64, u64>>>,
     pub focus: bool,
-    /// 终端块矩形:Task 5(指针焦点)消费;输入法探针结果出来前恒 `None`。
-    #[allow(dead_code)]
+    /// 终端块矩形(窗口坐标):指针落点判断与输入法候选框定位。
     pub terminal_rect: Option<Rectangle>,
+    /// 输入法预编辑文本(供 `PanelDisplay::ime_preedit`);失焦 / 切走时清空。
+    pub preedit: Option<String>,
     last_grid: HashMap<i64, (u16, u16)>,
     /// 恢复开始时那一刻的网格:新会话按它创建,恢复完成前窗口又变了则用完成时的。
     start_grid: HashMap<i64, (u16, u16)>,
@@ -166,6 +204,7 @@ impl AgentPanel {
             epochs: Arc::new(Mutex::new(HashMap::new())),
             focus: false,
             terminal_rect: None,
+            preedit: None,
             last_grid: HashMap::new(),
             start_grid: HashMap::new(),
             picker: None,
@@ -385,6 +424,117 @@ impl AgentPanel {
         {
             state.agent_picker_open = false;
         }
+    }
+
+    /// 终端块矩形(窗口坐标),由 `update_host` 每轮几何同步时写入。
+    pub fn set_terminal_rect(&mut self, rect: Rectangle) {
+        self.terminal_rect = Some(rect);
+    }
+
+    /// 指针落点:在终端块内获得焦点,点别处失焦并清掉输入法预编辑。
+    pub fn on_pointer(&mut self, point: iced::Point) {
+        let inside = self.terminal_rect.is_some_and(|rect| rect.contains(point));
+        self.focus = inside;
+        if !inside {
+            self.preedit = None;
+        }
+    }
+
+    /// 面板被切走 / 不可见:焦点与预编辑都清掉,别把输入法状态带回来。
+    pub fn on_visibility(&mut self, visible: bool) {
+        if !visible {
+            self.focus = false;
+            self.preedit = None;
+        }
+    }
+
+    /// 切换项目 / 关闭项目:旧终端的焦点与预编辑不再成立。
+    pub fn reset_input_state(&mut self) {
+        self.focus = false;
+        self.preedit = None;
+    }
+
+    /// 输入法预编辑(只接受当前项目的回投,迟到的旧项目消息丢弃)。
+    pub fn set_preedit(&mut self, pid: i64, preedit: Option<String>, current: Option<i64>) {
+        if current == Some(pid) {
+            self.preedit = preedit;
+        }
+    }
+
+    /// 键盘事件入口。面板不可见 / 无焦点 / 没有活动会话 / 窗口关闭中一律丢弃。
+    pub fn on_key(
+        &mut self,
+        event: &iced::keyboard::Event,
+        visible: bool,
+        project: Option<&ProjectInfo>,
+        closing: bool,
+    ) -> Task<crate::product::Msg> {
+        if closing || !visible || !self.focus {
+            return Task::none();
+        }
+        let Some(project) = project.filter(|p| self.states.contains_key(&p.id)) else {
+            return Task::none();
+        };
+        let pid = project.id;
+        let Some(state) = self.states.get(&pid) else {
+            return Task::none();
+        };
+        match decide_key(state, event, self.preedit.is_some()) {
+            KeyAction::None => Task::none(),
+            KeyAction::Copy(text) => iced::clipboard::write(text),
+            KeyAction::Paste => iced::clipboard::read()
+                .map(move |text| crate::product::Msg::AgentPaste(pid, text.unwrap_or_default())),
+            KeyAction::Input(bytes) => {
+                let grid = self.last_grid.get(&pid).copied().unwrap_or((80, 24));
+                self.update(pid, Message::Input(bytes), Some(project), grid)
+            }
+        }
+    }
+
+    /// 输入法提交:原样写入活动会话,并清掉预编辑。
+    pub fn commit_ime(
+        &mut self,
+        pid: i64,
+        text: &str,
+        project: Option<&ProjectInfo>,
+    ) -> Task<crate::product::Msg> {
+        self.preedit = None;
+        let grid = self.last_grid.get(&pid).copied().unwrap_or((80, 24));
+        self.update(pid, Message::Input(ime_commit(text)), project, grid)
+    }
+
+    /// 剪贴板粘贴:库按终端当前的 bracketed paste 模式包裹。
+    pub fn paste(
+        &mut self,
+        pid: i64,
+        text: String,
+        project: Option<&ProjectInfo>,
+    ) -> Task<crate::product::Msg> {
+        let grid = self.last_grid.get(&pid).copied().unwrap_or((80, 24));
+        self.update(pid, Message::Paste(text), project, grid)
+    }
+
+    /// 拖入文件:面板可见时把 shell 转义后的路径写进活动会话。
+    pub fn on_drop(
+        &mut self,
+        path: &std::path::Path,
+        visible: bool,
+        project: Option<&ProjectInfo>,
+    ) -> Task<crate::product::Msg> {
+        if !visible {
+            return Task::none();
+        }
+        let Some(project) = project else {
+            return Task::none();
+        };
+        let pid = project.id;
+        let grid = self.last_grid.get(&pid).copied().unwrap_or((80, 24));
+        self.update(
+            pid,
+            Message::Input(dropped_path_bytes(path)),
+            Some(project),
+            grid,
+        )
     }
 
     /// 关项目页签:作废该项目的在途回投、abort 已有转发、kill 全部存活会话、
@@ -728,6 +878,20 @@ mod tests {
             forwarder: runtime.spawn(async {}),
             backend: TabBackend::Daemon,
         });
+    }
+
+    fn char_event(ch: &str, modifiers: iced::keyboard::Modifiers) -> iced::keyboard::Event {
+        iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Character(ch.into()),
+            modified_key: iced::keyboard::Key::Character(ch.into()),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers,
+            text: Some(ch.into()),
+            repeat: false,
+        }
     }
 
     fn flush(panel: &mut AgentPanel, pid: i64, project: &ProjectInfo) {
@@ -1094,6 +1258,157 @@ mod tests {
             "在途 create 完成后必须被回收,不能留下孤儿会话"
         );
         assert!(!panel.states.contains_key(&7));
+    }
+
+    #[tokio::test]
+    async fn keys_are_dropped_when_the_panel_is_hidden_unfocused_or_closing_or_has_no_session() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let empty = project(8, "/tmp/p8");
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "s1", AgentKind::Claude);
+        panel.states.insert(7, state);
+        let event = char_event("x", iced::keyboard::Modifiers::default());
+        // 不可见 / 无焦点 / 关闭中 / 没有当前项目 / 项目没有状态:全都不写。
+        let _ = panel.on_key(&event, false, Some(&project), false);
+        panel.focus = false;
+        let _ = panel.on_key(&event, true, Some(&project), false);
+        panel.focus = true;
+        let _ = panel.on_key(&event, true, Some(&project), true);
+        let _ = panel.on_key(&event, true, None, false);
+        let _ = panel.on_key(&event, true, Some(&empty), false);
+        settle().await;
+        assert!(fake.get().writes.is_empty());
+        // 反面对照:可见 + 有焦点 + 有会话时才写。
+        let _ = panel.on_key(&event, true, Some(&project), false);
+        settle().await;
+        assert_eq!(fake.get().writes.len(), 1);
+    }
+
+    #[test]
+    fn a_pointer_press_inside_the_terminal_focuses_it_and_outside_unfocuses() {
+        let mut panel = make_panel(&FakeSessions::default());
+        panel.set_terminal_rect(iced_core::Rectangle::new(
+            iced_core::Point::new(10.0, 20.0),
+            iced_core::Size::new(300.0, 200.0),
+        ));
+        panel.on_pointer(iced::Point::new(50.0, 60.0));
+        assert!(panel.focus);
+        panel.on_pointer(iced::Point::new(5.0, 5.0));
+        assert!(!panel.focus);
+    }
+
+    #[tokio::test]
+    async fn command_c_copies_only_with_a_selection_and_otherwise_does_nothing() {
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "s1", AgentKind::Claude);
+        let cmd_c = char_event("c", iced::keyboard::Modifiers::LOGO);
+        assert_eq!(decide_key(&state, &cmd_c, false), KeyAction::None);
+        let _ = state.tabs[0].model.feed(b"hello");
+        state.tabs[0].model.selection_start(0, 0, false);
+        state.tabs[0].model.selection_update(4, 0, true);
+        assert_eq!(
+            decide_key(&state, &cmd_c, false),
+            KeyAction::Copy("hello".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn command_v_reads_the_clipboard_and_pastes_with_bracketed_paste_when_the_app_enabled_it()
+    {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "s1", AgentKind::Claude);
+        let _ = state.tabs[0].model.feed(b"\x1b[?2004h");
+        panel.states.insert(7, state);
+        assert_eq!(
+            decide_key(
+                &panel.states[&7],
+                &char_event("v", iced::keyboard::Modifiers::LOGO),
+                false
+            ),
+            KeyAction::Paste
+        );
+        let _ = panel.paste(7, "a\nb".into(), Some(&project));
+        settle().await;
+        assert_eq!(
+            fake.get().writes[0].1,
+            b"\x1b[200~a\nb\x1b[201~",
+            "应用开启 bracketed paste 时必须包裹"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropped_file_writes_its_quoted_path() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "s1", AgentKind::Claude);
+        panel.states.insert(7, state);
+        let _ = panel.on_drop(std::path::Path::new("/tmp/a b.txt"), true, Some(&project));
+        settle().await;
+        assert_eq!(fake.get().writes[0].1, b"'/tmp/a b.txt' ");
+    }
+
+    #[tokio::test]
+    async fn ime_commit_writes_the_text_and_clears_the_preedit() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let project = project(7, "/tmp/p7");
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "s1", AgentKind::Claude);
+        panel.states.insert(7, state);
+        panel.set_preedit(7, Some("ni".into()), Some(7));
+        assert_eq!(panel.preedit.as_deref(), Some("ni"));
+        let _ = panel.commit_ime(7, "你好", Some(&project));
+        settle().await;
+        assert_eq!(fake.get().writes[0].1, "你好".as_bytes());
+        assert!(panel.preedit.is_none());
+    }
+
+    #[test]
+    fn preedit_is_cleared_when_focus_is_lost_or_the_panel_is_hidden() {
+        let mut panel = make_panel(&FakeSessions::default());
+        panel.set_preedit(7, Some("ni".into()), Some(7));
+        panel.focus = true;
+        // 点终端外面(未设 terminal_rect 时任何点都在外面)。
+        panel.on_pointer(iced::Point::new(1.0, 1.0));
+        assert!(!panel.focus);
+        assert!(panel.preedit.is_none());
+        panel.set_preedit(7, Some("hao".into()), Some(7));
+        panel.on_visibility(false);
+        assert!(!panel.focus);
+        assert!(panel.preedit.is_none());
+        // 迟到的旧项目预编辑不落到当前项目。
+        panel.set_preedit(7, Some("late".into()), Some(8));
+        assert!(panel.preedit.is_none());
+    }
+
+    #[tokio::test]
+    async fn input_goes_to_the_active_session_of_the_focused_project_only() {
+        let fake = FakeSessions::default();
+        let mut panel = make_panel(&fake);
+        let a = project(7, "/tmp/a");
+        let mut sa = AgentPanelState::new();
+        insert_tab(&mut sa, "a1", AgentKind::Claude);
+        let mut sb = AgentPanelState::new();
+        insert_tab(&mut sb, "b1", AgentKind::Claude);
+        panel.states.insert(7, sa);
+        panel.states.insert(8, sb);
+        panel.focus = true;
+        let _ = panel.on_key(
+            &char_event("x", iced::keyboard::Modifiers::default()),
+            true,
+            Some(&a),
+            false,
+        );
+        settle().await;
+        assert_eq!(fake.get().writes.len(), 1);
+        assert_eq!(fake.get().writes[0].0, "a1", "只写当前项目的活动会话");
     }
 
     #[tokio::test]

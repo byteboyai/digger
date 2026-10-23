@@ -39,6 +39,25 @@ pub fn key_bytes(key: &Key, modifiers: Modifiers, app_cursor: bool) -> Option<Ve
         .then(|| key_to_bytes(&to_term_key(key)?, to_term_mods(modifiers), app_cursor))?
 }
 
+/// iced 键盘事件 → PTY 字节。只处理 `KeyPressed`:字符键用 `modified_key`
+/// (带 Shift 的结果),具名键用 `key`;⌘ 组合键一律不进 PTY(同 [`key_bytes`])。
+pub fn event_bytes(event: &iced::keyboard::Event, app_cursor: bool) -> Option<Vec<u8>> {
+    let iced::keyboard::Event::KeyPressed {
+        key,
+        modified_key,
+        modifiers,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let key = match key {
+        Key::Character(_) => modified_key,
+        _ => key,
+    };
+    key_bytes(key, *modifiers, app_cursor)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppShortcut {
     Copy,
@@ -68,6 +87,65 @@ mod tests {
     }
     fn character(key: &str) -> Key {
         Key::Character(key.into())
+    }
+
+    #[test]
+    fn shifted_characters_use_the_modified_key() {
+        // 值来源:iced 的 `KeyPressed` 里 `modified_key` 是应用了修饰键后的结果;
+        // 字符键必须用它,否则 Shift+a 会变成小写 a、Shift+1 变成 1。
+        let press = |key: &str, modified: &str, modifiers| iced::keyboard::Event::KeyPressed {
+            key: Key::Character(key.into()),
+            modified_key: Key::Character(modified.into()),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers,
+            text: Some(modified.into()),
+            repeat: false,
+        };
+        assert_eq!(
+            event_bytes(&press("a", "A", Modifiers::SHIFT), false),
+            Some(b"A".to_vec())
+        );
+        assert_eq!(
+            event_bytes(&press("1", "!", Modifiers::SHIFT), false),
+            Some(b"!".to_vec())
+        );
+        // 具名键仍用 `key`(方向键不受 modified_key 影响)。
+        let arrow = iced::keyboard::Event::KeyPressed {
+            key: named(Named::ArrowUp),
+            modified_key: named(Named::ArrowUp),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::default(),
+            text: None,
+            repeat: false,
+        };
+        assert_eq!(event_bytes(&arrow, false), Some(b"\x1b[A".to_vec()));
+        assert_eq!(event_bytes(&arrow, true), Some(b"\x1bOA".to_vec()));
+        // ⌘ 恒不进 PTY;KeyReleased 不产生字节。
+        assert_eq!(event_bytes(&press("a", "a", Modifiers::LOGO), false), None);
+        if let iced::keyboard::Event::KeyPressed {
+            key,
+            modified_key,
+            physical_key,
+            location,
+            modifiers,
+            ..
+        } = press("a", "a", Modifiers::default())
+        {
+            let released = iced::keyboard::Event::KeyReleased {
+                key,
+                modified_key,
+                physical_key,
+                location,
+                modifiers,
+            };
+            assert_eq!(event_bytes(&released, false), None);
+        }
     }
 
     #[test]

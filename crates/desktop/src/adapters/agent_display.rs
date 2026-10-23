@@ -224,7 +224,7 @@ impl<'a> PanelDisplay<'a, Msg> for AgentDisplay<'a> {
         self.panel.focus
     }
     fn ime_preedit(&self) -> Option<&'a str> {
-        None
+        self.panel.preedit.as_deref()
     }
     fn term_event(&self, event: TermEvent) -> Msg {
         Msg::Agent(self.pid, dozer_panel_agent::term_message(event))

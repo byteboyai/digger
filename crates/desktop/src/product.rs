@@ -67,6 +67,18 @@ pub enum Msg {
     AgentNoticeDismiss,
     /// 关闭 Agent 选择器浮层(点空白 / Esc),不创建会话。
     AgentPickerClose,
+    /// 键盘事件(订阅只在 `Status::Ignored` 时产出;是否进终端由焦点决定)。
+    AgentKey(iced::keyboard::Event),
+    /// 任意鼠标按下(窗口坐标):决定终端是否获得焦点。
+    AgentPointer(iced::Point),
+    /// 拖入文件(S6d-2 Task 5):写 shell 转义后的路径到活动会话。
+    AgentDrop(PathBuf),
+    /// 剪贴板读取结果(⌘V)。`project_id` 是发起时的项目。
+    AgentPaste(i64, String),
+    /// 输入法预编辑文本(提交/清空由 Input 与焦点逻辑负责)。
+    AgentPreedit(i64, Option<String>),
+    /// 输入法提交的文本(走 `AgentPanel::commit_ime`,负责清预编辑)。
+    AgentImeCommit(i64, String),
     /// 「应用」面板的消息(Task 14)。
     Apps(crate::apps::Message),
     /// 「用量」面板的库消息(Task 20)。
@@ -178,6 +190,9 @@ pub struct ProductShell {
     left_down: bool,
     /// 当前修饰键(`Msg::Modifiers` 维护)。
     modifiers: iced::keyboard::Modifiers,
+    /// 最近一次光标位置(`ShellMsg::CursorMoved`):鼠标事件本身不带坐标,
+    /// 终端焦点判断用它。
+    last_cursor: iced::Point,
     shutdown_started: bool,
     shutdown_error: Option<String>,
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
@@ -417,6 +432,7 @@ impl ProductShell {
             closing: false,
             left_down: false,
             modifiers: iced::keyboard::Modifiers::default(),
+            last_cursor: iced::Point::new(0.0, 0.0),
             shutdown_started: false,
             shutdown_error: None,
             #[cfg(test)]
@@ -675,6 +691,7 @@ impl ProductShell {
             // 文件树的拖拽幽灵胶囊要跟着光标走(展示语义读这两个值)。
             let size = (self.shell.window().0, self.shell.window().1);
             self.files.set_window_probe(size, (x, y));
+            self.last_cursor = iced::Point::new(x, y);
             // 树内拖拽:越过距离 + 按住时长两道阈值才算真拖拽(否则只是单击)。
             self.files.maybe_confirm_tree_drag(self.left_down);
         }
@@ -1036,6 +1053,37 @@ impl ProductShell {
             Length::Fill,
             Border::default(),
         );
+        // 输入法:只有终端获得焦点时才包 `ImeSink`(enabled = focus)。
+        let term: Element<'_, Msg> = if self.agent.focus {
+            let style = self.term_style.clone();
+            let (col, row) = state
+                .tabs
+                .get(state.active)
+                .map(|tab| tab.model.cursor())
+                .unwrap_or((0, 0));
+            let padding = crate::adapters::agent_display::terminal_pane_style().padding;
+            let tab_h = crate::adapters::agent_layout::tab_bar_height();
+            let cell_w = style.cell_width();
+            let line_h = style.line_height_px();
+            crate::adapters::agent_ime::ImeSink::new(
+                term,
+                true,
+                move |bounds: iced_core::Rectangle| {
+                    iced_core::Rectangle::new(
+                        iced_core::Point::new(
+                            bounds.x + padding.left + col as f32 * cell_w,
+                            bounds.y + padding.top + tab_h + row as f32 * line_h,
+                        ),
+                        iced_core::Size::new(cell_w, line_h),
+                    )
+                },
+                move |text| Msg::AgentImeCommit(pid, text),
+                move |preedit| Msg::AgentPreedit(pid, preedit),
+            )
+            .into()
+        } else {
+            term
+        };
         let tokens = color::current();
         let body: Element<'_, Msg> = pair_view(
             area,
@@ -1078,9 +1126,9 @@ impl ProductShell {
         }
     }
 
-    /// 当前项目的 Agent 网格(终端块减去内边距与页签条)。Agent 面板不是该侧
-    /// 选中面板时没有可测量的配对几何,返回 `None`(沿用上次网格,不发错尺寸)。
-    fn current_agent_grid(&self) -> Option<(u16, u16)> {
+    /// 当前项目的 Agent 终端块矩形(窗口坐标)。Agent 面板不是该侧选中面板时
+    /// 没有可测量的配对几何,返回 `None`(沿用上次网格,不发错尺寸)。
+    fn current_agent_block(&self) -> Option<Rect> {
         let side = self.shell.side_of(&shell::agent_id())?;
         if self.shell.selected(side) != &shell::agent_id() {
             return None;
@@ -1088,11 +1136,16 @@ impl ProductShell {
         let rects = self.shell.rects(&metrics_from_theme());
         let content = rects.content(side)?;
         let pair = shell::pair_rects(&self.shell, side);
-        let block = crate::adapters::agent_layout::terminal_block(
+        Some(crate::adapters::agent_layout::terminal_block(
             content,
             pane_collapsed_of(&shell::agent_id()),
             pair,
-        );
+        ))
+    }
+
+    /// 当前项目的 Agent 网格(终端块减去内边距与页签条)。
+    fn current_agent_grid(&self) -> Option<(u16, u16)> {
+        let block = self.current_agent_block()?;
         Some(crate::adapters::agent_layout::grid(
             block,
             &crate::adapters::agent_display::terminal_pane_style(),
@@ -1531,6 +1584,39 @@ impl Product<Msg> for ProductShell {
                 self.agent.close_picker();
                 Task::none()
             }
+            Msg::AgentKey(event) => {
+                let visible = self.panel_visible(&shell::agent_id());
+                let project = self.projects.current_project();
+                self.agent.on_key(&event, visible, project, self.closing)
+            }
+            Msg::AgentPointer(point) => {
+                self.agent.on_pointer(point);
+                Task::none()
+            }
+            Msg::AgentDrop(path) => {
+                let visible = self.panel_visible(&shell::agent_id());
+                let project = self.projects.current_project();
+                self.agent.on_drop(&path, visible, project)
+            }
+            Msg::AgentPaste(pid, text) => {
+                let project = self
+                    .projects
+                    .project_by_id(pid)
+                    .filter(|p| self.projects.open_ids().contains(&p.id));
+                self.agent.paste(pid, text, project.as_ref())
+            }
+            Msg::AgentPreedit(pid, preedit) => {
+                let current = self.projects.current_project_id();
+                self.agent.set_preedit(pid, preedit, current);
+                Task::none()
+            }
+            Msg::AgentImeCommit(pid, text) => {
+                let project = self
+                    .projects
+                    .project_by_id(pid)
+                    .filter(|p| self.projects.open_ids().contains(&p.id));
+                self.agent.commit_ime(pid, &text, project.as_ref())
+            }
             Msg::ZoomToggle => self
                 .window
                 .map(window::toggle_maximize)
@@ -1590,6 +1676,9 @@ impl Product<Msg> for ProductShell {
                 let task = self.projects.update(m).map(Msg::Projects);
                 // 消失的项目页签:abort 转发并 kill 该项目全部会话(会话语义同 Dozer)。
                 self.close_agent_for(&open_before);
+                if before != self.projects.current_project_id() {
+                    self.agent.reset_input_state();
+                }
                 self.on_current_project_changed(before, true);
                 // 切到已开项目且 Agent 面板仍可见:恢复它的会话(同一项目只启动一次)。
                 let mut enter = Task::none();
@@ -1807,6 +1896,14 @@ impl Product<Msg> for ProductShell {
         // 展示适配器(`PanelDisplay`)拿不到 `&ProductShell`,每帧把分栏状态与窗口尺寸交给它。
         publish_panes(self.shell.panes());
         crate::CURRENT_WINDOW.with(|w| w.set(Some(self.shell.window())));
+        crate::CURRENT_CURSOR.with(|c| c.set(self.last_cursor));
+        let agent_blocked = self.agent.picker.is_some()
+            || self
+                .projects
+                .current_project()
+                .and_then(|p| self.agent.states.get(&p.id))
+                .is_some_and(|state| state.pending_close_tab.is_some());
+        crate::AGENT_KEYS_BLOCKED.with(|b| b.set(agent_blocked));
 
         if self.closing {
             let mut body = column![text("正在关闭 Digger…")].spacing(16).padding(20);
@@ -1927,12 +2024,27 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
     };
     // 退出分支自己将销毁与 shutdown 串行；其他更新后同步内容与几何。
     let native = shell.sync_native();
-    // Agent 终端网格(每条消息一次廉价比较:同网格不发、0 不发)。
+    shell
+        .agent
+        .on_visibility(shell.panel_visible(&shell::agent_id()));
+    // Agent 终端块矩形与网格(每条消息一次廉价比较:同网格不发、0 不发)。
     let grid = match (
         shell.projects.current_project().cloned(),
-        shell.current_agent_grid(),
+        shell.current_agent_block(),
     ) {
-        (Some(project), Some(grid)) => shell.agent.sync_grid(&project, grid),
+        (Some(project), Some(block)) => {
+            shell.agent.set_terminal_rect(iced_core::Rectangle::new(
+                iced_core::Point::new(block.x, block.y),
+                iced_core::Size::new(block.w, block.h),
+            ));
+            let grid = crate::adapters::agent_layout::grid(
+                block,
+                &crate::adapters::agent_display::terminal_pane_style(),
+                crate::adapters::agent_layout::tab_bar_height(),
+                &shell.term_style,
+            );
+            shell.agent.sync_grid(&project, grid)
+        }
         _ => Task::none(),
     };
     if shell.closing && !shell.shutdown_started && shell.apps.native_idle() {
@@ -1955,6 +2067,39 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NameFocusProbe(i64);
 
+/// 键盘事件是否该作为 Agent 输入投上去:`Captured` 的按键已被别处(输入框等)
+/// 消费,绝不能进终端;Agent 自己的浮层(选择器 / 关页签确认)打开时也不投。
+pub fn agent_key_message(
+    status: iced::event::Status,
+    event: &iced::keyboard::Event,
+) -> Option<Msg> {
+    (status == iced::event::Status::Ignored).then(|| Msg::AgentKey(event.clone()))
+}
+
+/// `listen_with` 的事件映射(必须是无捕获函数指针):光标与"浮层打开"状态
+/// 由 `view` 每帧写 thread-local,见 `main.rs` 的 `CURRENT_CURSOR` /
+/// `AGENT_KEYS_BLOCKED`。
+fn agent_event(
+    event: iced::Event,
+    status: iced::event::Status,
+    _id: iced::window::Id,
+) -> Option<Msg> {
+    match event {
+        iced::Event::Keyboard(event) => {
+            if crate::AGENT_KEYS_BLOCKED.with(std::cell::Cell::get) {
+                None
+            } else {
+                agent_key_message(status, &event)
+            }
+        }
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Msg::AgentPointer(
+            crate::CURRENT_CURSOR.with(std::cell::Cell::get),
+        )),
+        iced::Event::Window(iced::window::Event::FileDropped(path)) => Some(Msg::AgentDrop(path)),
+        _ => None,
+    }
+}
+
 /// 订阅:窗口关闭请求、骨架需要的鼠标 / 缩放事件,以及仅在有动画时才开的 ~60fps 动画拍。
 pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     let events = iced::event::listen_with(|evt, _status, _id| {
@@ -1966,6 +2111,10 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     if shell.closing {
         return events;
     }
+    // 终端输入:键盘只在未被控件消费时投;鼠标按下带最近一次光标位置;
+    // 拖入文件走窗口事件。`listen_with` 只收函数指针,光标与浮层状态由
+    // `view` 每帧写 thread-local(同 `CURRENT_WINDOW` 的手法)。
+    let agent_input = iced::event::listen_with(agent_event);
     // 左键按下 / 松开与修饰键:文件树的单击 / 拖拽 / 多选靠它们(库对这些消息的 `update` 不处理)。
     let pointer = iced::event::listen_with(|evt, _status, _id| match evt {
         iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
@@ -1982,6 +2131,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     let mut subs = vec![
         events,
         pointer,
+        agent_input,
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
     ];
     // 页签拖拽中:在页签行外松手也要结束拖拽(行内松手由页签行自己的 `on_release` 管),
@@ -2928,6 +3078,26 @@ mod tests {
                 .surfaces
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn captured_key_events_never_reach_the_terminal() {
+        let event = iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Character("x".into()),
+            modified_key: iced::keyboard::Key::Character("x".into()),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers: iced::keyboard::Modifiers::default(),
+            text: Some("x".into()),
+            repeat: false,
+        };
+        assert!(agent_key_message(iced::event::Status::Captured, &event).is_none());
+        assert!(matches!(
+            agent_key_message(iced::event::Status::Ignored, &event),
+            Some(Msg::AgentKey(_))
+        ));
     }
 
     #[test]
