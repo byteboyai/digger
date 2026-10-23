@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Builds crates/desktop (bin: digger) and wraps it into a Digger.app bundle
-# using crates/desktop/packaging/macos/Info.plist.
+# Builds crates/desktop (bin: digger) + diggerd + digger-hook and wraps them
+# into a Digger.app bundle using crates/desktop/packaging/macos/Info.plist.
 #
-# Digger is a single-binary app (unlike Dozer, which also ships dozerd /
-# dozer-hook / dozer-mcp siblings). Shared Usage assets are embedded at compile
-# time from the pinned dozer-panel-usage crate; runtime needs no source checkout.
+# S6a: Digger now ships with its own daemon (diggerd) and hook binary
+# (digger-hook), mirroring Dozer's dozerd/dozer-hook siblings. All three
+# binaries go into Contents/MacOS/.
 #
 # This produces an UNSIGNED, ad-hoc-signed candidate bundle. Signing /
 # notarization need a real Developer ID identity and credentials; without them the
@@ -25,17 +25,35 @@ PACKAGING_DIR="$ROOT_DIR/crates/desktop/packaging/macos"
 APP_NAME="Digger"
 BIN_NAME="digger"
 
+# S6a: build all three binaries in one cargo invocation.
 BUILD_JSON=$(
-  cargo build "${CARGO_PROFILE_FLAG[@]}" -p digger-desktop --bin "$BIN_NAME" --message-format=json
+  cargo build "${CARGO_PROFILE_FLAG[@]}" \
+    -p digger-desktop -p diggerd -p digger-hook \
+    --message-format=json
 )
 
-BIN_PATH=$(
-  echo "$BUILD_JSON" | jq -r --arg bin "$BIN_NAME" \
+extract_bin_path() {
+  local bin_name="$1"
+  echo "$BUILD_JSON" | jq -r --arg bin "$bin_name" \
     'select(.reason=="compiler-artifact" and .target.name==$bin and .executable != null) | .executable' \
     | tail -n 1
-)
+}
+
+BIN_PATH=$(extract_bin_path "$BIN_NAME")
 if [ -z "$BIN_PATH" ] || [ ! -x "$BIN_PATH" ]; then
   echo "error: could not locate built '$BIN_NAME' executable" >&2
+  exit 1
+fi
+
+DIGGERD_PATH=$(extract_bin_path "diggerd")
+if [ -z "$DIGGERD_PATH" ] || [ ! -x "$DIGGERD_PATH" ]; then
+  echo "error: could not locate built 'diggerd' executable" >&2
+  exit 1
+fi
+
+DIGGER_HOOK_PATH=$(extract_bin_path "digger-hook")
+if [ -z "$DIGGER_HOOK_PATH" ] || [ ! -x "$DIGGER_HOOK_PATH" ]; then
+  echo "error: could not locate built 'digger-hook' executable" >&2
   exit 1
 fi
 
@@ -46,6 +64,11 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$BIN_NAME"
+# S6a: copy daemon and hook binaries alongside the main app binary.
+# Missing diggerd means Agent panel can't connect; missing digger-hook means
+# hook events (session start/stop, tool use) won't reach the daemon.
+cp "$DIGGERD_PATH" "$APP_DIR/Contents/MacOS/diggerd"
+cp "$DIGGER_HOOK_PATH" "$APP_DIR/Contents/MacOS/digger-hook"
 cp "$PACKAGING_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
 if [ -f "$PACKAGING_DIR/AppIcon.icns" ]; then
   cp "$PACKAGING_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
