@@ -127,6 +127,10 @@ pub struct AgentPanel {
     pub notice: Option<String>,
     /// 退出前必须等完的 kill 任务。
     critical: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// 每个项目的关闭代次:关项目页签时 +1。新建会话/恢复的 emit 闭包捕获当时的
+    /// 代次,代次对不上就丢弃消息;若迟到的是 `Attached`,立刻 kill 那个会话
+    /// (create 已在守护进程里成功,不能留孤儿)。
+    epochs: Arc<Mutex<HashMap<i64, u64>>>,
     pub focus: bool,
     /// 终端块矩形:Task 5(指针焦点)消费;输入法探针结果出来前恒 `None`。
     #[allow(dead_code)]
@@ -159,6 +163,7 @@ impl AgentPanel {
             rx: Mutex::new(Some(rx)),
             notice: None,
             critical: Arc::new(Mutex::new(Vec::new())),
+            epochs: Arc::new(Mutex::new(HashMap::new())),
             focus: false,
             terminal_rect: None,
             last_grid: HashMap::new(),
@@ -193,6 +198,58 @@ impl AgentPanel {
     fn track(&self, task: tokio::task::JoinHandle<()>) {
         if let Ok(mut tasks) = self.critical.lock() {
             tasks.push(task);
+        }
+    }
+
+    fn epoch(&self, pid: i64) -> u64 {
+        self.epochs
+            .lock()
+            .ok()
+            .and_then(|epochs| epochs.get(&pid).copied())
+            .unwrap_or(0)
+    }
+
+    fn bump_epoch(&self, pid: i64) {
+        if let Ok(mut epochs) = self.epochs.lock() {
+            *epochs.entry(pid).or_insert(0) += 1;
+        }
+    }
+
+    /// 后台回投闭包:带上项目 id 与**创建时**的关闭代次。项目页签关掉后,
+    /// 旧任务再发消息一律丢弃;`Attached` 说明 create 已在守护进程里成功,
+    /// 这里补一次 kill,避免留下孤儿会话。
+    fn emitter(&self, pid: i64) -> impl Fn(Message) + Clone + Send + 'static {
+        let tx = self.tx.clone();
+        let epochs = Arc::clone(&self.epochs);
+        let svc = Arc::clone(&self.svc);
+        let handle = self.handle();
+        let critical = Arc::clone(&self.critical);
+        let captured = self.epoch(pid);
+        move |message: Message| {
+            let current = epochs
+                .lock()
+                .ok()
+                .and_then(|epochs| epochs.get(&pid).copied())
+                .unwrap_or(0);
+            if current != captured {
+                if let Message::Attached { info, .. } = message
+                    && let Some(handle) = handle.clone()
+                {
+                    let svc = Arc::clone(&svc);
+                    let task = handle.spawn(async move {
+                        if let Err(error) = svc.kill(info.id).await {
+                            eprintln!(
+                                "digger: 关闭项目后回收迟到会话失败: {error}" // cli-output
+                            );
+                        }
+                    });
+                    if let Ok(mut tasks) = critical.lock() {
+                        tasks.push(task);
+                    }
+                }
+                return;
+            }
+            let _ = tx.send((pid, message));
         }
     }
 
@@ -240,10 +297,7 @@ impl AgentPanel {
             return Task::none();
         };
         let mut state = AgentPanelState::new();
-        let tx = self.tx.clone();
-        let emit = move |message: Message| {
-            let _ = tx.send((pid, message));
-        };
+        let emit = self.emitter(pid);
         state.adopt_restored(sessions, &handle, emit);
         let empty = state.tabs.is_empty();
         self.states.insert(pid, state);
@@ -273,12 +327,9 @@ impl AgentPanel {
         let Some(handle) = self.handle() else {
             return Task::none();
         };
+        let emit = self.emitter(pid);
         let Some(state) = self.states.get_mut(&pid) else {
             return Task::none();
-        };
-        let tx = self.tx.clone();
-        let emit = move |message: Message| {
-            let _ = tx.send((pid, message));
         };
         let critical = Arc::clone(&self.critical);
         let track = move |task: tokio::task::JoinHandle<()>| {
@@ -336,8 +387,11 @@ impl AgentPanel {
         }
     }
 
-    /// 关项目页签:abort 转发、kill 该项目全部存活会话、移除状态。
+    /// 关项目页签:作废该项目的在途回投、abort 已有转发、kill 全部存活会话、
+    /// 移除状态。**不 abort 还在 create 的任务**:create 可能已经在守护进程里
+    /// 成功,任务随后发来的 `Attached` 由 `emitter` 回收(kill),不留孤儿。
     pub fn close_project(&mut self, pid: i64) -> Task<crate::product::Msg> {
+        self.bump_epoch(pid);
         self.starting.remove(&pid);
         self.start_grid.remove(&pid);
         self.last_grid.remove(&pid);
@@ -350,9 +404,8 @@ impl AgentPanel {
         for tab in &state.tabs {
             tab.forwarder.abort();
         }
-        for (_, task) in state.pending {
-            task.abort();
-        }
+        // `state.pending` 里的任务随 `state` 在本函数结束时 drop 而 detach
+        // (不 abort):它们完成时由 `emitter` 的代次检查决定丢弃还是 kill。
         let Some(handle) = self.handle() else {
             return Task::none();
         };
@@ -1014,10 +1067,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closing_a_project_while_create_is_in_flight_leaves_an_orphan_session() {
-        // 审核 C:create 已发出、应答还没回来时关项目页签,`close_project` 会
-        // abort `state.pending`,拿不到 `SessionInfo.id`,于是没有机会 kill。
-        // 假服务在收到 create 时先记账再慢返回,模拟"守护进程已经建好会话"。
+    async fn closing_a_project_while_create_is_in_flight_kills_the_session_when_it_finishes() {
+        // 审核 C:create 已发出、应答还没回来时关项目页签。不能 abort 任务
+        // (否则会话已在守护进程里建好却没人 kill);代次作废旧回投,等
+        // `Attached` 到达时补一次 kill。
         let fake = FakeSessions::default();
         fake.slow_create(Duration::from_millis(500));
         let mut panel = make_panel(&fake);
@@ -1033,11 +1086,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(fake.get().creates.len(), 1, "create 请求已经发出");
         let _ = panel.close_project(7);
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        assert!(
-            fake.get().kills.is_empty(),
-            "现状:会话已在守护进程里建好,但转发任务被 abort,没人 kill"
+        // create 500ms 后返回;随后 attach 成功,迟到的 `Attached` 触发 kill。
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(
+            fake.get().kills,
+            ["created-1"],
+            "在途 create 完成后必须被回收,不能留下孤儿会话"
         );
+        assert!(!panel.states.contains_key(&7));
     }
 
     #[tokio::test]
