@@ -385,13 +385,25 @@ mod tests {
         hooks.ensure_mcp(AgentKind::Claude);
         hooks.ensure_mcp(AgentKind::Claude);
         let warnings = hooks.take_warnings();
-        assert_eq!(warnings.len(), 1);
+        // 这个测试偶发失败过一次(没能复现)。失败时把现场说清楚:警告全文与脚本日志,
+        // 方便区分"脚本没跑起来"(例如并行测试下 exec 撞上 ETXTBSY 得到 SpawnFailed)与
+        // "退出码判断错了"。
+        let log_text = fs::read_to_string(&log).unwrap_or_else(|e| format!("<读不到日志: {e}>"));
+        assert_eq!(
+            warnings.len(),
+            1,
+            "应恰好一条保护警告;实际 {warnings:?};脚本日志: {log_text:?}"
+        );
         assert!(
             warnings[0].contains("名为 \"digger\" 的服务器"),
-            "{}",
+            "警告文案不对(若是\"找不到 digger-mcp\",说明脚本根本没被执行起来): {};脚本日志: {log_text:?}",
             warnings[0]
         );
-        assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 1);
+        assert_eq!(
+            log_text.lines().count(),
+            1,
+            "同一个 Agent 只应尝试安装一次;脚本日志: {log_text:?}"
+        );
     }
 
     #[test]
