@@ -748,6 +748,35 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_text_file_asks_for_a_codemirror_editor_page() {
+        // 库有两个期望清单:`desired_webviews`(Flyfish / HTML 等渲染型宿主)与
+        // `desired_editor_webviews`(CodeMirror 编辑器宿主)。Dozer 把它们合起来;Digger 原先
+        // 只取了前者,文本 / 代码文件的编辑器页面从未被要求创建,页签永远停在"加载中"。
+        let dir =
+            std::env::temp_dir().join(format!("digger-preview-editor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        let notes = write(&dir, "notes.txt");
+        hub.open(ViewerPanel::Files, &p1, notes, None);
+        let rect = bytehost_core::LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        let desired = hub.desired(ViewerPanel::Files, &p1, |_| Some(rect));
+        let urls: Vec<&str> = desired.iter().map(|(spec, _)| spec.url.as_str()).collect();
+        assert!(
+            urls.iter()
+                .any(|u| u.starts_with(dozer_panel_preview::EDITOR_URL_PREFIX)),
+            "文本文件应要求一个编辑器页面,实际: {urls:?}"
+        );
+    }
+
+    #[test]
     fn files_and_project_panels_do_not_share_tabs() {
         let dir = std::env::temp_dir().join(format!("digger-preview-split-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

@@ -404,8 +404,13 @@ pub fn desired(
     locale: &str,
     rect: impl Fn(&PreviewWebviewSpec) -> Option<LogicalRect>,
 ) -> Vec<(PreviewWebviewSpec, LogicalRect)> {
+    // 库有两个期望清单:渲染型宿主(Flyfish / HTML / image-annotate)与 CodeMirror 编辑器宿主
+    // (文本 / 代码文件)。Dozer 把它们合起来(`app.rs` 的 `specs.extend(desired_editor_webviews)`);
+    // 只取前者,文本文件的编辑器页面就永远不会被创建,页签停在"加载中"。JSON / 表格宿主在
+    // Digger 里是有意关闭的能力,不并入。
     pane.desired_webviews(project_id, panel, locale)
         .into_iter()
+        .chain(pane.desired_editor_webviews(project_id, panel, locale))
         .map(|mut spec| {
             // T9:与 Dozer 的产品侧同款——Rendered host(Flyfish / 隔离 HTML /
             // image-annotate / PlantUML)的归属写进 URL,host 回传 envelope 时
