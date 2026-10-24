@@ -24,6 +24,13 @@ use iced_widget::core::{Border, Padding};
 use crate::product::Msg;
 
 /// Files 面板的宿主状态:库的 [`WorkspaceState`] 只对应当前项目,换项目时整棵重置。
+/// 待弹的原生菜单:`(菜单项, 窗口坐标)`。
+#[cfg(target_os = "macos")]
+pub type NativeMenuRequest = (
+    Vec<dozer_panel_files::menu::MenuItem<FilesMessage>>,
+    (f32, f32),
+);
+
 pub struct FilesPanel {
     state: Option<WorkspaceState>,
     app_state: AppState,
@@ -46,10 +53,7 @@ pub struct FilesPanel {
     /// macOS:库排出的"弹菜单"请求不建 iced 浮层,留给产品弹原生 NSMenu(原生菜单浮在 wry
     /// 页面之上,弹出时不用把文件内容藏起来)。`(菜单项, 窗口坐标)`,产品用 `take_menu_requests` 取走。
     #[cfg(target_os = "macos")]
-    native_menus: Vec<(
-        Vec<dozer_panel_files::menu::MenuItem<FilesMessage>>,
-        (f32, f32),
-    )>,
+    native_menus: Vec<NativeMenuRequest>,
 }
 
 /// 用系统默认应用打开一个路径。生产走 `open <path>`(路径作为独立参数,不经 shell)。
@@ -301,12 +305,7 @@ impl FilesPanel {
 
     /// macOS:取走待弹的原生菜单 `(菜单项, 窗口坐标)`,产品逐条弹出。
     #[cfg(target_os = "macos")]
-    pub fn take_menu_requests(
-        &mut self,
-    ) -> Vec<(
-        Vec<dozer_panel_files::menu::MenuItem<FilesMessage>>,
-        (f32, f32),
-    )> {
+    pub fn take_menu_requests(&mut self) -> Vec<NativeMenuRequest> {
         std::mem::take(&mut self.native_menus)
     }
 
