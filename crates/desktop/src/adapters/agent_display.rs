@@ -17,7 +17,7 @@ use dozer_panel_agent::update::Message;
 use dozer_panel_term::style::TermStyle;
 use dozer_panel_term::view::TermEvent;
 use iced_widget::core::{Length, Padding};
-use iced_widget::{button, column, container, row, text, tooltip};
+use iced_widget::{column, row, text};
 
 use crate::adapters::agent::AgentPanel;
 use crate::adapters::menu_overlay::{MenuAnchor, OverlayRow, view_rows};

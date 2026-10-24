@@ -305,6 +305,7 @@ pub fn row_views(state: &AgentPanelState) -> Vec<OverflowRowView> {
 }
 
 /// 溢出下拉:固定宽 `>` 列(仅选中行有箭头,其余留白,保证文字起点相同)+ 标题 + 关闭 ×。
+#[allow(clippy::too_many_arguments)] // 参数逐项对应库的 overflow 接线 + 行 hover。
 pub fn overflow_menu<'a, FSel, FClose, FHover, FRowHover>(
     entries: Vec<OverflowEntry>,
     anchor: (f32, f32),
