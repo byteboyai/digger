@@ -91,7 +91,12 @@ Each product's hook binary only manages its own entries:
 
 ## MCP
 
-`digger-mcp` 是 Digger 自己的 MCP 服务,和 `digger-hook` 一样随 `Digger.app/Contents/MacOS/` 交付。它只暴露三个记忆工具(`write_memory` / `list_memories` / `get_memory`),读写的是 `diggerd` 里的项目共享记忆(`digger.db`),与 Project 面板同一份;不会出现"调用后无可见效果"的工具。
+`digger-mcp` 是 Digger 自己的 MCP 服务,和 `digger-hook` 一样随 `Digger.app/Contents/MacOS/` 交付。它暴露:
+
+- 记忆:`write_memory` / `list_memories` / `get_memory`,读写的是 `diggerd` 里的项目共享记忆(`digger.db`),与 Project 面板同一份;
+- 预览桥接:`get_preview_context` / `preview_navigate` / `locate_in_file`,以及精确编辑 `apply_precise_edit`。这些工具经 `diggerd` 的中转落到 GUI 的预览面板:Digger 在 `boot` 后把当前项目 Files 面板的活动页签上下文推给 `diggerd`(切页签/关页签/切换项目立即,其余 250ms 防抖),并轮询 Agent 下行命令;目标项目不在前台时立即回 `NotFound`,不会挂起。它们与 Dozer 的同名工具共用同一份 `dozer-mcp` / `dozer-panel-preview` 代码。
+
+todo 与总结工具在 Digger 侧仍关闭。不会出现"调用后无可见效果"的工具。
 
 - 与 `dozer-mcp` 并存:两者的配置条目分别是 `digger` / `dozer`,安装与卸载互不覆盖;Dozer 会话里启动 `digger-mcp`、Digger 会话里启动 `dozer-mcp` 时都进入**零工具安静模式**(握手成功、工具为空、不写 stderr),Agent 的 MCP 状态里不是失败。
 - 自动注册的克制(D7):每个 Digger 进程内每种 Agent 只执行一次 `digger-mcp install`;同名手写条目被保护(退出码 3)时不覆盖、只提示一次;缺二进制 / 超时 / 非零退出都不阻塞建会话。
