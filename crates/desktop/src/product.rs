@@ -2150,9 +2150,9 @@ impl Product<Msg> for ProductShell {
         // 展示适配器(`PanelDisplay`)拿不到 `&ProductShell`,每帧把分栏状态与窗口尺寸交给它。
         publish_panes(self.shell.panes());
         crate::CURRENT_WINDOW.with(|w| w.set(Some(self.shell.window())));
-        crate::CURRENT_CURSOR.with(|c| c.set(self.last_cursor));
+        crate::CURRENT_CURSOR.set(self.last_cursor);
         let agent_blocked = self.agent_keys_blocked();
-        crate::AGENT_KEYS_BLOCKED.with(|b| b.set(agent_blocked));
+        crate::AGENT_KEYS_BLOCKED.store(agent_blocked, std::sync::atomic::Ordering::Relaxed);
 
         if self.closing {
             let mut body = column![text("正在关闭 Digger…")].spacing(16).padding(20);
@@ -2345,15 +2345,15 @@ fn agent_event(
 ) -> Option<Msg> {
     match event {
         iced::Event::Keyboard(event) => {
-            if crate::AGENT_KEYS_BLOCKED.with(std::cell::Cell::get) {
+            if crate::AGENT_KEYS_BLOCKED.load(std::sync::atomic::Ordering::Relaxed) {
                 None
             } else {
                 agent_key_message(status, &event)
             }
         }
-        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Msg::AgentPointer(
-            crate::CURRENT_CURSOR.with(std::cell::Cell::get),
-        )),
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => {
+            Some(Msg::AgentPointer(crate::CURRENT_CURSOR.get()))
+        }
         iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
             Some(Msg::AgentCursor(position))
         }
