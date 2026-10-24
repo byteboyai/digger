@@ -7,6 +7,8 @@
 //! 范围(S1):以**无 Project** 状态启动;顶栏的项目页签行保留结构、内容留空,"＋"置灰;**不伪造**任何写入能力。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use bytehost_chrome::persist::SCHEMA_VERSION;
 use bytehost_chrome::{
@@ -124,6 +126,8 @@ pub enum Msg {
     ),
     /// 预览原生页面的回传(库已分类的 host IPC / 建页失败)。
     PreviewEvent(crate::adapters::preview_native::Event),
+    /// Agent 下行预览命令的轮询结果(`diggerd` → GUI)。
+    PreviewCommandsFetched(PreviewCommands),
     /// 一次「删除项目」后台结果:(项目 id, 是否已从注册表移除, 文件系统步骤的错误)。
     ProjectDeleteDone {
         project_id: i64,
@@ -151,6 +155,9 @@ pub enum Msg {
 }
 
 /// Digger 产品壳状态。刻意保持最小:不持有任何 Domain/持久化状态,只有 UI 交互态 + 布局 + 主题。
+/// 轮询结果:项目 id + 该项目的待处理命令。
+type PreviewCommands = (i64, Vec<dozer_model::PreviewCommand>);
+
 pub struct ProductShell {
     window: Option<window::Id>,
     catalog: PanelCatalog,
@@ -181,6 +188,16 @@ pub struct ProductShell {
     /// 预览状态层(S5b-2 P4):Files / Project 两个面板各一份库状态 + 原生宿主。
     /// 在 `boot` 里装上;纯逻辑测试可以不要(没有预览就没有页签可开)。
     preview: Option<crate::adapters::preview::PreviewHub>,
+    /// S6e-3a:预览上下文推送 + 命令轮询的 UDS 桥(在 `boot` 里装上)。
+    preview_bridge: Option<crate::adapters::preview_bridge::PreviewBridge>,
+    /// 轮询器读的当前项目 id(≤0 跳过);项目切换时写入。
+    preview_project: Arc<AtomicI64>,
+    /// 轮询器只启动一次。
+    preview_poller_started: Arc<AtomicBool>,
+    /// 轮询结果回投通道(只能取一次,`boot` 接成 iced 流)。
+    preview_cmds_tx: tokio::sync::mpsc::UnboundedSender<PreviewCommands>,
+    preview_cmds_rx:
+        std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<PreviewCommands>>>,
     /// N1b:两个预览面板(Files / Project)各一份展示上下文,`view(&self)` 每帧
     /// 原地更新。库的 `view::pane` 要求它活到返回的 `Element` 一样久;以前每帧
     /// `Box::leak` 一份新的(60fps 下无界增长),现在由壳持有,地址稳定。
@@ -210,6 +227,13 @@ pub struct ProductShell {
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
     #[cfg(test)]
     surface_callbacks: Vec<bytehost_desktop::SurfaceSlot>,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn logical(r: Rect) -> LogicalRect {
@@ -410,6 +434,8 @@ impl ProductShell {
         );
         let (delete_tx, delete_rx) = tokio::sync::mpsc::unbounded_channel();
         let delete_rx = std::sync::Mutex::new(Some(delete_rx));
+        let (preview_cmds_tx, preview_cmds_rx) = tokio::sync::mpsc::unbounded_channel();
+        let preview_cmds_rx = std::sync::Mutex::new(Some(preview_cmds_rx));
         let lifecycle = crate::lifecycle_selftest::Driver::from_env();
         // 自检模式需要编辑器一开始就看得见。
         if markdown.is_selftest() || lifecycle.is_some() {
@@ -432,6 +458,11 @@ impl ProductShell {
             agent: crate::adapters::agent::AgentPanel::new(),
             term_style: crate::fonts::terminal_style(),
             preview: None,
+            preview_bridge: None,
+            preview_project: Arc::new(AtomicI64::new(0)),
+            preview_poller_started: Arc::new(AtomicBool::new(false)),
+            preview_cmds_tx,
+            preview_cmds_rx,
             preview_displays: [
                 std::cell::Cell::new(preview_display(0.0, 0, 0)),
                 std::cell::Cell::new(preview_display(0.0, 0, 0)),
@@ -633,6 +664,18 @@ impl ProductShell {
         if let Some(preview) = self.preview.as_mut() {
             preview.set_current_project(current.as_ref());
         }
+        if let Some(old) = before
+            && before != current.as_ref().map(|p| p.id)
+            && let Some(bridge) = &self.preview_bridge
+        {
+            // 旧项目不再有前台上下文:立刻推 None,避免 Agent 读到旧选区。
+            bridge.push(old, None, 0);
+        }
+        if current.is_none() {
+            // 没有前台项目时轮询器跳过,别继续拿旧项目 id 去问。
+            self.preview_project.store(0, Ordering::SeqCst);
+        }
+        self.sync_preview_context(true);
         self.load_project_shell();
         if self.panel_visible(&shell::project_id()) {
             self.activate_project_panel();
@@ -739,6 +782,13 @@ impl ProductShell {
         }
         if self.agent.picker.is_some() && !self.panel_visible(&shell::agent_id()) {
             self.agent.picker = None;
+        }
+        // 预览面板失焦(切到别的面板 / 收起):上下文此刻不再变化,立即刷新一次,
+        // 别让 Agent 在上一次 250ms 防抖窗口里读到旧选区。
+        let preview_was = preview_panel_visible(&self.visible_before);
+        let preview_now = preview_panel_visible(&visible_now);
+        if preview_was && !preview_now {
+            self.sync_preview_context(true);
         }
         self.visible_before = visible_now;
         if resized {
@@ -1274,6 +1324,59 @@ impl ProductShell {
         task
     }
 
+    /// 把当前项目 Files 面板的活动页签上下文推给 `diggerd`。
+    /// `immediate` 为假时走 250ms 防抖(库用 `Effect::ContextChanged` 指定)。
+    fn sync_preview_context(&mut self, immediate: bool) {
+        let Some(project) = self.projects.current_project().cloned() else {
+            return;
+        };
+        self.preview_project.store(project.id, Ordering::SeqCst);
+        let context = self
+            .preview
+            .as_ref()
+            .and_then(|hub| hub.state(ViewerPanel::Files, project.id))
+            .and_then(|state| dozer_panel_preview::build_preview_context(&state.pane, now_ms()));
+        if let Some(bridge) = &self.preview_bridge {
+            bridge.push(project.id, context, if immediate { 0 } else { 250 });
+        }
+    }
+
+    /// 排空库排出的"该推上下文了"标记。
+    fn sync_preview_context_from_hub(&mut self) {
+        let push = self
+            .preview
+            .as_mut()
+            .and_then(|hub| hub.take_context_push());
+        if let Some(immediate) = push {
+            self.sync_preview_context(immediate);
+        }
+    }
+
+    /// 启动 Agent 预览命令轮询(幂等;在 `diggerd` 就绪后调用)。
+    fn start_preview_poller(&mut self) {
+        let Some(bridge) = self.preview_bridge.clone() else {
+            return;
+        };
+        let tx = self.preview_cmds_tx.clone();
+        bridge.spawn_poller(
+            Arc::clone(&self.preview_project),
+            Arc::clone(&self.preview_poller_started),
+            move |pid, commands| {
+                let _ = tx.send((pid, commands));
+            },
+        );
+    }
+
+    /// 取走预览命令回投接收端(只能一次,`boot` 接成 iced 流)。
+    pub fn take_preview_cmds_receiver(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<PreviewCommands>> {
+        self.preview_cmds_rx
+            .lock()
+            .ok()
+            .and_then(|mut rx| rx.take())
+    }
+
     /// D3:在右半边的预览里打开一个路径(文件树双击 / Project 文档链接)。
     /// 没有当前项目时什么都不做(预览本来就按项目存)。
     fn preview_open(&mut self, panel: ViewerPanel, path: &Path) -> Task<Msg> {
@@ -1283,6 +1386,8 @@ impl ProductShell {
         if let Some(preview) = self.preview.as_mut() {
             preview.open(panel, &project, path.to_path_buf(), None);
         }
+        self.sync_preview_context_from_hub();
+        self.sync_preview_context(true);
         self.sync_native()
     }
 
@@ -1548,6 +1653,13 @@ fn publish_panes(panes: &bytehost_desktop::PaneStore) {
 }
 
 /// 每个已注册面板此刻的可见性(下标与 [`shell::all_panels`] 对齐)。
+fn preview_panel_visible(flags: &[bool]) -> bool {
+    [shell::files_id(), shell::project_id()]
+        .iter()
+        .filter_map(|id| shell::all_panels().iter().position(|p| p == id))
+        .any(|i| flags.get(i).copied().unwrap_or(false))
+}
+
 fn visible_panels(shell: &ProductShell) -> Vec<bool> {
     shell::all_panels()
         .iter()
@@ -1590,13 +1702,20 @@ impl Product<Msg> for ProductShell {
             }
             Msg::Shell(m) => self.on_shell(m),
             Msg::AgentShell(m) => {
+                let was_ready = self.agent.shell.status == crate::adapters::agent::Status::Ready;
                 let task = self
                     .agent
                     .shell
                     .update(m, daemon_ensure_shell_task)
                     .map(Msg::AgentShell);
-                // 守护进程刚就绪:Agent 面板若已可见,补一次懒启动(启动时它可能
-                // 先于 `Ensured` 变成可见,那一次什么都没启动)。
+                // 守护进程刚就绪:补推一次当前上下文(启动早期那次可能连不上),
+                // 并启动命令轮询。
+                if !was_ready && self.agent.shell.status == crate::adapters::agent::Status::Ready {
+                    self.sync_preview_context(true);
+                    self.start_preview_poller();
+                }
+                // Agent 面板若已可见,补一次懒启动(启动时它可能先于 `Ensured`
+                // 变成可见,那一次什么都没启动)。
                 let mut enter = Task::none();
                 if self.agent.shell.status == crate::adapters::agent::Status::Ready
                     && self.panel_visible(&shell::agent_id())
@@ -1948,6 +2067,37 @@ impl Product<Msg> for ProductShell {
                     Task::none()
                 }
             },
+            Msg::PreviewCommandsFetched((pid, commands)) => {
+                let Some(bridge) = self.preview_bridge.clone() else {
+                    return Task::none();
+                };
+                let mut applied = false;
+                for cmd in commands {
+                    let outcome = if self.projects.current_project_id() == Some(pid) {
+                        self.preview
+                            .as_mut()
+                            .map(|hub| hub.apply_preview_command(pid, &cmd))
+                            .unwrap_or_else(|| dozer_model::PreviewCommandOutcome::NotFound {
+                                request_id: cmd.request_id.clone(),
+                                detail: "没有预览状态".into(),
+                            })
+                    } else {
+                        // Review Focus 1:非当前项目立刻回 NotFound,不挂起。
+                        dozer_model::PreviewCommandOutcome::NotFound {
+                            request_id: cmd.request_id.clone(),
+                            detail: "项目不在前台".into(),
+                        }
+                    };
+                    bridge.report_outcome(outcome);
+                    applied = true;
+                }
+                self.sync_preview_context_from_hub();
+                if applied {
+                    self.sync_native()
+                } else {
+                    Task::none()
+                }
+            }
             Msg::Preview(panel, project_id, epoch, message) => {
                 // 按**发起时**的项目路由;项目已切走 / 删除时 `dispatch` 整条丢弃。
                 // 代次对不上(切走又切回)也在这一层拒掉,免得同号页签被误伤。
@@ -1958,6 +2108,7 @@ impl Product<Msg> for ProductShell {
                 {
                     preview.dispatch(panel, project_id, message);
                 }
+                self.sync_preview_context_from_hub();
                 // 页签状态变了:原生页面的清单 / 编辑命令要在同一帧里跟上。
                 self.sync_native()
             }
@@ -2396,6 +2547,20 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         preview.set_current_project(shell.projects.current_project());
         preview.finish_startup();
     }
+    // S6e-3a:同一个 diggerd socket 的预览桥;启动先推一次当前上下文。
+    shell.preview_bridge = Some(crate::adapters::preview_bridge::PreviewBridge::new(
+        dozer_client::Client::new(digger_paths::product().socket_path()),
+        tokio::runtime::Handle::current(),
+    ));
+    shell.sync_preview_context(true);
+    let preview_cmds_task = match shell.take_preview_cmds_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|(pid, cmds)| (Msg::PreviewCommandsFetched((pid, cmds)), rx))
+        })),
+        None => Task::none(),
+    };
     // 应用面板后台结果回流:一次性流出接收端,持续到进程结束(与窗口尺寸任务并行)。
     use iced::futures::StreamExt;
     let reply_task = match crate::apps::take_reply_receiver(&shell.apps.reply_receiver()) {
@@ -2502,6 +2667,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             lifecycle_task,
             daemon_task,
             agent_task,
+            preview_cmds_task,
             Task::batch(initial),
         ]),
     )

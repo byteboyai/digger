@@ -61,6 +61,9 @@ pub struct PreviewHub {
     /// `Msg::Preview`。按面板分流。
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<Msg>>,
+    /// 库排出的 `ContextChanged` 是否应立即推送(S6e-3a)。`Some(true)` 立即,
+    /// `Some(false)` 250ms 防抖;由产品排空后调 `sync_preview_context`。
+    context_push: Option<bool>,
 }
 
 impl PreviewHub {
@@ -91,6 +94,7 @@ impl PreviewHub {
             handle: None,
             tx,
             rx: Some(rx),
+            context_push: None,
         }
     }
 
@@ -269,6 +273,82 @@ impl PreviewHub {
         with_pool_ids(scripts, panel)
     }
 
+    /// 取走库排出的"该推上下文了"标记:`Some(true)` 立即、`Some(false)` 防抖。
+    pub fn take_context_push(&mut self) -> Option<bool> {
+        self.context_push.take()
+    }
+
+    /// 应用一条 Agent 下行的预览命令(S6e-3a Task 6)。
+    ///
+    /// 目标项目不是当前前台 → `NotFound`;路径/页签找不到 → `NotFound`;
+    /// `Suspended` 壳先物化再执行;其余交给库的 `apply_preview_command`。
+    pub fn apply_preview_command(
+        &mut self,
+        project_id: i64,
+        cmd: &dozer_model::PreviewCommand,
+    ) -> dozer_model::PreviewCommandOutcome {
+        use dozer_model::PreviewCommandOutcome as O;
+        let rid = cmd.request_id.clone();
+        if self.project_id != Some(project_id) {
+            return O::NotFound {
+                request_id: rid,
+                detail: "项目不在前台".into(),
+            };
+        }
+        let empty = dozer_panel_preview::PreviewPane::default();
+        let files = self.files.as_ref().map(|s| &s.pane).unwrap_or(&empty);
+        let project = self.project.as_ref().map(|s| &s.pane).unwrap_or(&empty);
+        let Some((panel, tab_id)) =
+            dozer_panel_preview::resolve_command_target(files, project, cmd)
+        else {
+            return O::NotFound {
+                request_id: rid,
+                detail: "找不到该路径对应的预览 tab".into(),
+            };
+        };
+        let caps = digger_capabilities();
+        let width = |title: &str| crate::adapters::tab_chrome::tab_display_width(title);
+        let recovery_dir = self.persistence.recovery_dir();
+        let failures_path = self.persistence.failures_path();
+        let safe_startup = self.safe_startup;
+        let locale = self.locale;
+        let project_root = self.project_root.clone();
+        let avail_px = match panel {
+            ViewerPanel::Project => self.tab_bar_px.1,
+            _ => self.tab_bar_px.0,
+        };
+        let live = self.host.live_ids();
+        let mut fx = Vec::new();
+        let outcome = {
+            let ctx = UpdateCtx {
+                panel,
+                project_id: Some(project_id),
+                project_root: project_root.as_deref(),
+                caps: &caps,
+                locale,
+                tab_bar_avail_px: avail_px,
+                tab_display_width: &width,
+                active_webview_pool_id: None,
+                behavior: behavior_of(panel),
+                recovery_dir: Some(&recovery_dir),
+                failures_path,
+                safe_startup,
+            };
+            let state = self.panel_state_mut(panel);
+            if state.pane.is_pending_load(tab_id) {
+                dozer_panel_preview::load_preview_tab(&mut state.pane, &ctx, tab_id, &mut fx);
+            }
+            let outcome = state.pane.apply_preview_command(tab_id, cmd);
+            let drained = state.pane.take_host_scripts(&live, project_id, panel);
+            for (webview_id, script) in drained {
+                self.host.push_script(webview_id, script);
+            }
+            outcome
+        };
+        self.execute(panel, project_id, fx);
+        outcome
+    }
+
     fn state_mut(&mut self, panel: ViewerPanel) -> Option<&mut PreviewPanelState> {
         match panel {
             ViewerPanel::Project => self.project.as_mut(),
@@ -434,11 +514,14 @@ impl PreviewHub {
                 &crate::adapters::files::system_opener(),
                 &path,
             ),
-            // Digger 一期不做:MCP 上下文推送(没有 agent 侧上下文)、页签拖拽换位
-            // 与悬停记录(无 hover 动画,见 D2)、预览内选区右键菜单(D3 只留文件树 /
-            // Project 链接的右键)。
-            Effect::ContextChanged { .. }
-            | Effect::TabSelected { .. }
+            // S6e-3a:库用 `ContextChanged { immediate }` 告诉产品何时推上下文;
+            // 只记一个待办标记,由 `product.rs` 排空后调 `sync_preview_context`。
+            Effect::ContextChanged { immediate } => {
+                self.context_push = Some(self.context_push.unwrap_or(false) || immediate);
+            }
+            // Digger 一期不做:页签拖拽换位与悬停记录(无 hover 动画,见 D2)、
+            // 预览内选区右键菜单(D3 只留文件树 / Project 链接的右键)。
+            Effect::TabSelected { .. }
             | Effect::TabClosed { .. }
             | Effect::PathOpened(_)
             | Effect::SelectionContextMenu { .. } => {}
@@ -1383,6 +1466,278 @@ mod tests {
             !t2.iter()
                 .any(|t| matches!(&t.kind, TabKind::File(p) if p.ends_with("a.py"))),
             "project 1's tab never leaks into project 2"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn command(
+        project_id: i64,
+        target: dozer_model::PreviewCommandTarget,
+        action: dozer_model::PreviewCommandAction,
+        expected_revision: Option<u64>,
+    ) -> dozer_model::PreviewCommand {
+        dozer_model::PreviewCommand {
+            request_id: "r1".into(),
+            project_id,
+            target,
+            action,
+            expected_revision,
+        }
+    }
+
+    fn path_target(path: &Path) -> dozer_model::PreviewCommandTarget {
+        dozer_model::PreviewCommandTarget::Path {
+            path: path.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Task 6:命令只对前台项目生效;非当前项目立即 NotFound(Review Focus 1)。
+    #[test]
+    fn a_command_for_a_non_current_project_is_not_found() {
+        let dir = std::env::temp_dir().join(format!("digger-cmd-pid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        let out = hub.apply_preview_command(
+            2,
+            &command(
+                2,
+                path_target(Path::new("/tmp/a.rs")),
+                dozer_model::PreviewCommandAction::Reveal { line: 1, column: 1 },
+                None,
+            ),
+        );
+        assert!(matches!(
+            out,
+            dozer_model::PreviewCommandOutcome::NotFound { .. }
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Task 6:路径没有对应页签 → NotFound,不隐式打开文件。
+    #[test]
+    fn a_command_for_an_unknown_path_is_not_found() {
+        let dir = std::env::temp_dir().join(format!("digger-cmd-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, write(&dir, "a.rs"), None);
+        let out = hub.apply_preview_command(
+            1,
+            &command(
+                1,
+                path_target(Path::new("/tmp/not-open.rs")),
+                dozer_model::PreviewCommandAction::Reveal { line: 1, column: 1 },
+                None,
+            ),
+        );
+        assert!(matches!(
+            out,
+            dozer_model::PreviewCommandOutcome::NotFound { .. }
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Task 6:同一个路径在 Files 与 Project 都打开时,Path 目标优先 Files。
+    #[test]
+    fn a_path_open_in_both_panels_is_executed_in_files() {
+        let dir = std::env::temp_dir().join(format!("digger-cmd-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        let shared = write(&dir, "same.rs");
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, shared.clone(), None);
+        hub.open(ViewerPanel::Project, &p1, shared.clone(), None);
+        let files_id = hub
+            .files
+            .as_ref()
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .find(|t| matches!(&t.kind, TabKind::File(p) if p == &shared))
+            .unwrap()
+            .id;
+        let project_id = hub
+            .project
+            .as_ref()
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .find(|t| matches!(&t.kind, TabKind::File(p) if p == &shared))
+            .unwrap()
+            .id;
+        let out = hub.apply_preview_command(
+            1,
+            &command(
+                1,
+                path_target(&shared),
+                dozer_model::PreviewCommandAction::Reveal { line: 2, column: 1 },
+                None,
+            ),
+        );
+        assert!(matches!(
+            out,
+            dozer_model::PreviewCommandOutcome::Accepted { .. }
+        ));
+        let ids: std::collections::HashSet<usize> = (0..64).collect();
+        let files_cmds = hub
+            .files
+            .as_mut()
+            .unwrap()
+            .pane
+            .take_pending_editor_commands_for(&ids, 1, ViewerPanel::Files);
+        assert!(
+            files_cmds.iter().any(|(id, _)| *id == files_id),
+            "Files 页签应收到导航命令"
+        );
+        let project_cmds = hub
+            .project
+            .as_mut()
+            .unwrap()
+            .pane
+            .take_pending_editor_commands_for(&ids, 1, ViewerPanel::Project);
+        assert!(
+            !project_cmds.iter().any(|(id, _)| *id == project_id),
+            "Project 同路径页签不应被选中"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Task 6:Suspended 壳先物化,再应用命令。
+    #[test]
+    fn a_command_for_a_suspended_tab_materializes_it_before_executing() {
+        let dir = std::env::temp_dir().join(format!("digger-cmd-susp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write(&dir, "restored.rs");
+        let mut hub = hub(&dir);
+        hub.persistence
+            .save(
+                1,
+                &dozer_panel_preview::PreviewState {
+                    version: dozer_panel_preview::PREVIEW_STATE_VERSION,
+                    tabs: vec![dozer_panel_preview::PersistedPreviewTab {
+                        path: path.clone(),
+                        active: true,
+                        ..Default::default()
+                    }],
+                    active_path: Some(path.clone()),
+                    paths: Vec::new(),
+                },
+            )
+            .unwrap();
+        let p1 = project(1, &dir);
+        // safe_startup 下只恢复壳,不自动物化。
+        hub.set_current_project(Some(&p1));
+        let id = hub
+            .files
+            .as_ref()
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .find(|t| matches!(&t.kind, TabKind::File(p) if p == &path))
+            .unwrap()
+            .id;
+        assert!(hub.files.as_ref().unwrap().pane.is_pending_load(id));
+        let out = hub.apply_preview_command(
+            1,
+            &command(
+                1,
+                path_target(&path),
+                dozer_model::PreviewCommandAction::Reveal { line: 1, column: 1 },
+                None,
+            ),
+        );
+        assert!(matches!(
+            out,
+            dozer_model::PreviewCommandOutcome::Accepted { .. }
+        ));
+        assert!(
+            !hub.files.as_ref().unwrap().pane.is_pending_load(id),
+            "命令到达后该壳应已进入物化流程"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Task 6:replace 的 expected_revision 不匹配时由库返回 StaleRevision。
+    #[test]
+    fn a_stale_revision_edit_is_rejected_with_stale_revision() {
+        let dir = std::env::temp_dir().join(format!("digger-cmd-rev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write(&dir, "edit.rs");
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, path.clone(), None);
+        let out = hub.apply_preview_command(
+            1,
+            &command(
+                1,
+                path_target(&path),
+                dozer_model::PreviewCommandAction::Replace {
+                    start_line: 1,
+                    start_column: 1,
+                    end_line: 1,
+                    end_column: 2,
+                    text: "x".into(),
+                },
+                Some(99),
+            ),
+        );
+        assert!(matches!(
+            out,
+            dozer_model::PreviewCommandOutcome::StaleRevision { .. }
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Task 5:关掉最后一个文本页签时,库排出**立即**推送,且上下文为 `None`。
+    #[test]
+    fn closing_the_last_text_tab_flags_an_immediate_none_context() {
+        let dir = std::env::temp_dir().join(format!("digger-cmd-close-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write(&dir, "only.rs");
+        let mut hub = hub(&dir);
+        let p1 = project(1, &dir);
+        hub.set_current_project(Some(&p1));
+        hub.open(ViewerPanel::Files, &p1, path.clone(), None);
+        let _ = hub.take_context_push(); // 丢掉 open 自己排的那次
+        let id = hub
+            .files
+            .as_ref()
+            .unwrap()
+            .pane
+            .tabs()
+            .iter()
+            .find(|t| matches!(&t.kind, TabKind::File(p) if p == &path))
+            .unwrap()
+            .id;
+        hub.dispatch(ViewerPanel::Files, 1, Message::CloseTab(id));
+        assert_eq!(
+            hub.take_context_push(),
+            Some(true),
+            "关闭页签必须立即推,不能等 250ms 防抖"
+        );
+        let state = hub.state(ViewerPanel::Files, 1).unwrap();
+        eprintln!(
+            "CLOSE_CTX={:?} tabs={}",
+            dozer_panel_preview::build_preview_context(&state.pane, 1),
+            state.pane.tabs().len()
+        );
+        assert!(
+            dozer_panel_preview::build_preview_context(&state.pane, 1).is_none(),
+            "没有活动文本页签时上下文必须是 None"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

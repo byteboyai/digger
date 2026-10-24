@@ -23,6 +23,7 @@ pub mod usage_native;
 pub mod preview_native;
 
 pub mod preview;
+pub mod preview_bridge;
 
 /// 预览页签栏部件(页签 / 溢出入口 / 下拉 / 模式按钮)。
 pub mod tab_chrome;
