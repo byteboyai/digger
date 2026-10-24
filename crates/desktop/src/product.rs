@@ -1126,6 +1126,19 @@ impl ProductShell {
         }
     }
 
+    /// 回合结束:只在 Project 面板可见、且是当前项目、且状态已存在时刷新记忆。
+    fn on_agent_turn_ended(&mut self, pid: i64) {
+        if !self.panel_visible(&shell::project_id())
+            || self.projects.current_project_id() != Some(pid)
+            || !self.project.has_state(pid)
+        {
+            return;
+        }
+        if let Some(project) = self.projects.project_by_id(pid) {
+            self.project.refresh_memories(&project);
+        }
+    }
+
     /// 当前项目的 Agent 终端块矩形(窗口坐标)。Agent 面板不是该侧选中面板时
     /// 没有可测量的配对几何,返回 `None`(沿用上次网格,不发错尺寸)。
     fn current_agent_block(&self) -> Option<Rect> {
@@ -2022,6 +2035,15 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
         HostMessage::Surface(event) => route_lifecycle(shell, event),
         HostMessage::Product(m) => Product::update(shell, HostMessage::Product(m)),
     };
+    // Agent 回合结束:Project 面板在眼前且是当前项目时刷新记忆列表。
+    for (pid, event) in shell.agent.drain_host_events() {
+        if matches!(
+            event,
+            dozer_panel_agent::adapter::AgentHostEvent::TurnEnded { .. }
+        ) {
+            shell.on_agent_turn_ended(pid);
+        }
+    }
     // 退出分支自己将销毁与 shutdown 串行；其他更新后同步内容与几何。
     let native = shell.sync_native();
     shell
@@ -2393,6 +2415,215 @@ mod tests {
     use super::*;
     use bytehost_chrome::Side;
     use bytehost_desktop::SurfaceEvent;
+
+    use dozer_services::{MemoryService, ProjectService};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default, Clone)]
+    struct MemoryCalls(Arc<AtomicUsize>);
+
+    struct FakeMemory(MemoryCalls);
+
+    fn fake_unavailable() -> dozer_services::ServiceError {
+        dozer_services::ServiceError::new(dozer_services::ServiceErrorKind::Unavailable, "test")
+    }
+
+    impl MemoryService for FakeMemory {
+        fn list_memories(
+            &self,
+            _: i64,
+        ) -> dozer_services::BoxFuture<
+            '_,
+            Result<Vec<dozer_model::MemoryInfo>, dozer_services::ServiceError>,
+        > {
+            self.0.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn get_memory(
+            &self,
+            _: i64,
+            _: i64,
+        ) -> dozer_services::BoxFuture<
+            '_,
+            Result<dozer_model::MemoryDetail, dozer_services::ServiceError>,
+        > {
+            Box::pin(async { Err(fake_unavailable()) })
+        }
+        fn write_memory(
+            &self,
+            _: i64,
+            _: String,
+            _: String,
+            _: String,
+            _: String,
+            _: String,
+        ) -> dozer_services::BoxFuture<
+            '_,
+            Result<dozer_model::MemoryDetail, dozer_services::ServiceError>,
+        > {
+            Box::pin(async { Err(fake_unavailable()) })
+        }
+        fn delete_memory(
+            &self,
+            _: i64,
+            _: i64,
+            _: String,
+        ) -> dozer_services::BoxFuture<'_, Result<(), dozer_services::ServiceError>> {
+            Box::pin(async { Err(fake_unavailable()) })
+        }
+    }
+
+    struct FakeProjects;
+
+    impl ProjectService for FakeProjects {
+        fn rename_project(
+            &self,
+            _: i64,
+            _: String,
+        ) -> dozer_services::BoxFuture<
+            '_,
+            Result<Option<dozer_model::ProjectInfo>, dozer_services::ServiceError>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+        fn remove_project(
+            &self,
+            _: i64,
+        ) -> dozer_services::BoxFuture<'_, Result<(), dozer_services::ServiceError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn open_project(
+            &self,
+            _: String,
+        ) -> dozer_services::BoxFuture<
+            '_,
+            Result<Option<dozer_model::ProjectInfo>, dozer_services::ServiceError>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+        fn list_projects(
+            &self,
+        ) -> dozer_services::BoxFuture<
+            '_,
+            Result<Vec<dozer_model::ProjectInfo>, dozer_services::ServiceError>,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    fn info(id: i64) -> dozer_model::ProjectInfo {
+        dozer_model::ProjectInfo {
+            id,
+            path: format!("/tmp/digger-s6e2-{id}"),
+            name: format!("p{id}"),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        }
+    }
+
+    fn fake_host(calls: MemoryCalls) -> digger_store::ProjectHost {
+        digger_store::ProjectHost {
+            projects: Arc::new(FakeProjects),
+            memory: Arc::new(FakeMemory(calls)),
+        }
+    }
+
+    /// 壳 + 假 Project 面板(已切入并建好项目状态),返回内存调用计数。
+    fn shell_with_fake_project(tag: &str, project_id: i64) -> (ProductShell, MemoryCalls) {
+        let calls = MemoryCalls::default();
+        let mut shell = fresh(tag);
+        let project = info(project_id);
+        shell.projects.seed_for_test(project.clone());
+        press(&mut shell, &shell::project_id());
+        shell.project =
+            crate::adapters::project::ProjectPanel::new(Some(&fake_host(calls.clone())));
+        shell
+            .project
+            .attach_handle(tokio::runtime::Handle::current());
+        shell.project.seed_state(&project);
+        (shell, calls)
+    }
+
+    #[tokio::test]
+    async fn turn_ended_refreshes_memories_only_when_the_project_panel_is_visible_and_the_project_is_current()
+     {
+        // 四个条件全满足 → 1 次。
+        let (mut shell, calls) = shell_with_fake_project("t4-all", 7);
+        shell.on_agent_turn_ended(7);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(calls.0.load(Ordering::SeqCst), 1);
+
+        // Project 面板不可见 → 不刷新。
+        press(&mut shell, &shell::markdown_id());
+        shell.on_agent_turn_ended(7);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(calls.0.load(Ordering::SeqCst), 1);
+
+        // 不是当前项目 → 不刷新。这里只改骨架选中态,不触发 on_visible 的切入刷新。
+        shell::update(
+            &mut shell.shell,
+            ShellMsg::PanelPress {
+                panel: shell::project_id(),
+            },
+        );
+        shell.projects.seed_for_test(info(8));
+        shell.on_agent_turn_ended(7);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(calls.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn turn_ended_for_a_background_project_does_not_refresh_the_current_one() {
+        let (mut shell, calls) = shell_with_fake_project("t4-bg", 7);
+        shell.projects.seed_for_test(info(8));
+        assert_eq!(shell.projects.current_project_id(), Some(8));
+        shell.on_agent_turn_ended(7);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(calls.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn turn_ended_without_a_project_panel_state_does_nothing() {
+        let (mut shell, calls) = shell_with_fake_project("t4-nostate", 7);
+        // 当前项目 9 已开页签但从未 seed 过面板状态。
+        shell.projects.seed_for_test(info(9));
+        assert_eq!(shell.projects.current_project_id(), Some(9));
+        assert!(!shell.project.has_state(9));
+        shell.on_agent_turn_ended(9);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(calls.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn state_changed_events_do_not_refresh() {
+        let (mut shell, calls) = shell_with_fake_project("t4-state", 7);
+        shell.agent.push_host_event_for_test(
+            7,
+            dozer_panel_agent::adapter::AgentHostEvent::StateChanged {
+                tab_id: 0,
+                agent: dozer_model::AgentKind::Claude,
+                state: dozer_model::AgentState::Running,
+                transcript_path: None,
+            },
+        );
+        let task = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        drop(task);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(calls.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn repeated_turn_ended_events_do_not_stack_refreshes() {
+        let (mut shell, calls) = shell_with_fake_project("t4-repeat", 7);
+        for _ in 0..5 {
+            shell.on_agent_turn_ended(7);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let n = calls.0.load(Ordering::SeqCst);
+        assert!((1..=5).contains(&n), "刷新请求不应无限堆叠: {n}");
+    }
 
     /// N1b:预览展示上下文不能每帧泄漏。
     ///

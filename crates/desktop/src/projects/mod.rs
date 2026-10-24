@@ -178,6 +178,13 @@ impl ProjectsState {
         self.current_project().map(|p| p.id)
     }
 
+    /// 测试:把一条项目塞进注册表并打开/激活它的页签。
+    #[cfg(test)]
+    pub fn seed_for_test(&mut self, info: ProjectInfo) {
+        self.registry.push(info.clone());
+        self.tabs.open_tab(info.id);
+    }
+
     /// 已开页签的项目 id(顺序即页签顺序)。Agent 面板据此判断项目是否还开着。
     pub fn open_ids(&self) -> &[i64] {
         self.tabs.open()

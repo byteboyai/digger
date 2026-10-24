@@ -72,6 +72,8 @@ dozer-core = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-2
 dozerd = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-23b" }
 dozer-hook = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-23b" }
 dozer-client = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-23b" }
+# S6e:Agent 的 MCP 服务库(按产品裁剪工具集;Digger 只开记忆三件)。
+dozer-mcp = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-23b" }
 # rusqlite 版本必须与 Dozer 一致(0.32.1),否则 Cargo.lock 出现两份。
 rusqlite = { version = "0.32", features = ["bundled"] }
 
