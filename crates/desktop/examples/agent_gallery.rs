@@ -413,6 +413,7 @@ fn main() -> iced::Result {
         gallery_view,
     )
     .font(fonts::JETBRAINS_MONO)
+    .font(dozer_panel_term::symbols::SYMBOLS_FONT_DATA)
     .title(move |_: &Gallery| format!("Agent gallery · {state_name}"))
     .window_size(size)
     .subscription(|_: &Gallery| Subscription::none())

@@ -28,6 +28,7 @@ fn main() -> iced::Result {
     fonts::sanitize_font_db();
     iced::application(boot, update, view)
         .font(fonts::JETBRAINS_MONO)
+        .font(dozer_panel_term::symbols::SYMBOLS_FONT_DATA)
         .title("Digger")
         .window(iced::window::Settings {
             exit_on_close_request: false,
