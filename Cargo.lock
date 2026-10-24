@@ -455,7 +455,7 @@ dependencies = [
 [[package]]
 name = "bytehost-apps"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.11#225d7ed1e61e95dbc87574a18bc149f8c863b758"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.12#8b32418ac3c9e950c95c411e43402b903da996de"
 dependencies = [
  "bytes",
  "flate2",
@@ -477,7 +477,7 @@ dependencies = [
 [[package]]
 name = "bytehost-chrome"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.11#225d7ed1e61e95dbc87574a18bc149f8c863b758"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.12#8b32418ac3c9e950c95c411e43402b903da996de"
 dependencies = [
  "block2 0.6.2",
  "bytehost-core",
@@ -496,7 +496,7 @@ dependencies = [
 [[package]]
 name = "bytehost-client"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.11#225d7ed1e61e95dbc87574a18bc149f8c863b758"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.12#8b32418ac3c9e950c95c411e43402b903da996de"
 dependencies = [
  "bytehost-apps",
  "tokio",
@@ -506,7 +506,7 @@ dependencies = [
 [[package]]
 name = "bytehost-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.11#225d7ed1e61e95dbc87574a18bc149f8c863b758"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.12#8b32418ac3c9e950c95c411e43402b903da996de"
 dependencies = [
  "serde",
  "serde_json",
@@ -515,7 +515,7 @@ dependencies = [
 [[package]]
 name = "bytehost-desktop"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.11#225d7ed1e61e95dbc87574a18bc149f8c863b758"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.12#8b32418ac3c9e950c95c411e43402b903da996de"
 dependencies = [
  "bytehost-core",
  "bytehost-webview",
@@ -533,7 +533,7 @@ dependencies = [
 [[package]]
 name = "bytehost-panel"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.11#225d7ed1e61e95dbc87574a18bc149f8c863b758"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.12#8b32418ac3c9e950c95c411e43402b903da996de"
 dependencies = [
  "bytehost-apps",
  "bytehost-client",
@@ -542,7 +542,7 @@ dependencies = [
 [[package]]
 name = "bytehost-webview"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.11#225d7ed1e61e95dbc87574a18bc149f8c863b758"
+source = "git+https://github.com/byteboyai/bytehost?tag=v0.4.12#8b32418ac3c9e950c95c411e43402b903da996de"
 dependencies = [
  "bytehost-apps",
  "serde",
@@ -591,14 +591,23 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "byteui"
-version = "0.4.5"
-source = "git+https://github.com/byteboyai/byteui?tag=v0.4.5#18980577f4d434ef887bda80278b13b342bcf282"
+version = "0.4.6"
+source = "git+https://github.com/byteboyai/byteui?tag=v0.4.6#51ca9aa5d3290155cdd0b2e72884601af2603651"
 dependencies = [
  "iced_futures",
  "iced_renderer",
  "iced_widget",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "raw-window-handle",
+ "resvg",
  "serde",
  "serde_json",
+ "tiny-skia",
+ "tracing",
+ "usvg",
 ]
 
 [[package]]
@@ -1268,7 +1277,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dozer-client"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1284,7 +1293,7 @@ dependencies = [
 [[package]]
 name = "dozer-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "anyhow",
  "bytehost-apps",
@@ -1300,7 +1309,7 @@ dependencies = [
 [[package]]
 name = "dozer-hook"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "dozer-core",
  "libc",
@@ -1310,7 +1319,7 @@ dependencies = [
 [[package]]
 name = "dozer-i18n"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "dozer-model",
  "serde",
@@ -1320,7 +1329,7 @@ dependencies = [
 [[package]]
 name = "dozer-mcp"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "anyhow",
  "dozer-client",
@@ -1336,7 +1345,7 @@ dependencies = [
 [[package]]
 name = "dozer-model"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "serde",
 ]
@@ -1344,7 +1353,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-agent"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "bytegit",
  "byteui",
@@ -1363,7 +1372,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-files"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "bytegit",
  "bytehost-core",
@@ -1384,7 +1393,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-host"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "bytehost-core",
  "dozer-model",
@@ -1395,7 +1404,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-preview"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "byteui",
  "dozer-i18n",
@@ -1413,7 +1422,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-project"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "bytegit",
  "bytehost-core",
@@ -1435,7 +1444,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-term"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "alacritty_terminal",
  "byteui",
@@ -1447,7 +1456,7 @@ dependencies = [
 [[package]]
 name = "dozer-panel-usage"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "bytehost-core",
  "bytehost-desktop",
@@ -1465,7 +1474,7 @@ dependencies = [
 [[package]]
 name = "dozer-preview-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "dozer-i18n",
  "dozer-model",
@@ -1477,7 +1486,7 @@ dependencies = [
 [[package]]
 name = "dozer-services"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "dozer-model",
  "tokio",
@@ -1486,7 +1495,7 @@ dependencies = [
 [[package]]
 name = "dozer-store-project"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "anyhow",
  "bytegit",
@@ -1498,7 +1507,7 @@ dependencies = [
 [[package]]
 name = "dozerd"
 version = "0.3.3"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24c#b082d13f7144a0757ed915d1e2227342985b1672"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-24e#eb702ec4d115259c0b7100867fd8e3baab1ca1f6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3702,7 +3711,7 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.3",
  "objc2-foundation 0.2.2",
- "objc2-metal",
+ "objc2-metal 0.2.2",
 ]
 
 [[package]]
@@ -3829,6 +3838,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-metal"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-quartz-core"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3838,7 +3858,7 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.3",
  "objc2-foundation 0.2.2",
- "objc2-metal",
+ "objc2-metal 0.2.2",
 ]
 
 [[package]]
@@ -3848,9 +3868,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96c1358452b371bf9f104e21ec536d37a650eb10f7ee379fff67d2e08d537f1f"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.5",
  "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
 ]
 
 [[package]]
