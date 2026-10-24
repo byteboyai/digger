@@ -126,6 +126,29 @@ pub enum KeyAction {
     None,
 }
 
+/// 光标在溢出按钮上时,菜单出现在按钮下方的偏移(逻辑像素,乘 UI scale 前)。
+pub(crate) const OVERFLOW_BELOW_CURSOR: f32 = 10.0;
+
+/// 溢出下拉的锚点。库视图拿不到按钮位置,发来 `(0,0)`:点击时光标就在按钮上,取光标并
+/// 略下移(与 Dozer 一致);已有位置的原样用;还没收到过光标事件(仍在原点)时退回按终端块
+/// 右上角估一个,再没有就用原值。
+pub(crate) fn overflow_menu_anchor(
+    at: (f32, f32),
+    cursor: iced::Point,
+    terminal_rect: Option<iced::Rectangle>,
+    scale: f32,
+) -> (f32, f32) {
+    if at != (0.0, 0.0) {
+        return at;
+    }
+    if cursor != iced::Point::ORIGIN {
+        return (cursor.x, cursor.y + OVERFLOW_BELOW_CURSOR * scale);
+    }
+    terminal_rect
+        .map(|rect| (rect.x + rect.width - 240.0 * scale, rect.y + 40.0 * scale))
+        .unwrap_or(at)
+}
+
 /// 键位 → 动作。`ime_composing` 为真时一律不送终端:macOS 输入法组字期间
 /// iced 仍可能发 `KeyPressed`,不抑制就会出现拼音字母同时进终端(真机风险 1)。
 pub fn decide_key(
@@ -473,15 +496,8 @@ impl AgentPanel {
         }
         self.drain_hook_warnings();
         if let Some(at) = overflow_anchor {
-            // 库视图传的锚点是 `(0,0)`(拿不到按钮位置):按终端块右上角估一个。
             let scale = byteui::theme::icon_size::scale();
-            let anchor = if at == (0.0, 0.0) {
-                self.terminal_rect
-                    .map(|rect| (rect.x + rect.width - 240.0 * scale, rect.y + 40.0 * scale))
-                    .unwrap_or(at)
-            } else {
-                at
-            };
+            let anchor = overflow_menu_anchor(at, self.cursor, self.terminal_rect, scale);
             self.open_overflow(pid, anchor);
         } else if self.overflow.is_some() {
             self.overflow = None;
@@ -1851,6 +1867,41 @@ mod tests {
             AgentHover::TabItem(1),
             start + Duration::from_millis(1500) + TOOLTIP_DELAY
         ));
+    }
+
+    #[test]
+    fn the_overflow_menu_opens_at_the_cursor_not_at_the_terminal_corner() {
+        // 库视图拿不到按钮位置,发来 `(0,0)`。点击时光标就在溢出按钮上,菜单应出现在那里;
+        // 原先按"终端块右上角"估位置,离页签条最左边的按钮很远,还压在终端文字上。
+        let anchor = overflow_menu_anchor(
+            (0.0, 0.0),
+            iced::Point::new(43.0, 55.0),
+            Some(iced::Rectangle::new(
+                iced::Point::new(10.0, 47.0),
+                iced::Size::new(900.0, 800.0),
+            )),
+            1.0,
+        );
+        assert_eq!(anchor, (43.0, 55.0 + OVERFLOW_BELOW_CURSOR));
+    }
+
+    #[test]
+    fn an_explicit_overflow_anchor_is_kept() {
+        let anchor = overflow_menu_anchor((100.0, 200.0), iced::Point::new(1.0, 1.0), None, 1.0);
+        assert_eq!(anchor, (100.0, 200.0));
+    }
+
+    #[test]
+    fn without_a_cursor_the_terminal_corner_is_the_last_resort() {
+        // 光标还在原点(没收到过光标事件):退回终端块右上角估算,再没有就用原值。
+        let rect =
+            iced::Rectangle::new(iced::Point::new(10.0, 47.0), iced::Size::new(900.0, 800.0));
+        let estimate = overflow_menu_anchor((0.0, 0.0), iced::Point::ORIGIN, Some(rect), 1.0);
+        assert_eq!(estimate, (10.0 + 900.0 - 240.0, 47.0 + 40.0));
+        assert_eq!(
+            overflow_menu_anchor((0.0, 0.0), iced::Point::ORIGIN, None, 1.0),
+            (0.0, 0.0)
+        );
     }
 
     #[test]
