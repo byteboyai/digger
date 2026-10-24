@@ -658,6 +658,29 @@ impl AgentPanel {
         self.hover.map(|(_, entered)| entered + TOOLTIP_DELAY)
     }
 
+    /// 溢出下拉的条目:`(下标, 标题, 是否选中)`。项目没有状态时为空。
+    pub fn overflow_entries(&self, pid: i64) -> Vec<(usize, String, bool)> {
+        let Some(state) = self.states.get(&pid) else {
+            return Vec::new();
+        };
+        state
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| {
+                (
+                    idx,
+                    dozer_panel_agent::tabs::tab_title(
+                        tab.agent,
+                        tab.cwd.as_deref(),
+                        &tab.info.name,
+                    ),
+                    idx == state.active,
+                )
+            })
+            .collect()
+    }
+
     pub fn set_cursor(&mut self, point: iced::Point) {
         self.cursor = point;
     }
@@ -1833,6 +1856,31 @@ mod tests {
         panel.on_hover(AgentHover::TabOverflow, true, Instant::now());
         panel.clear_hover();
         assert_eq!(panel.hover_progress(AgentHover::TabOverflow), 0.0);
+    }
+
+    #[tokio::test]
+    async fn overflow_entries_list_every_session_tab_and_mark_the_active_one() {
+        let mut panel = AgentPanel::new();
+        let mut state = AgentPanelState::new();
+        insert_tab(&mut state, "a", AgentKind::Claude);
+        insert_tab(&mut state, "b", AgentKind::Unknown);
+        insert_tab(&mut state, "c", AgentKind::Unknown);
+        state.active = 1;
+        panel.states.insert(7, state);
+        let entries = panel.overflow_entries(7);
+        assert_eq!(
+            entries.iter().map(|(idx, _, _)| *idx).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .map(|(_, _, active)| *active)
+                .collect::<Vec<_>>(),
+            vec![false, true, false]
+        );
+        assert!(entries.iter().all(|(_, title, _)| !title.is_empty()));
+        assert!(panel.overflow_entries(99).is_empty(), "没有的项目为空");
     }
 
     #[test]

@@ -1446,6 +1446,31 @@ impl ProductShell {
 
     /// D3:在右半边的预览里打开一个路径(文件树双击 / Project 文档链接)。
     /// 没有当前项目时什么都不做(预览本来就按项目存)。
+    /// macOS:Agent 页签溢出下拉的原生菜单,出现在点击处(光标在溢出按钮上)。选中走
+    /// `SelectTabNoDrag`:从菜单选的不是"按下页签",不能武装拖拽——菜单吞掉了鼠标松开事件,
+    /// 拖拽状态会一直挂着,之后鼠标扫过页签就会被换位。
+    #[cfg(target_os = "macos")]
+    fn show_native_agent_overflow(&mut self, pid: i64) -> Task<Msg> {
+        if !self.projects.open_ids().contains(&pid) {
+            return Task::none();
+        }
+        let entries = self.agent.overflow_entries(pid);
+        if entries.is_empty() {
+            return Task::none();
+        }
+        let at = (self.last_cursor.x, self.last_cursor.y);
+        let items = crate::adapters::native_menu::tab_overflow_items(&entries, move |index| {
+            Msg::Agent(
+                pid,
+                dozer_panel_agent::update::Message::SelectTabNoDrag(index),
+            )
+        });
+        match byteui::native_menu::show(items, at) {
+            Some(message) => Task::done(message),
+            None => Task::none(),
+        }
+    }
+
     /// macOS:预览页签溢出下拉的原生菜单。菜单出现在点击处(光标在溢出按钮上)。
     #[cfg(target_os = "macos")]
     fn show_native_preview_overflow(
@@ -1850,6 +1875,11 @@ impl Product<Msg> for ProductShell {
                 Task::batch([task, enter])
             }
             Msg::Agent(pid, m) => {
+                // macOS:Agent 页签溢出下拉走原生菜单(与预览页签一致)。库发的锚点是 `(0, 0)`。
+                #[cfg(target_os = "macos")]
+                if matches!(m, dozer_panel_agent::update::Message::OverflowToggle { .. }) {
+                    return self.show_native_agent_overflow(pid);
+                }
                 let project = self.projects.project_by_id(pid);
                 // 项目页签已关:迟到的 Agent 消息一律丢弃。
                 let project = project.filter(|p| self.projects.open_ids().contains(&p.id));
@@ -3539,6 +3569,26 @@ mod tests {
         let arm = &rest[..end];
         assert!(arm.contains("TabOverflowToggle"));
         assert!(arm.contains("show_native_preview_overflow"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_agent_overflow_toggle_is_intercepted_into_a_native_menu_on_macos() {
+        // 与预览页签的溢出下拉同口径:macOS 一律走原生菜单。选中走 `SelectTabNoDrag`:从菜单选的
+        // 不是"按下页签",不能武装拖拽(菜单吞掉了鼠标松开事件,拖拽会一直挂着)。
+        let source = include_str!("product.rs");
+        let start = source
+            .find("Msg::Agent(pid, m) => {")
+            .expect("找不到 Msg::Agent 分支");
+        let rest = &source[start..];
+        let end = rest.find("Msg::AgentRestored").expect("找不到下一分支");
+        let arm = &rest[..end];
+        assert!(arm.contains("OverflowToggle"));
+        assert!(arm.contains("show_native_agent_overflow"));
+        let method = source
+            .find("fn show_native_agent_overflow")
+            .expect("找不到 show_native_agent_overflow");
+        assert!(source[method..].contains("SelectTabNoDrag"));
     }
 
     #[test]
