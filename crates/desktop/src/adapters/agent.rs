@@ -1504,13 +1504,16 @@ mod tests {
             Some(&project),
             (80, 24),
         );
-        for _ in 0..200 {
-            if !fake.get().creates.is_empty() {
+        // 警告由安装线程异步入队,和 `create` 谁先到没有保证:两个条件都等到再断言,
+        // 否则负载高时会偶发先查到空通知条。
+        for _ in 0..500 {
+            flush(&mut panel, 7, &project);
+            panel.drain_hook_warnings();
+            if !fake.get().creates.is_empty() && panel.notice.is_some() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        flush(&mut panel, 7, &project);
         assert_eq!(fake.get().creates.len(), 1, "安装失败不阻塞建会话");
         assert!(
             panel
