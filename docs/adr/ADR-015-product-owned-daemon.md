@@ -97,6 +97,14 @@ Each product's hook binary only manages its own entries:
 - 自动注册的克制(D7):每个 Digger 进程内每种 Agent 只执行一次 `digger-mcp install`;同名手写条目被保护(退出码 3)时不覆盖、只提示一次;缺二进制 / 超时 / 非零退出都不阻塞建会话。
 - 回合结束且 Project 面板可见时刷新记忆列表(只调库的 `on_activate`,不补 README / git / 磁盘占用)——这是相对 Dozer 的有意改进。
 
+## Agent 面板
+
+Agent 面板与会话也走这条产品自有守护进程:面板的会话服务接缝(`dozer_services::SessionService`)由 `Daemon::sessions()` 包装同一个 `dozer_client::Client`,连的是 `diggerd` 的 socket;hook 安装器 spawn 同目录的 `digger-hook install <agent>`,不碰 Dozer 的任何配置。
+
+- 关项目页签 = kill 该项目全部会话;关窗口只 detach(会话随 `diggerd` 存活);退出前等在途 kill(3 秒上限)。
+- `digger-hook` 与 `dozer-hook` 各自写自己产品的配置条目,同机并存不互相覆盖。
+- 页签部件与菜单弹层目前仍是 Digger 侧的临时复制(`agent_tabs.rs`、`menu_overlay.rs`),后续应迁入 byteui。
+
 ## Related ADRs
 
 - **ADR-014**: Agent Panel S6 Design (references this ADR for daemon architecture)

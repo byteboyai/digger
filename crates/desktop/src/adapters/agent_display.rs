@@ -16,7 +16,7 @@ use dozer_panel_agent::picker::{PickerEntry, picker_entries};
 use dozer_panel_agent::update::Message;
 use dozer_panel_term::style::TermStyle;
 use dozer_panel_term::view::TermEvent;
-use iced_widget::core::{Border, Length, Padding};
+use iced_widget::core::{Length, Padding};
 use iced_widget::{button, column, container, row, text, tooltip};
 
 use crate::adapters::agent::AgentPanel;
@@ -71,14 +71,14 @@ impl<'a> PanelDisplay<'a, Msg> for AgentDisplay<'a> {
     fn locale(&self) -> &str {
         self.locale
     }
-    fn hover_progress(&self, _slot: AgentHover) -> f32 {
-        0.0
+    fn hover_progress(&self, slot: AgentHover) -> f32 {
+        self.panel.hover_progress(slot)
     }
-    fn hover_message(&self, _slot: AgentHover, _hovered: bool) -> Msg {
-        Msg::Shell(ShellMsg::Noop)
+    fn hover_message(&self, slot: AgentHover, hovered: bool) -> Msg {
+        Msg::Agent(self.pid, Message::Hover(slot, hovered))
     }
-    fn hover_tooltip_ready(&self, _slot: AgentHover) -> bool {
-        false
+    fn hover_tooltip_ready(&self, slot: AgentHover) -> bool {
+        self.panel.hover_tooltip_ready(slot)
     }
     fn pane_style(&self, pane: AgentPane) -> PaneStyle {
         let tokens = byteui::theme::color::current();
@@ -146,76 +146,57 @@ impl<'a> PanelDisplay<'a, Msg> for AgentDisplay<'a> {
         byteui::layout::divider::horizontal()
     }
     fn panel_tab(&self, args: TabArgs<Msg>) -> El<'a, Msg> {
-        let colors = byteui::theme::color::current();
-        let close_sz = byteui::theme::geometry::tab_button_size();
-        let title_color = if args.active {
-            colors.cream
-        } else {
-            colors.dim
-        };
-        let label: El<'a, Msg> = row![
-            byteui::feedback::status::dot(args.dot),
-            text(args.title)
-                .size(byteui::theme::font::body())
-                .wrapping(iced_widget::core::text::Wrapping::None)
-                .color(title_color),
-        ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center)
-        .into();
-        let (select, close) =
-            byteui::interaction::tabs::tab_core(byteui::interaction::tabs::TabCoreArgs {
-                content: label,
-                close_sz,
-                close_color: colors.dim,
-                close_interactive: true,
-                on_select: args.on_select,
-                on_close: args.on_close,
-                on_select_hover: |_| Msg::Shell(ShellMsg::Noop),
-                on_close_hover: |_| Msg::Shell(ShellMsg::Noop),
-            });
-        let content = row![select, close]
-            .spacing(2)
-            .align_y(iced::Alignment::Center);
-        container(content)
-            .padding(Padding {
-                top: 0.0,
-                right: 4.0,
-                bottom: 0.0,
-                left: 10.0,
-            })
-            .width(Length::Shrink)
-            .style(move |_theme: &iced_widget::Theme| container::Style {
-                background: args.active.then(|| colors.card.into()),
-                border: if args.active {
-                    Border {
-                        color: colors.border,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    }
-                } else {
-                    Border::default()
-                },
-                ..container::Style::default()
-            })
-            .into()
+        let pid = self.pid;
+        let hover = self.panel.hover_progress(args.item);
+        let close_hover = self.panel.hover_progress(args.close);
+        let show_tooltip = self.panel.hover_tooltip_ready(args.item);
+        let item = args.item;
+        let close = args.close;
+        crate::adapters::agent_tabs::panel_tab(
+            args,
+            hover,
+            close_hover,
+            show_tooltip,
+            move |hovered| Msg::Agent(pid, Message::Hover(item, hovered)),
+            move |hovered| Msg::Agent(pid, Message::Hover(close, hovered)),
+        )
     }
-    fn overflow_button(&self, _tab_count: usize, _on_press: Msg) -> Option<El<'a, Msg>> {
-        // 朴素页签:溢出下拉留给 S6d-3。
-        None
+    fn overflow_button(&self, tab_count: usize, on_press: Msg) -> Option<El<'a, Msg>> {
+        let pid = self.pid;
+        crate::adapters::agent_tabs::overflow_button(
+            tab_count,
+            self.panel.hover_progress(AgentHover::TabOverflow),
+            on_press,
+            move |hovered| Msg::Agent(pid, Message::Hover(AgentHover::TabOverflow, hovered)),
+        )
     }
     fn overflow_menu(
         &self,
-        _entries: Vec<OverflowEntry>,
-        _anchor: (f32, f32),
-        _on_select: fn(usize) -> Message,
-        _on_close: fn(usize) -> Message,
-        _on_dismiss: Message,
+        entries: Vec<OverflowEntry>,
+        anchor: (f32, f32),
+        on_select: fn(usize) -> Message,
+        on_close: fn(usize) -> Message,
+        on_dismiss: Message,
     ) -> El<'a, Msg> {
-        iced_widget::Space::new().into()
+        let pid = self.pid;
+        crate::adapters::agent_tabs::overflow_menu(
+            entries,
+            anchor,
+            crate::CURRENT_WINDOW
+                .with(|w| w.get())
+                .unwrap_or((1280.0, 800.0)),
+            move |idx| Msg::Agent(pid, on_select(idx)),
+            move |idx| Msg::Agent(pid, on_close(idx)),
+            Msg::Agent(pid, on_dismiss),
+        )
     }
-    fn drag_surface(&self, content: El<'a, Msg>, _index: usize) -> El<'a, Msg> {
-        content
+    fn drag_surface(&self, content: El<'a, Msg>, index: usize) -> El<'a, Msg> {
+        // 手势全在产品侧:surface 只上报"光标在第 index 个页签上",产品据此
+        // 判断是否越过阈值并调库的 `reorder_term_tab`。
+        let pid = self.pid;
+        iced_widget::MouseArea::new(content)
+            .on_move(move |_| Msg::AgentTabHover(pid, index))
+            .into()
     }
     fn term_style(&self) -> &'a TermStyle {
         self.term_style
@@ -275,6 +256,39 @@ pub fn picker_overlay(panel: &AgentPanel, window: (f32, f32)) -> Option<El<'_, M
 }
 
 /// 供测试:选择器每一条都可点、分隔线在最后两个 shell 之前。
+/// 溢出下拉浮层(窗口坐标,与选择器互斥)。
+pub fn overflow_overlay(panel: &AgentPanel, window: (f32, f32)) -> Option<El<'_, Msg>> {
+    let (pid, anchor) = panel.overflow?;
+    let state = panel.states.get(&pid)?;
+    if state.tabs.is_empty() {
+        return None;
+    }
+    let entries: Vec<OverflowEntry> = state
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(idx, tab)| OverflowEntry {
+            index: idx,
+            title: dozer_panel_agent::tabs::tab_title(
+                tab.agent,
+                tab.cwd.as_deref(),
+                &tab.info.name,
+            ),
+            active: idx == state.active,
+            dot: dozer_panel_agent::style::dot_color(tab.agent_state, tab.alive),
+            row: AgentHover::OverflowRow(idx),
+        })
+        .collect();
+    Some(crate::adapters::agent_tabs::overflow_menu(
+        entries,
+        anchor,
+        window,
+        move |idx| Msg::Agent(pid, Message::SelectTab(idx)),
+        move |idx| Msg::Agent(pid, Message::CloseTab(idx)),
+        Msg::AgentOverflowDismiss,
+    ))
+}
+
 /// 供测试:选择器每一条都可点、分隔线在最后两个 shell 之前。
 #[cfg(test)]
 pub fn picker_row_labels() -> Vec<String> {

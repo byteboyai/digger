@@ -84,6 +84,12 @@ fn dispatch(json: &str) -> String {
     )
 }
 
+impl Default for Native {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Native {
     pub fn new() -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

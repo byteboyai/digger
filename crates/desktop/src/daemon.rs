@@ -45,6 +45,12 @@ pub struct Daemon {
     socket: PathBuf,
 }
 
+impl Default for Daemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Daemon {
     /// 构造一个指向 Digger 产品 socket 的守护进程管理器。
     pub fn new() -> Self {
