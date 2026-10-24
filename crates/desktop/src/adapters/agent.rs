@@ -605,7 +605,10 @@ impl AgentPanel {
     /// 新槽位的 enter 先于旧槽位的 leave,不能把新悬停清掉。
     pub fn on_hover(&mut self, slot: AgentHover, entered: bool, now: Instant) {
         if entered {
-            self.hover = Some((slot, now));
+            // 同一槽位的重复 enter(控件树结构变化后鼠标区域状态重置所致)不重置计时起点。
+            if self.hover.map(|(current, _)| current) != Some(slot) {
+                self.hover = Some((slot, now));
+            }
         } else if self.hover.is_some_and(|(current, _)| current == slot) {
             self.hover = None;
         }
@@ -1814,6 +1817,40 @@ mod tests {
         panel.on_hover(AgentHover::TabOverflow, true, Instant::now());
         panel.clear_hover();
         assert_eq!(panel.hover_progress(AgentHover::TabOverflow), 0.0);
+    }
+
+    #[test]
+    fn re_entering_the_same_slot_does_not_restart_the_tooltip_delay() {
+        // 提示到期时页签才被包进 iced 的 `Tooltip`,控件树结构一变,里面鼠标区域的状态
+        // 被重置,下一帧会对同一个槽位再发一次 enter。若每次 enter 都把计时起点重置成
+        // 现在,提示刚出现计时又归零、提示随即消失,表现为"悬停 2 秒没有气泡"。
+        let mut panel = AgentPanel::new();
+        let start = Instant::now();
+        let slot = AgentHover::TabItem(0);
+        panel.on_hover(slot, true, start);
+        panel.on_hover(slot, true, start + Duration::from_millis(1500));
+        assert!(
+            panel.hover_tooltip_ready_at(slot, start + TOOLTIP_DELAY),
+            "同一槽位重复 enter 不应重置计时"
+        );
+        assert_eq!(panel.tooltip_deadline(), Some(start + TOOLTIP_DELAY));
+    }
+
+    #[test]
+    fn entering_a_different_slot_restarts_the_delay() {
+        let mut panel = AgentPanel::new();
+        let start = Instant::now();
+        panel.on_hover(AgentHover::TabItem(0), true, start);
+        panel.on_hover(
+            AgentHover::TabItem(1),
+            true,
+            start + Duration::from_millis(1500),
+        );
+        assert!(!panel.hover_tooltip_ready_at(AgentHover::TabItem(1), start + TOOLTIP_DELAY));
+        assert!(panel.hover_tooltip_ready_at(
+            AgentHover::TabItem(1),
+            start + Duration::from_millis(1500) + TOOLTIP_DELAY
+        ));
     }
 
     #[test]

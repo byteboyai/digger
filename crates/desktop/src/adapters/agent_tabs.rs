@@ -224,14 +224,13 @@ where
 pub fn controlled_tooltip<'a, M>(
     content: Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>,
     label: String,
-    show: bool,
+    _show: bool,
 ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer>
 where
     M: Clone + 'a,
 {
-    if !show {
-        return content;
-    }
+    // `content` 始终包进 `Tooltip`,2 秒延迟交给 `Tooltip::delay`:到期才包会让控件树结构
+    // 随悬停翻转,里面鼠标区域的状态被重置(见测试)。`_show` 只为不改调用方而保留。
     tooltip(
         content,
         container(
@@ -243,6 +242,7 @@ where
         tooltip::Position::Top,
     )
     .gap(4.0)
+    .delay(crate::adapters::agent::TOOLTIP_DELAY)
     .style(icons::tooltip_bubble_style())
     .into()
 }
@@ -409,6 +409,21 @@ mod tests {
     use dozer_panel_agent::tabs::{SessionTab, TabBackend};
     use dozer_panel_term::model::TerminalModel;
     use dozer_panel_term::osc::OscScanner;
+
+    #[test]
+    fn the_tooltip_widget_tree_shape_does_not_depend_on_show() {
+        // 到期才把页签包进 `Tooltip`,控件树结构随之翻转,里面 `MouseArea` 的状态被重置成
+        // "未悬停":下一帧会再发一次 enter(重置提示计时,气泡闪一下就没),翻转那一帧
+        // 若光标已离开则 exit 永远不触发(悬停底色卡住)。结构必须恒定,延迟交给
+        // `Tooltip::delay`。
+        let shape = |show: bool| {
+            let content: Element<'_, (), iced_widget::Theme, iced_renderer::Renderer> =
+                text("tab").into();
+            let el = controlled_tooltip(content, "full title".into(), show);
+            (el.as_widget().tag(), el.as_widget().children().len())
+        };
+        assert_eq!(shape(true), shape(false));
+    }
 
     #[test]
     fn overflow_geometry_clamps_width_between_220_and_560() {
