@@ -51,6 +51,15 @@ fn preview_display(
     }
 }
 
+/// 会弹右键菜单的库消息:库从 `last_right_click` 取锚点。
+fn opens_a_context_menu(message: &dozer_panel_files::Message) -> bool {
+    use dozer_panel_files::Message as F;
+    matches!(
+        message,
+        F::ContextMenuOpen { .. } | F::TabContextMenuOpen { .. }
+    )
+}
+
 /// Files 库的右键菜单浮层何时画:Files 面板可见,或 Project 面板可见(Project 面板里的预览页签右键
 /// 也走 Files 库的页签菜单)。只认 Files 可见时,Project 里右键会"页面被藏了、菜单没画"。
 fn files_menu_is_rendered(files_visible: bool, project_visible: bool) -> bool {
@@ -1289,6 +1298,17 @@ impl ProductShell {
     fn on_files_message(&mut self, message: dozer_panel_files::Message) -> Task<Msg> {
         use dozer_panel_files::Message as F;
         let project_id = self.projects.current_project_id();
+        // 菜单锚点用点击时的光标(Dozer 由窗口事件层统一记 `RightClickAt`,Digger 没有)。
+        if opens_a_context_menu(&message) {
+            let cursor = self.last_cursor;
+            let _ = self.files.update(
+                F::RightClickAt {
+                    x: cursor.x,
+                    y: cursor.y,
+                },
+                project_id,
+            );
+        }
         match message {
             // 单击(按下):只武装拖拽,不展开 / 不打开;松开时由 `Msg::LeftButton(false)` 收尾,
             // 没越过阈值就是一次单击,只选中。
@@ -1306,18 +1326,6 @@ impl ProductShell {
                     return self.files.update(F::Toggle(path), project_id);
                 }
                 return self.preview_open(ViewerPanel::Files, &path);
-            }
-            // 页签右键:菜单的锚点用点击时的光标(库从 `last_right_click` 取)。
-            F::TabContextMenuOpen { .. } => {
-                let cursor = self.last_cursor;
-                let _ = self.files.update(
-                    F::RightClickAt {
-                        x: cursor.x,
-                        y: cursor.y,
-                    },
-                    project_id,
-                );
-                // 落到下面通用路径,由库出菜单。
             }
             // 页签右键"关闭":菜单只带路径,按路径找到页签再经库的 `CloseTab` 关掉。
             F::TabContextMenuCloseTab(_, path) => {
@@ -1361,6 +1369,12 @@ impl ProductShell {
         // 双击文件进预览(D3);选目录暂时无入口(能力已关)。
         let _ = self.files.take_requests();
         let mut task = task;
+        // macOS:库要弹的菜单走原生 NSMenu(阻塞等用户选择,选中后把消息投回来)。原生菜单是
+        // 真窗口层级,浮在 wry 页面之上,弹出时不用把文件内容藏起来。
+        #[cfg(target_os = "macos")]
+        {
+            task = Task::batch([task, self.show_native_files_menus()]);
+        }
         for request in self.files.take_host_requests() {
             if let Some(path) = crate::adapters::files::FilesPanel::open_path(&request) {
                 task = Task::batch([task, self.preview_open(ViewerPanel::Files, path)]);
@@ -1432,6 +1446,54 @@ impl ProductShell {
 
     /// D3:在右半边的预览里打开一个路径(文件树双击 / Project 文档链接)。
     /// 没有当前项目时什么都不做(预览本来就按项目存)。
+    /// macOS:预览页签溢出下拉的原生菜单。菜单出现在点击处(光标在溢出按钮上)。
+    #[cfg(target_os = "macos")]
+    fn show_native_preview_overflow(
+        &mut self,
+        panel: ViewerPanel,
+        project_id: i64,
+        epoch: u64,
+    ) -> Task<Msg> {
+        let Some(preview) = self
+            .preview
+            .as_ref()
+            .filter(|p| p.accepts(project_id, epoch))
+        else {
+            return Task::none();
+        };
+        let entries = preview.overflow_entries(panel, project_id);
+        if entries.is_empty() {
+            return Task::none();
+        }
+        let at = (self.last_cursor.x, self.last_cursor.y);
+        let items = crate::adapters::native_menu::tab_overflow_items(&entries, move |index| {
+            Msg::Preview(
+                panel,
+                project_id,
+                epoch,
+                dozer_panel_preview::Message::SelectTab(index),
+            )
+        });
+        match byteui::native_menu::show(items, at) {
+            Some(message) => Task::done(message),
+            None => Task::none(),
+        }
+    }
+
+    /// macOS:逐条弹出库排出的原生菜单,选中项作为 `Msg::Files` 投回。`show` 同步阻塞到用户
+    /// 选完(Dozer 同样如此);窗口内容 view 没登记时 `show` 返回 `None`,什么也不发生。
+    #[cfg(target_os = "macos")]
+    fn show_native_files_menus(&mut self) -> Task<Msg> {
+        let mut tasks = Vec::new();
+        for (items, at) in self.files.take_menu_requests() {
+            let native = crate::adapters::native_menu::to_native_items(items);
+            if let Some(message) = byteui::native_menu::show_align_no_icon_left(native, at) {
+                tasks.push(Task::done(Msg::Files(message)));
+            }
+        }
+        Task::batch(tasks)
+    }
+
     /// 某个预览面板此刻的页签数(没有状态时为 `None`)。
     fn preview_tab_count(&self, panel: ViewerPanel, project_id: i64) -> Option<usize> {
         self.preview
@@ -1749,6 +1811,8 @@ impl Product<Msg> for ProductShell {
                 // macOS:全屏期间把红绿灯临时挂到内容视图(原生全屏不绘制标题栏,红绿灯会跟着移出窗口)。
                 #[cfg(target_os = "macos")]
                 let guard = window::run(id, |w| {
+                    // 原生菜单(NSMenu)要挂靠窗口内容 view:窗口就绪时登记一次(主线程)。
+                    byteui::native_menu::install_content_view(w);
                     // 顶栏拖窗保护:悬停页签/"＋"时 (`projects` 里的悬停状态) 放行按下给 iced,
                     // 悬停在空白顶栏时保留原生拖窗。
                     bytehost_chrome::platform_macos::install_topbar_drag_guard(w);
@@ -2165,6 +2229,15 @@ impl Product<Msg> for ProductShell {
                 }
             }
             Msg::Preview(panel, project_id, epoch, message) => {
+                // macOS:页签溢出下拉走原生菜单(浮在页面之上,弹出时不用藏文件内容),选中项回投
+                // `SelectTab`。库的溢出按钮发的锚点是 `(0, 0)`,不拦截会出一个锚在左上角的 iced 下拉。
+                #[cfg(target_os = "macos")]
+                if matches!(
+                    message,
+                    dozer_panel_preview::Message::TabOverflowToggle { .. }
+                ) {
+                    return self.show_native_preview_overflow(panel, project_id, epoch);
+                }
                 // 按**发起时**的项目路由;项目已切走 / 删除时 `dispatch` 整条丢弃。
                 // 代次对不上(切走又切回)也在这一层拒掉,免得同号页签被误伤。
                 let tabs_before = self.preview_tab_count(panel, project_id);
@@ -3434,6 +3507,60 @@ mod tests {
 
     /// G-C5:`preview_project` 被 `sync_preview_native` 真实调用——关闭中或
     /// 没有当前项目时都得到 `None`(调用方据此同步空清单销毁页面)。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn window_ready_registers_the_native_menu_content_view() {
+        // 原生菜单要挂靠窗口内容 view;不在窗口就绪时登记,`byteui::native_menu::show` 会因为
+        // "内容 view 未注册"而静默不弹。
+        let source = include_str!("product.rs");
+        let start = source
+            .find("Msg::WindowReady(id, size) => {")
+            .expect("找不到 WindowReady 分支");
+        let rest = &source[start..];
+        let end = rest
+            .find("Msg::Shell(m) => self.on_shell(m)")
+            .expect("找不到下一分支");
+        assert!(
+            rest[..end].contains("byteui::native_menu::install_content_view"),
+            "WindowReady 里必须登记原生菜单的内容 view"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_preview_overflow_toggle_is_intercepted_into_a_native_menu_on_macos() {
+        // 不拦截,库的溢出按钮(锚点 `(0,0)`)会出一个锚在左上角的 iced 下拉,并且藏掉页面。
+        let source = include_str!("product.rs");
+        let start = source
+            .find("Msg::Preview(panel, project_id, epoch, message) => {")
+            .expect("找不到 Msg::Preview 分支");
+        let rest = &source[start..];
+        let end = rest.find("Msg::Lifecycle(phase)").expect("找不到下一分支");
+        let arm = &rest[..end];
+        assert!(arm.contains("TabOverflowToggle"));
+        assert!(arm.contains("show_native_preview_overflow"));
+    }
+
+    #[test]
+    fn both_context_menu_messages_need_the_click_position() {
+        // 库从 `last_right_click` 取菜单锚点,Digger 里没有窗口事件层替它记,不补就是 (0,0)。
+        use dozer_panel_files::Message as F;
+        use dozer_panel_files::adapter::PreviewKind;
+        assert!(opens_a_context_menu(&F::ContextMenuOpen {
+            path: "/x".into(),
+            is_dir: false
+        }));
+        assert!(opens_a_context_menu(&F::TabContextMenuOpen {
+            kind: PreviewKind::Files,
+            path: "/x".into()
+        }));
+        assert!(!opens_a_context_menu(&F::ContextMenuClose));
+        assert!(!opens_a_context_menu(&F::CopyPath(
+            "/x".into(),
+            dozer_panel_files::fs::PathKind::Absolute
+        )));
+    }
+
     #[test]
     fn the_files_menu_is_drawn_for_either_panel() {
         assert!(files_menu_is_rendered(true, false));

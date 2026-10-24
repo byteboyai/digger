@@ -176,6 +176,25 @@ impl PreviewHub {
             })
     }
 
+    /// 溢出下拉的条目:`(下标, 标题, 是否选中)`。没有这个面板的状态时为空。
+    pub fn overflow_entries(
+        &self,
+        panel: ViewerPanel,
+        project_id: i64,
+    ) -> Vec<(usize, String, bool)> {
+        let Some(state) = self.state(panel, project_id) else {
+            return Vec::new();
+        };
+        let active = state.pane.active_idx();
+        state
+            .pane
+            .tabs()
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| (idx, tab.title.clone(), idx == active))
+            .collect()
+    }
+
     /// 页签右键"关闭":按路径找到页签,经库的 `CloseTab` 关掉(落盘、释放页面等效果跟着发出)。
     /// 找不到(已经关了)返回 `false`。
     pub fn close_file_tab(&mut self, project_id: i64, path: &std::path::Path) -> bool {
@@ -803,6 +822,27 @@ mod tests {
         hub.open(ViewerPanel::Files, &p1, a.clone(), None);
         hub.open(ViewerPanel::Files, &p1, b.clone(), None);
         (p1, a, b)
+    }
+
+    #[test]
+    fn overflow_entries_list_every_tab_and_mark_the_active_one() {
+        let dir =
+            std::env::temp_dir().join(format!("digger-preview-overflow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let (_p1, _a, _b) = open_two(&mut hub, &dir);
+        let entries = hub.overflow_entries(ViewerPanel::Files, 1);
+        let titles: Vec<&str> = entries.iter().map(|(_, t, _)| t.as_str()).collect();
+        assert!(
+            titles.contains(&"a.rs") && titles.contains(&"b.rs"),
+            "{titles:?}"
+        );
+        assert_eq!(entries.iter().filter(|(_, _, active)| *active).count(), 1);
+        assert!(
+            hub.overflow_entries(ViewerPanel::Files, 99).is_empty(),
+            "没有的项目为空"
+        );
     }
 
     #[test]

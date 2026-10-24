@@ -43,6 +43,13 @@ pub struct FilesPanel {
     project_id: Option<i64>,
     /// iced 自绘的右键菜单(Digger 不认原生 NSMenu,`ShowNativeMenu` 一律落到这里)。
     menu: Option<crate::adapters::menu_overlay::MenuOverlay<FilesMessage>>,
+    /// macOS:库排出的"弹菜单"请求不建 iced 浮层,留给产品弹原生 NSMenu(原生菜单浮在 wry
+    /// 页面之上,弹出时不用把文件内容藏起来)。`(菜单项, 窗口坐标)`,产品用 `take_menu_requests` 取走。
+    #[cfg(target_os = "macos")]
+    native_menus: Vec<(
+        Vec<dozer_panel_files::menu::MenuItem<FilesMessage>>,
+        (f32, f32),
+    )>,
 }
 
 /// 用系统默认应用打开一个路径。生产走 `open <path>`(路径作为独立参数,不经 shell)。
@@ -109,6 +116,8 @@ impl FilesPanel {
             fs_rx: Some(fs_rx),
             project_id: None,
             menu: None,
+            #[cfg(target_os = "macos")]
+            native_menus: Vec::new(),
         }
     }
 
@@ -254,12 +263,7 @@ impl FilesPanel {
             match request {
                 dozer_panel_files::adapter::FilesRequest::ShowContextMenu { items, at }
                 | dozer_panel_files::adapter::FilesRequest::ShowNativeMenu { items, at } => {
-                    let anchor = crate::adapters::menu_overlay::MenuAnchor { x: at.0, y: at.1 };
-                    let overlay = crate::adapters::menu_overlay::MenuOverlay {
-                        anchor,
-                        items: items.clone(),
-                    };
-                    self.menu = (!overlay.is_empty()).then_some(overlay);
+                    self.show_menu(items, *at);
                 }
                 // 分支弹层:Digger 一期没有分支弹层(降级为只读,见报告 D6)。
                 dozer_panel_files::adapter::FilesRequest::ShowBranchPicker { .. } => {}
@@ -269,6 +273,43 @@ impl FilesPanel {
     }
 
     /// 当前要渲染的右键菜单(没有时为 `None`)。
+    /// macOS:库要弹菜单——不建 iced 浮层,排进待弹的原生菜单队列(空菜单不弹)。
+    #[cfg(target_os = "macos")]
+    fn show_menu(
+        &mut self,
+        items: &[dozer_panel_files::menu::MenuItem<FilesMessage>],
+        at: (f32, f32),
+    ) {
+        if !items.is_empty() {
+            self.native_menus.push((items.to_vec(), at));
+        }
+    }
+
+    /// 其他平台:iced 自绘浮层(空条目表不弹)。
+    #[cfg(not(target_os = "macos"))]
+    fn show_menu(
+        &mut self,
+        items: &[dozer_panel_files::menu::MenuItem<FilesMessage>],
+        at: (f32, f32),
+    ) {
+        let overlay = crate::adapters::menu_overlay::MenuOverlay {
+            anchor: crate::adapters::menu_overlay::MenuAnchor { x: at.0, y: at.1 },
+            items: items.to_vec(),
+        };
+        self.menu = (!overlay.is_empty()).then_some(overlay);
+    }
+
+    /// macOS:取走待弹的原生菜单 `(菜单项, 窗口坐标)`,产品逐条弹出。
+    #[cfg(target_os = "macos")]
+    pub fn take_menu_requests(
+        &mut self,
+    ) -> Vec<(
+        Vec<dozer_panel_files::menu::MenuItem<FilesMessage>>,
+        (f32, f32),
+    )> {
+        std::mem::take(&mut self.native_menus)
+    }
+
     pub fn menu(&self) -> Option<&crate::adapters::menu_overlay::MenuOverlay<FilesMessage>> {
         self.menu.as_ref()
     }
@@ -822,9 +863,20 @@ mod tests {
             Some(7),
         );
         let _ = panel.take_requests();
-        let menu = panel.menu().expect("页签右键应弹出菜单");
-        let msgs: Vec<&FilesMessage> = menu
-            .items
+        // macOS:菜单交给产品弹原生菜单(不建 iced 浮层);其他平台:iced 浮层。
+        #[cfg(target_os = "macos")]
+        let (items, anchor) = {
+            assert!(panel.menu().is_none(), "macOS 不能同时出 iced 浮层");
+            let mut pending = panel.take_menu_requests();
+            assert_eq!(pending.len(), 1, "应有一条待弹的原生菜单");
+            pending.remove(0)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (items, anchor) = {
+            let menu = panel.menu().expect("页签右键应弹出菜单");
+            (menu.items.clone(), (menu.anchor.x, menu.anchor.y))
+        };
+        let msgs: Vec<&FilesMessage> = items
             .iter()
             .filter_map(|item| match item {
                 MenuItem::Entry { msg, .. } => Some(msg),
@@ -845,6 +897,6 @@ mod tests {
                 .any(|m| matches!(m, FilesMessage::FileHistoryOpen(..))),
             "Digger 没有文件历史"
         );
-        assert_eq!((menu.anchor.x, menu.anchor.y), (30.0, 40.0));
+        assert_eq!(anchor, (30.0, 40.0));
     }
 }

@@ -15,6 +15,8 @@ pub mod agent_tabs;
 pub mod files;
 pub mod hover;
 pub mod menu_overlay;
+#[cfg(target_os = "macos")]
+pub mod native_menu;
 pub mod project;
 pub mod usage;
 
