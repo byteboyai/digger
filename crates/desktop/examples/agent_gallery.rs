@@ -104,7 +104,7 @@ fn tab(
     }
 }
 
-fn state_for(name: &str) -> (AgentPanel, AgentPanelState, (f32, f32)) {
+fn state_for(name: &str) -> (AgentPanel, (f32, f32)) {
     let mut panel = AgentPanel::with_services(
         std::sync::Arc::new(FakeSessions),
         std::sync::Arc::new(digger_desktop::adapters::agent_hooks::DiggerHooks::new()),
@@ -261,22 +261,35 @@ fn state_for(name: &str) -> (AgentPanel, AgentPanelState, (f32, f32)) {
     if !state.tabs.is_empty() {
         state.next_tab_id = state.tabs.len();
     }
-    (panel, state, window)
+    panel.states.insert(PID, state);
+    // 覆盖层要在状态入表之后再摆(open_picker/open_overflow 会检查状态存在)。
+    match name {
+        "overflow-open" => panel.overflow = Some((PID, (820.0, 120.0))),
+        "picker-open" => {
+            panel.picker = Some(PickerMenu {
+                pid: PID,
+                at: Some((760.0, 120.0)),
+            });
+            if let Some(state) = panel.states.get_mut(&PID) {
+                state.agent_picker_open = true;
+            }
+        }
+        _ => {}
+    }
+    (panel, window)
 }
 
 struct Gallery {
     panel: AgentPanel,
-    state: AgentPanelState,
     window: (f32, f32),
     style: TermStyle,
 }
 
 impl Gallery {
     fn new(state_name: &str) -> Self {
-        let (panel, state, window) = state_for(state_name);
+        let (panel, window) = state_for(state_name);
         Self {
             panel,
-            state,
             window,
             style: fonts::terminal_style(),
         }
@@ -291,6 +304,9 @@ impl Gallery {
         ) {
             return self.panel.shell.view(true).map(Msg::AgentShell);
         }
+        let Some(state) = self.panel.states.get(&PID) else {
+            return iced_widget::Space::new().into();
+        };
         let term_block_w = (self.window.0 - LIST_W - 8.0).max(1.0);
         let display = AgentDisplay {
             panel: &self.panel,
@@ -301,10 +317,10 @@ impl Gallery {
                 term_block_w,
                 byteui::theme::icon_size::scale(),
             ),
-            list_on_left: true,
+            list_on_left: false,
         };
         let list: Element<'_, Msg> = dozer_panel_agent::view::list::agent_list(
-            &self.state,
+            state,
             &display,
             &CardCtx {
                 titles: &NO_TASKS,
@@ -315,7 +331,7 @@ impl Gallery {
             iced_widget::core::Border::default(),
         );
         let term: Element<'_, Msg> = dozer_panel_agent::view::terminal::terminal_pane(
-            &self.state,
+            state,
             &display,
             TerminalSlots {
                 floating: None,
@@ -324,7 +340,7 @@ impl Gallery {
             Length::Fill,
             iced_widget::core::Border::default(),
         );
-        let body: Element<'_, Msg> = row![list, term].height(Length::Fill).into();
+        let body: Element<'_, Msg> = row![term, list].height(Length::Fill).into();
         let body: Element<'_, Msg> = match &self.panel.notice {
             Some(note) => column![
                 text(note.clone())
@@ -338,7 +354,7 @@ impl Gallery {
         };
         // 覆盖层顺序:确认框 > 选择器 > 溢出下拉(画廊一次只摆一个)。
         if let Some(dialog) =
-            dozer_panel_agent::picker::close_confirm_spec(&self.state, "en", |m| Msg::Agent(PID, m))
+            dozer_panel_agent::picker::close_confirm_spec(state, "en", |m| Msg::Agent(PID, m))
         {
             let card: Element<'_, Msg> = container(byteui::feedback::dialog::confirm(dialog))
                 .width(Length::Fill)

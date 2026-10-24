@@ -14,7 +14,7 @@ use byteui::interaction::tabs::{self, TabCoreArgs};
 use dozer_panel_agent::display::{El, OverflowEntry, TabArgs};
 #[cfg(test)]
 use dozer_panel_agent::state::AgentPanelState;
-use iced_widget::core::{Border, Color, Element, Length, Padding};
+use iced_widget::core::{Border, Color, Element, Font, Length, Padding, font::Weight};
 use iced_widget::{column, container, row, scrollable, text, tooltip};
 
 use crate::adapters::menu_overlay::{self, MenuAnchor};
@@ -37,6 +37,49 @@ const TAB_BAR_RESERVE: f32 = 72.0;
 
 fn scale() -> f32 {
     byteui::theme::icon_size::scale()
+}
+
+/// 页签标题字体:与 Dozer `top_bar_font()` 一致(系统默认字体的 Medium 档)。
+fn tab_font() -> Font {
+    Font {
+        weight: Weight::Medium,
+        ..Font::default()
+    }
+}
+
+/// 组合悬停:Dozer 的胶囊背景与关闭按钮都由标题/关闭按钮中较大的悬停值驱动。
+pub fn combined_hover(hover: f32, close_hover: f32) -> f32 {
+    hover.max(close_hover).clamp(0.0, 1.0)
+}
+
+/// 页签/下拉行共用的"前缀 + 标题":选中 CREAM,未选中 DIM→GOLD 按 hover 插值;
+/// 标题单行、超宽裁切、不换行。
+fn tab_label<'a>(
+    prefix: Option<El<'a, Msg>>,
+    title: String,
+    active: bool,
+    hover: f32,
+    max_width: f32,
+) -> El<'a, Msg> {
+    let mut row = row![]
+        .spacing(4)
+        .align_y(iced_widget::core::Alignment::Center);
+    if let Some(prefix) = prefix {
+        row = row.push(prefix);
+    }
+    row.push(
+        container(
+            text(title)
+                .font(tab_font())
+                .size(byteui::theme::font::body())
+                .wrapping(iced_widget::core::text::Wrapping::None)
+                .color(title_color(active, hover)),
+        )
+        .width(Length::Shrink)
+        .max_width(max_width)
+        .clip(true),
+    )
+    .into()
 }
 
 /// 溢出菜单的几何(窗口坐标);宽度夹在 220–560·scale、钳在窗口内。
@@ -140,26 +183,22 @@ where
     F2: Fn(bool) -> Msg + 'a,
 {
     let close_sz = byteui::theme::geometry::tab_button_size();
+    // Dozer:悬停标题或 × 任一,胶囊背景都浮现、× 显形。
+    let hover = combined_hover(hover, close_hover);
+    let hovered = hover > 0.001;
     let title = args.title;
-    let title_row: El<'a, Msg> = row![
-        byteui::feedback::status::dot(args.dot),
-        container(
-            text(title.clone())
-                .size(byteui::theme::font::body())
-                .wrapping(iced_widget::core::text::Wrapping::None)
-                .color(title_color(args.active, hover)),
-        )
-        .width(Length::Shrink)
-        .clip(true),
-    ]
-    .spacing(6)
-    .align_y(iced_widget::core::Alignment::Center)
-    .into();
+    let title_row = tab_label(
+        Some(byteui::feedback::status::dot(args.dot)),
+        title.clone(),
+        args.active,
+        hover,
+        f32::MAX,
+    );
     let (select, close) = tabs::tab_core(TabCoreArgs {
         content: title_row,
         close_sz,
         close_color: close_color(hover, close_hover),
-        close_interactive: hover > 0.001,
+        close_interactive: hovered,
         on_select: args.on_select,
         on_close: args.on_close,
         on_select_hover,
@@ -200,11 +239,11 @@ where
                 .size(12.0)
                 .color(byteui::theme::color::current().cream),
         )
-        .padding([5, 9])
-        .style(icons::tooltip_bubble_style()),
+        .padding([5, 9]),
         tooltip::Position::Top,
     )
     .gap(4.0)
+    .style(icons::tooltip_bubble_style())
     .into()
 }
 
@@ -266,17 +305,21 @@ pub fn row_views(state: &AgentPanelState) -> Vec<OverflowRowView> {
 }
 
 /// 溢出下拉:固定宽 `>` 列(仅选中行有箭头,其余留白,保证文字起点相同)+ 标题 + 关闭 ×。
-pub fn overflow_menu<'a, FSel, FClose>(
+pub fn overflow_menu<'a, FSel, FClose, FHover, FRowHover>(
     entries: Vec<OverflowEntry>,
     anchor: (f32, f32),
     window: (f32, f32),
     on_select: FSel,
     on_close: FClose,
+    on_row_hover: FRowHover,
+    hover_of: FHover,
     on_dismiss: Msg,
 ) -> El<'a, Msg>
 where
     FSel: Fn(usize) -> Msg + 'a,
     FClose: Fn(usize) -> Msg + 'a,
+    FRowHover: Fn(usize, bool) -> Msg + 'a,
+    FHover: Fn(dozer_panel_agent::display::AgentHover) -> f32 + 'a,
 {
     let colors = byteui::theme::color::current();
     let close_sz = byteui::theme::geometry::tab_button_size();
@@ -284,9 +327,11 @@ where
     let chevron_w = byteui::theme::icon_size::row() + byteui::theme::geometry::menu_gap();
     let row_max_w = (geometry.width - close_sz - 16.0).max(0.0);
     let label_max_w = (row_max_w - chevron_w).max(0.0);
+    let on_row_hover = std::rc::Rc::new(on_row_hover);
     let mut rows: Vec<El<'a, Msg>> = Vec::new();
     for entry in entries {
         let idx = entry.index;
+        let row_hover = hover_of(entry.row);
         let marker: El<'a, Msg> = if entry.active {
             row![icons::view(
                 IconKind::ChevronRight,
@@ -297,20 +342,19 @@ where
         } else {
             iced_widget::Space::new().into()
         };
-        let label: El<'a, Msg> = row![
-            container(marker).width(Length::Fixed(chevron_w)),
-            container(
-                text(entry.title)
-                    .size(byteui::theme::font::body())
-                    .wrapping(iced_widget::core::text::Wrapping::None)
-                    .color(colors.cream),
-            )
-            .width(Length::Shrink)
-            .max_width(label_max_w)
-            .clip(true),
-        ]
-        .align_y(iced_widget::core::Alignment::Center)
-        .into();
+        // 与 Dozer 一致:选中 CREAM、其余 DIM(行 hover 由容器底色表达);
+        // 前缀是状态点,chevron 列固定宽保证文字左对齐。
+        let label = tab_label(
+            Some(byteui::feedback::status::dot(entry.dot)),
+            entry.title,
+            entry.active,
+            0.0,
+            label_max_w,
+        );
+        let label: El<'a, Msg> = row![container(marker).width(Length::Fixed(chevron_w)), label,]
+            .spacing(0)
+            .align_y(iced_widget::core::Alignment::Center)
+            .into();
         let (select, close) = tabs::tab_core(TabCoreArgs {
             content: label,
             close_sz,
@@ -318,8 +362,14 @@ where
             close_interactive: true,
             on_select: on_select(idx),
             on_close: on_close(idx),
-            on_select_hover: |_| Msg::Shell(bytehost_chrome::ShellMsg::Noop),
-            on_close_hover: |_| Msg::Shell(bytehost_chrome::ShellMsg::Noop),
+            on_select_hover: {
+                let f = on_row_hover.clone();
+                move |h| f(idx, h)
+            },
+            on_close_hover: {
+                let f = on_row_hover.clone();
+                move |h| f(idx, h)
+            },
         });
         rows.push(
             container(
@@ -329,7 +379,7 @@ where
             )
             .width(Length::Fill)
             .padding(Padding::from(MENU_ROW_PAD))
-            .style(tab_container_style(false, 0.0))
+            .style(tab_container_style(false, row_hover))
             .into(),
         );
     }
@@ -404,6 +454,27 @@ mod tests {
             && (a.g - b.g).abs() < 1e-5
             && (a.b - b.b).abs() < 1e-5
             && (a.a - b.a).abs() < 1e-5
+    }
+
+    #[test]
+    fn tab_title_font_is_medium_like_dozers_top_bar_font() {
+        assert_eq!(tab_font().weight, Weight::Medium);
+    }
+
+    #[test]
+    fn hovering_the_close_button_also_shows_the_capsule() {
+        assert_eq!(combined_hover(0.0, 1.0), 1.0);
+        assert_eq!(combined_hover(1.0, 0.0), 1.0);
+        assert_eq!(combined_hover(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn inactive_overflow_row_titles_are_dim_and_active_is_cream() {
+        assert_eq!(title_color(false, 0.0), byteui::theme::color::current().dim);
+        assert_eq!(
+            title_color(true, 0.0),
+            byteui::theme::color::current().cream
+        );
     }
 
     #[test]
@@ -516,12 +587,14 @@ mod tests {
     #[test]
     fn dismiss_layer_is_part_of_the_menu_element() {
         // 菜单外框由 `menu_overlay::shell` 提供整窗透明遮罩;空条目也应能构造。
-        let el = overflow_menu::<_, _>(
+        let el = overflow_menu(
             Vec::new(),
             (10.0, 10.0),
             (800.0, 600.0),
             |_| Msg::ZoomToggle,
             |_| Msg::ZoomToggle,
+            |_, _| Msg::ZoomToggle,
+            |_| 0.0,
             Msg::ZoomToggle,
         );
         let _ = el;

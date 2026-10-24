@@ -128,19 +128,19 @@ impl<'a> PanelDisplay<'a, Msg> for AgentDisplay<'a> {
             (false, false) => (IconKind::PanelRightClose, collapse),
             (true, false) => (IconKind::PanelRightOpen, expand),
         };
-        tooltip(
-            button(icons::view(
-                icon,
-                byteui::theme::icon_size::row(),
-                byteui::theme::color::current().dim,
-            ))
-            .on_press(toggle_pane_message()),
-            container(text(tip).size(byteui::theme::font::body()))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Bottom,
+        icons::icon_button_entry(
+            icon,
+            byteui::theme::icon_size::row(),
+            false,
+            false,
+            0.0,
+            false,
+            byteui::theme::icon_size::row() + 6.0,
+            true,
+            Msg::Shell(ShellMsg::TogglePane(shell::agent_id())),
+            |_| Msg::Shell(ShellMsg::Noop),
+            tip,
         )
-        .into()
     }
     fn tab_divider(&self) -> El<'a, Msg> {
         byteui::layout::divider::horizontal()
@@ -179,6 +179,7 @@ impl<'a> PanelDisplay<'a, Msg> for AgentDisplay<'a> {
         on_dismiss: Message,
     ) -> El<'a, Msg> {
         let pid = self.pid;
+        let panel = self.panel;
         crate::adapters::agent_tabs::overflow_menu(
             entries,
             anchor,
@@ -187,6 +188,10 @@ impl<'a> PanelDisplay<'a, Msg> for AgentDisplay<'a> {
                 .unwrap_or((1280.0, 800.0)),
             move |idx| Msg::Agent(pid, on_select(idx)),
             move |idx| Msg::Agent(pid, on_close(idx)),
+            move |idx, hovered| {
+                Msg::Agent(pid, Message::Hover(AgentHover::OverflowRow(idx), hovered))
+            },
+            move |slot| panel.hover_progress(slot),
             Msg::Agent(pid, on_dismiss),
         )
     }
@@ -285,6 +290,8 @@ pub fn overflow_overlay(panel: &AgentPanel, window: (f32, f32)) -> Option<El<'_,
         window,
         move |idx| Msg::Agent(pid, Message::SelectTab(idx)),
         move |idx| Msg::Agent(pid, Message::CloseTab(idx)),
+        move |idx, hovered| Msg::Agent(pid, Message::Hover(AgentHover::OverflowRow(idx), hovered)),
+        move |slot| panel.hover_progress(slot),
         Msg::AgentOverflowDismiss,
     ))
 }
