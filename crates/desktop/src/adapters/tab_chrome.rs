@@ -161,20 +161,18 @@ where
         .width(Length::Shrink)
         .style(tab_container_style(active, hover))
         .into();
-    if show_tooltip {
-        // 页签在屏幕底部,气泡向上弹。只在"悬停足够久"时挂载(iced 0.14 的
-        // `Tooltip` 没有延迟开关,离开即卸载)。
-        tooltip(
-            el,
-            container(text(title).size(byteui::theme::font::body()))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Top,
-        )
-        .into()
-    } else {
-        el
-    }
+    // 页签在屏幕底部,气泡向上弹。**始终**包进 `Tooltip`,2 秒延迟交给 `Tooltip::delay`:
+    // 到期才包会让控件树结构随悬停翻转(见测试)。`show_tooltip` 只为不改调用方而保留。
+    let _ = show_tooltip;
+    tooltip(
+        el,
+        container(text(title).size(byteui::theme::font::body()))
+            .padding(6)
+            .style(container::rounded_box),
+        tooltip::Position::Top,
+    )
+    .delay(crate::adapters::hover::TOOLTIP_DELAY)
+    .into()
 }
 
 /// 溢出下拉入口:`ChevronsDown` 标准图标按钮。页签组非空时总显示(即使当前
@@ -406,5 +404,32 @@ mod tests {
             )
             .is_some()
         );
+    }
+}
+
+#[cfg(test)]
+mod structure_tests {
+    use super::*;
+
+    #[test]
+    fn the_tab_widget_tree_shape_does_not_depend_on_show_tooltip() {
+        // 到期才把页签包进 `Tooltip`,控件树结构翻转,里面 `MouseArea` 的状态被重置成"未悬停":
+        // 下一帧重发 enter(重置计时,气泡闪一下就没),翻转那一帧光标若已离开则 exit 永不触发
+        // (悬停底色与 × 卡住)。结构必须恒定,延迟交给 `Tooltip::delay`。
+        let shape = |show: bool| {
+            let el = panel_tab(
+                "notes.txt".to_string(),
+                false,
+                0.0,
+                0.0,
+                (),
+                (),
+                show,
+                |_| (),
+                |_| (),
+            );
+            (el.as_widget().tag(), el.as_widget().children().len())
+        };
+        assert_eq!(shape(true), shape(false));
     }
 }

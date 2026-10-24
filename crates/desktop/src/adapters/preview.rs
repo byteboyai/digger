@@ -155,6 +155,54 @@ impl PreviewHub {
         })
     }
 
+    /// 按路径找已打开的文件页签:先 Files、再 Project(与 Dozer 一致),返回 (面板, 页签下标)。
+    /// 只认当前项目;没打开返回 `None`。
+    pub fn find_file_tab(
+        &self,
+        project_id: i64,
+        path: &std::path::Path,
+    ) -> Option<(ViewerPanel, usize)> {
+        if self.project_id != Some(project_id) {
+            return None;
+        }
+        [ViewerPanel::Files, ViewerPanel::Project]
+            .into_iter()
+            .find_map(|panel| {
+                let idx = self
+                    .state(panel, project_id)?
+                    .pane
+                    .find_existing_file_tab(path)?;
+                Some((panel, idx))
+            })
+    }
+
+    /// 页签右键"关闭":按路径找到页签,经库的 `CloseTab` 关掉(落盘、释放页面等效果跟着发出)。
+    /// 找不到(已经关了)返回 `false`。
+    pub fn close_file_tab(&mut self, project_id: i64, path: &std::path::Path) -> bool {
+        let Some((panel, idx)) = self.find_file_tab(project_id, path) else {
+            return false;
+        };
+        self.dispatch(panel, project_id, Message::CloseTab(idx));
+        true
+    }
+
+    /// 页签右键"从磁盘重新加载":按路径找到页签,按**页签 id**(不是下标)推进它的重载。
+    /// 关过页签后下标与 id 不再相等,拿下标当 id 会重载错页签。找不到返回 `false`。
+    pub fn reload_file_tab(&mut self, project_id: i64, path: &std::path::Path) -> bool {
+        let Some((panel, idx)) = self.find_file_tab(project_id, path) else {
+            return false;
+        };
+        let Some(tab_id) = self
+            .state(panel, project_id)
+            .and_then(|state| state.pane.tabs().get(idx))
+            .map(|tab| tab.id)
+        else {
+            return false;
+        };
+        self.panel_state_mut(panel).pane.bump_reload(tab_id);
+        true
+    }
+
     /// 当前项目变了:旧项目的两份状态整份丢掉(不常驻),新项目按需恢复页签。
     ///
     /// G-C1:切换**不是**删除。切走时:
@@ -745,6 +793,77 @@ mod tests {
         // 项目 id 也对不上的老消息自然还是拒。
         assert!(!hub.accepts(2, second));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn open_two(hub: &mut PreviewHub, dir: &Path) -> (ProjectInfo, PathBuf, PathBuf) {
+        let p1 = project(1, dir);
+        hub.set_current_project(Some(&p1));
+        let a = write(dir, "a.rs");
+        let b = write(dir, "b.rs");
+        hub.open(ViewerPanel::Files, &p1, a.clone(), None);
+        hub.open(ViewerPanel::Files, &p1, b.clone(), None);
+        (p1, a, b)
+    }
+
+    #[test]
+    fn a_file_tab_is_found_by_path_files_panel_first() {
+        let dir =
+            std::env::temp_dir().join(format!("digger-preview-bypath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let (p1, a, _b) = open_two(&mut hub, &dir);
+        // 同一个文件也在 Project 面板里开着:按路径定位先找 Files(与 Dozer 一致)。
+        hub.open(ViewerPanel::Project, &p1, a.clone(), None);
+        let (panel, _idx) = hub.find_file_tab(1, &a).expect("a.rs 已打开");
+        assert_eq!(panel, ViewerPanel::Files);
+        assert!(hub.find_file_tab(1, &dir.join("nope.rs")).is_none());
+        assert!(hub.find_file_tab(2, &a).is_none(), "别的项目不算");
+    }
+
+    #[test]
+    fn closing_a_tab_by_path_closes_exactly_that_tab() {
+        // 页签右键"关闭":菜单只带路径,要按路径找到页签再经库的 `CloseTab` 关掉(落盘 / 释放
+        // 页面等效果才会跟着发出)。
+        let dir = std::env::temp_dir().join(format!("digger-preview-close-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let (_p1, a, b) = open_two(&mut hub, &dir);
+        assert!(hub.close_file_tab(1, &a));
+        let tabs = hub.state(ViewerPanel::Files, 1).unwrap().pane.tabs();
+        assert!(
+            !tabs
+                .iter()
+                .any(|t| matches!(&t.kind, TabKind::File(p) if *p == a))
+        );
+        assert!(
+            tabs.iter()
+                .any(|t| matches!(&t.kind, TabKind::File(p) if *p == b))
+        );
+        assert!(!hub.close_file_tab(1, &a), "已经关了:再关是 no-op,不 panic");
+    }
+
+    #[test]
+    fn reloading_by_path_bumps_the_right_tab_even_after_tabs_were_closed() {
+        // `find_file_tab` 返回的是下标,`bump_reload` 要的是页签 id:关过页签后两者不再相等,
+        // 直接拿下标当 id 会重载错页签。
+        let dir =
+            std::env::temp_dir().join(format!("digger-preview-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut hub = hub(&dir);
+        let (_p1, a, b) = open_two(&mut hub, &dir);
+        assert!(hub.close_file_tab(1, &a), "关掉 a 之后 b 的下标与 id 错开");
+        assert!(hub.reload_file_tab(1, &b));
+        let tabs = hub.state(ViewerPanel::Files, 1).unwrap().pane.tabs();
+        let bumped: Vec<_> = tabs
+            .iter()
+            .filter(|t| t.reload_nonce > 0)
+            .map(|t| t.title.clone())
+            .collect();
+        assert_eq!(bumped, vec!["b.rs".to_string()]);
+        assert!(!hub.reload_file_tab(1, &dir.join("nope.rs")));
     }
 
     #[test]

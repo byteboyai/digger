@@ -94,7 +94,12 @@ impl FilesPanel {
             state: None,
             app_state: AppState::default(),
             external_apps: dozer_panel_files::external_apps::load_from(&external_apps_path),
-            caps: FilesCapabilities::default(),
+            // 预览页签的右键菜单(关闭 / 复制路径 / 用外部软件打开 / 从磁盘重新加载)要它;
+            // 文件历史、发送到 Agent、搜索仍然关闭。
+            caps: FilesCapabilities {
+                preview_tabs: true,
+                ..FilesCapabilities::default()
+            },
             handle: None,
             tx,
             rx: Some(rx),
@@ -788,13 +793,58 @@ mod tests {
         assert!(panel.delete_confirm().is_none());
     }
 
-    /// 能力四项全关:关掉的条目整条不出现。
+    /// 只开预览页签菜单:文件历史、发送到 Agent、搜索仍关,关掉的条目整条不出现。
     #[test]
-    fn capabilities_are_all_off() {
-        let caps = FilesCapabilities::default();
-        assert!(!caps.file_history);
-        assert!(!caps.send_to_agent);
-        assert!(!caps.search);
-        assert!(!caps.preview_tabs);
+    fn only_the_preview_tab_menu_capability_is_on() {
+        let panel = panel("caps");
+        assert!(panel.caps.preview_tabs);
+        assert!(!panel.caps.file_history);
+        assert!(!panel.caps.send_to_agent);
+        assert!(!panel.caps.search);
+    }
+
+    /// 预览页签右键菜单:有"关闭"和"从磁盘重新加载",没有文件历史条目。
+    #[tokio::test]
+    async fn the_preview_tab_menu_has_close_and_reload_but_no_history() {
+        use dozer_panel_files::adapter::PreviewKind;
+        use dozer_panel_files::menu::MenuItem;
+        let dir = std::env::temp_dir().join(format!("digger-tab-menu-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut panel = panel("tab-menu");
+        panel.attach_handle(tokio::runtime::Handle::current());
+        panel.set_project(Some(&project("p", &dir)));
+        let _ = panel.update(FilesMessage::RightClickAt { x: 30.0, y: 40.0 }, Some(7));
+        let _ = panel.update(
+            FilesMessage::TabContextMenuOpen {
+                kind: PreviewKind::Files,
+                path: dir.join("a.rs"),
+            },
+            Some(7),
+        );
+        let _ = panel.take_requests();
+        let menu = panel.menu().expect("页签右键应弹出菜单");
+        let msgs: Vec<&FilesMessage> = menu
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Entry { msg, .. } => Some(msg),
+                MenuItem::Separator => None,
+            })
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, FilesMessage::TabContextMenuCloseTab(..)))
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, FilesMessage::TabReloadFromDisk(..)))
+        );
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| matches!(m, FilesMessage::FileHistoryOpen(..))),
+            "Digger 没有文件历史"
+        );
+        assert_eq!((menu.anchor.x, menu.anchor.y), (30.0, 40.0));
     }
 }

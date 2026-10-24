@@ -13,6 +13,7 @@ pub mod agent_keys;
 pub mod agent_layout;
 pub mod agent_tabs;
 pub mod files;
+pub mod hover;
 pub mod menu_overlay;
 pub mod project;
 pub mod usage;

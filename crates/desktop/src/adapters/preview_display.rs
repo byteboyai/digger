@@ -48,6 +48,8 @@ pub struct PreviewDisplay<'a> {
     pub project_id: i64,
     /// 发起这一刻的会话代次:切走又切回同一项目后,上一轮的迟到消息靠它丢掉。
     pub epoch: u64,
+    /// 此刻正被悬停的页签条部件与进入时刻(产品每帧从 `preview_hover` 抄进来)。
+    pub hover: Option<((ViewerPanel, PreviewHover), std::time::Instant)>,
 }
 
 impl PreviewDisplay<'_> {
@@ -128,16 +130,27 @@ impl PanelDisplay<Msg> for PreviewDisplay<'_> {
         }
     }
 
-    fn hover_progress(&self, _panel: ViewerPanel, _hover: PreviewHover) -> f32 {
-        0.0
+    fn hover_progress(&self, panel: ViewerPanel, hover: PreviewHover) -> f32 {
+        if self
+            .hover
+            .is_some_and(|(current, _)| current == (panel, hover))
+        {
+            1.0
+        } else {
+            0.0
+        }
     }
 
-    fn hover_tooltip_ready(&self, _panel: ViewerPanel, _hover: PreviewHover) -> bool {
-        false
+    fn hover_tooltip_ready(&self, panel: ViewerPanel, hover: PreviewHover) -> bool {
+        self.hover.is_some_and(|(current, entered)| {
+            current == (panel, hover)
+                && std::time::Instant::now().saturating_duration_since(entered)
+                    >= crate::adapters::hover::TOOLTIP_DELAY
+        })
     }
 
-    fn hover_message(&self, _panel: ViewerPanel, _hover: PreviewHover, _hovered: bool) -> Msg {
-        Msg::Shell(ShellMsg::Noop)
+    fn hover_message(&self, panel: ViewerPanel, hover: PreviewHover, hovered: bool) -> Msg {
+        Msg::PreviewHover(panel, hover, hovered)
     }
 
     fn tab_bar_avail_px(&self, _panel: ViewerPanel) -> f32 {
@@ -179,16 +192,27 @@ impl PanelDisplay<Msg> for PreviewDisplay<'_> {
 
     fn tab_gestures<'a>(
         &self,
-        _panel: ViewerPanel,
+        panel: ViewerPanel,
         _index: usize,
         tab: Element<'a, Msg>,
-        _path: Option<PathBuf>,
+        path: Option<PathBuf>,
     ) -> Element<'a, Msg> {
-        // Digger 一期不做页签拖拽换位,也不挂页签右键菜单(D3 的右键菜单只留
-        // 在文件树 / Project 链接上)。
-        tab
+        // Digger 一期不做页签拖拽换位。页签右键菜单只对真实文件页签生效。
+        let Some(path) = path else {
+            return tab;
+        };
+        let kind = if panel == ViewerPanel::Project {
+            dozer_panel_files::adapter::PreviewKind::Project
+        } else {
+            dozer_panel_files::adapter::PreviewKind::Files
+        };
+        iced_widget::mouse_area(tab)
+            .on_right_press(Msg::Files(dozer_panel_files::Message::TabContextMenuOpen {
+                kind,
+                path,
+            }))
+            .into()
     }
-
     fn overflow_button<'a>(
         &self,
         tab_count: usize,
@@ -353,32 +377,63 @@ mod tests {
             list_on_left: true,
             project_id: 42,
             epoch: 0,
+            hover: None,
         }
     }
 
     #[test]
-    fn hover_progress_is_always_zero_and_tooltip_never_ready() {
+    fn hover_progress_and_tooltip_follow_the_tracked_slot() {
+        // 悬停高亮 / 2 秒气泡只对"正被悬停的那个面板里的那个槽位"成立。
+        let start = std::time::Instant::now();
+        let d = PreviewDisplay {
+            hover: Some(((ViewerPanel::Files, PreviewHover::TabItem(1)), start)),
+            ..display()
+        };
+        assert_eq!(
+            d.hover_progress(ViewerPanel::Files, PreviewHover::TabItem(1)),
+            1.0
+        );
+        assert_eq!(
+            d.hover_progress(ViewerPanel::Files, PreviewHover::TabItem(0)),
+            0.0
+        );
+        assert_eq!(
+            d.hover_progress(ViewerPanel::Project, PreviewHover::TabItem(1)),
+            0.0,
+            "另一个面板同下标的页签不亮"
+        );
+        let later = PreviewDisplay {
+            hover: Some((
+                (ViewerPanel::Files, PreviewHover::TabItem(1)),
+                std::time::Instant::now() - crate::adapters::hover::TOOLTIP_DELAY,
+            )),
+            ..display()
+        };
+        assert!(later.hover_tooltip_ready(ViewerPanel::Files, PreviewHover::TabItem(1)));
+        assert!(!d.hover_tooltip_ready(ViewerPanel::Files, PreviewHover::TabItem(1)));
+    }
+
+    #[test]
+    fn nothing_hovered_means_no_highlight_and_no_tooltip() {
         let d = display();
-        for panel in [ViewerPanel::Files, ViewerPanel::Project] {
-            for hover in [
-                PreviewHover::TabItem(1),
-                PreviewHover::TabClose(1),
-                PreviewHover::TabOverflow,
-                PreviewHover::TabOverflowRow(1),
-                PreviewHover::RenderMode,
-                PreviewHover::TabularMode,
-                PreviewHover::JsonMode,
-                PreviewHover::FindNext,
-                PreviewHover::FindReplaceAll,
-            ] {
-                assert_eq!(d.hover_progress(panel, hover), 0.0);
-                assert!(!d.hover_tooltip_ready(panel, hover));
-                assert!(matches!(
-                    d.hover_message(panel, hover, true),
-                    Msg::Shell(ShellMsg::Noop)
-                ));
-            }
-        }
+        assert_eq!(
+            d.hover_progress(ViewerPanel::Files, PreviewHover::TabItem(0)),
+            0.0
+        );
+        assert!(!d.hover_tooltip_ready(ViewerPanel::Files, PreviewHover::TabItem(0)));
+    }
+
+    #[test]
+    fn hover_messages_carry_the_panel_the_slot_and_the_direction() {
+        let d = display();
+        assert!(matches!(
+            d.hover_message(ViewerPanel::Project, PreviewHover::TabClose(2), true),
+            Msg::PreviewHover(ViewerPanel::Project, PreviewHover::TabClose(2), true)
+        ));
+        assert!(matches!(
+            d.hover_message(ViewerPanel::Files, PreviewHover::TabItem(0), false),
+            Msg::PreviewHover(ViewerPanel::Files, PreviewHover::TabItem(0), false)
+        ));
     }
 
     #[test]

@@ -47,7 +47,19 @@ fn preview_display(
         list_on_left: true,
         project_id,
         epoch,
+        hover: None,
     }
+}
+
+/// Files 库的右键菜单浮层何时画:Files 面板可见,或 Project 面板可见(Project 面板里的预览页签右键
+/// 也走 Files 库的页签菜单)。只认 Files 可见时,Project 里右键会"页面被藏了、菜单没画"。
+fn files_menu_is_rendered(files_visible: bool, project_visible: bool) -> bool {
+    files_visible || project_visible
+}
+
+/// 页签数没变时悬停仍然有效;增减(含从无到有)后按下标寻址的悬停必须作废。
+fn hover_survives_tab_change(before: Option<usize>, after: Option<usize>) -> bool {
+    before == after
 }
 
 /// 预览页签条右侧三颗模式按钮的估算占宽(按钮边长 + 与页签组之间的间距,Dozer 同款)。
@@ -85,6 +97,12 @@ pub enum Msg {
     AgentCursor(iced::Point),
     /// 光标离开窗口:清悬停与拖拽。
     AgentCursorLeft,
+    /// 预览页签条部件的悬停进入 / 离开(驱动悬停高亮、× 与 2 秒标题气泡)。
+    PreviewHover(
+        ViewerPanel,
+        dozer_panel_preview::display::PreviewHover,
+        bool,
+    ),
     /// 光标移到第 `index` 个页签上(拖拽换位用,不经库的消息)。
     AgentTabHover(i64, usize),
     /// 鼠标松开:结束页签拖拽。
@@ -222,6 +240,11 @@ pub struct ProductShell {
     /// 最近一次光标位置(`ShellMsg::CursorMoved`):鼠标事件本身不带坐标,
     /// 终端焦点判断用它。
     last_cursor: iced::Point,
+    /// 预览页签条里此刻被悬停的部件与进入时刻(Files 与 Project 两个面板共用一份)。
+    preview_hover: crate::adapters::hover::HoverTracker<(
+        ViewerPanel,
+        dozer_panel_preview::display::PreviewHover,
+    )>,
     shutdown_started: bool,
     shutdown_error: Option<String>,
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
@@ -476,6 +499,7 @@ impl ProductShell {
             left_down: false,
             modifiers: iced::keyboard::Modifiers::default(),
             last_cursor: iced::Point::new(0.0, 0.0),
+            preview_hover: crate::adapters::hover::HoverTracker::new(),
             shutdown_started: false,
             shutdown_error: None,
             #[cfg(test)]
@@ -1283,6 +1307,35 @@ impl ProductShell {
                 }
                 return self.preview_open(ViewerPanel::Files, &path);
             }
+            // 页签右键:菜单的锚点用点击时的光标(库从 `last_right_click` 取)。
+            F::TabContextMenuOpen { .. } => {
+                let cursor = self.last_cursor;
+                let _ = self.files.update(
+                    F::RightClickAt {
+                        x: cursor.x,
+                        y: cursor.y,
+                    },
+                    project_id,
+                );
+                // 落到下面通用路径,由库出菜单。
+            }
+            // 页签右键"关闭":菜单只带路径,按路径找到页签再经库的 `CloseTab` 关掉。
+            F::TabContextMenuCloseTab(_, path) => {
+                let close = self.files.update(F::ContextMenuClose, project_id);
+                if let (Some(pid), Some(preview)) = (project_id, self.preview.as_mut()) {
+                    preview.close_file_tab(pid, &path);
+                }
+                self.sync_preview_context_from_hub();
+                return Task::batch([close, self.sync_native()]);
+            }
+            // 页签右键"从磁盘重新加载":按页签 id 推进它的重载,原生页面随之重建。
+            F::TabReloadFromDisk(path) => {
+                let close = self.files.update(F::ContextMenuClose, project_id);
+                if let (Some(pid), Some(preview)) = (project_id, self.preview.as_mut()) {
+                    preview.reload_file_tab(pid, &path);
+                }
+                return Task::batch([close, self.sync_native()]);
+            }
             // 复制路径:写系统剪贴板,再收起右键菜单。
             F::CopyPath(path, kind) => {
                 let root = self
@@ -1379,6 +1432,14 @@ impl ProductShell {
 
     /// D3:在右半边的预览里打开一个路径(文件树双击 / Project 文档链接)。
     /// 没有当前项目时什么都不做(预览本来就按项目存)。
+    /// 某个预览面板此刻的页签数(没有状态时为 `None`)。
+    fn preview_tab_count(&self, panel: ViewerPanel, project_id: i64) -> Option<usize> {
+        self.preview
+            .as_ref()
+            .and_then(|p| p.state(panel, project_id))
+            .map(|state| state.pane.tabs().len())
+    }
+
     fn preview_open(&mut self, panel: ViewerPanel, path: &Path) -> Task<Msg> {
         let Some(project) = self.projects.current_project().cloned() else {
             return Task::none();
@@ -1408,11 +1469,9 @@ impl ProductShell {
         // 其它面板落到 0 槽也不会有调用者读到。
         let slot = if panel == ViewerPanel::Project { 0 } else { 1 };
         let epoch = preview.epoch();
-        self.preview_displays[slot].set(preview_display(
-            preview.tab_bar_px(panel),
-            current.id,
-            epoch,
-        ));
+        let mut display = preview_display(preview.tab_bar_px(panel), current.id, epoch);
+        display.hover = self.preview_hover.current();
+        self.preview_displays[slot].set(display);
         // SAFETY: 见 `preview_displays` 字段说明——槽位在壳的生命周期内地址
         // 固定,里面是 `Copy` 的纯数据;内容在本帧内不会再被写。
         let display: &'a crate::adapters::preview_display::PreviewDisplay<'a> =
@@ -1796,6 +1855,13 @@ impl Product<Msg> for ProductShell {
             Msg::AgentCursorLeft => {
                 self.agent.clear_hover();
                 self.agent.clear_drag();
+                // 光标离开窗口 / 窗口失焦:没有 leave 事件可等,预览页签的悬停也一并清掉。
+                self.preview_hover.clear();
+                Task::none()
+            }
+            Msg::PreviewHover(panel, hover, entered) => {
+                self.preview_hover
+                    .on_hover((panel, hover), entered, std::time::Instant::now());
                 Task::none()
             }
             Msg::AgentTabHover(pid, index) => {
@@ -2101,12 +2167,21 @@ impl Product<Msg> for ProductShell {
             Msg::Preview(panel, project_id, epoch, message) => {
                 // 按**发起时**的项目路由;项目已切走 / 删除时 `dispatch` 整条丢弃。
                 // 代次对不上(切走又切回)也在这一层拒掉,免得同号页签被误伤。
+                let tabs_before = self.preview_tab_count(panel, project_id);
                 if let Some(preview) = self
                     .preview
                     .as_mut()
                     .filter(|p| p.accepts(project_id, epoch))
                 {
                     preview.dispatch(panel, project_id, message);
+                }
+                // 悬停按页签下标寻址:页签增减后,旧下标可能被别的页签复用,残留的悬停会
+                // 落到一个从未被悬停过的页签上(Dozer 同类问题修过两次)。
+                if !hover_survives_tab_change(
+                    tabs_before,
+                    self.preview_tab_count(panel, project_id),
+                ) {
+                    self.preview_hover.clear();
                 }
                 self.sync_preview_context_from_hub();
                 // 页签状态变了:原生页面的清单 / 编辑命令要在同一帧里跟上。
@@ -2220,7 +2295,12 @@ impl Product<Msg> for ProductShell {
         };
         // 「文件」面板的右键菜单:盖在最上层,点空白或 Esc 关闭。
         let body: Element<'_, Msg> = match self.files.menu() {
-            Some(menu) if self.panel_visible(&shell::files_id()) => {
+            Some(menu)
+                if files_menu_is_rendered(
+                    self.panel_visible(&shell::files_id()),
+                    self.panel_visible(&shell::project_id()),
+                ) =>
+            {
                 let window = (self.shell.window().0, self.shell.window().1);
                 iced::widget::stack![
                     body,
@@ -3354,6 +3434,28 @@ mod tests {
 
     /// G-C5:`preview_project` 被 `sync_preview_native` 真实调用——关闭中或
     /// 没有当前项目时都得到 `None`(调用方据此同步空清单销毁页面)。
+    #[test]
+    fn the_files_menu_is_drawn_for_either_panel() {
+        assert!(files_menu_is_rendered(true, false));
+        assert!(
+            files_menu_is_rendered(false, true),
+            "Project 面板的预览页签右键"
+        );
+        assert!(!files_menu_is_rendered(false, false));
+    }
+
+    #[test]
+    fn a_hover_is_dropped_when_the_tab_count_changes() {
+        assert!(hover_survives_tab_change(Some(3), Some(3)));
+        assert!(!hover_survives_tab_change(Some(3), Some(2)), "关了一个页签");
+        assert!(
+            !hover_survives_tab_change(Some(2), Some(3)),
+            "新开了一个页签"
+        );
+        assert!(!hover_survives_tab_change(None, Some(1)), "状态刚建出来");
+        assert!(hover_survives_tab_change(None, None));
+    }
+
     #[test]
     fn sync_native_asks_preview_project_before_desiring_anything() {
         let source = include_str!("product.rs");
