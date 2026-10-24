@@ -77,8 +77,9 @@ fn row_height() -> f32 {
 /// 背景取 `panel` + alpha 0xfa,描边 1px、圆角 9、内边距 8、项间距 1。
 fn region() -> byteui::theme::region::RegionStyle {
     let scale = byteui::theme::icon_size::scale();
+    // 完全不透明:wgpu 线性混合下,alpha 0.98 仍会让底下的亮字透出约 15%(见测试)。
     let mut bg = byteui::theme::color::current().panel;
-    bg.a = 0xfa as f32 / 255.0;
+    bg.a = 1.0;
     byteui::theme::region::RegionStyle {
         background: Some(bg),
         border: Some(Border {
@@ -367,6 +368,15 @@ fn item_row<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_menu_background_is_fully_opaque() {
+        // wgpu 在线性色彩空间里混合:alpha 0.98 让底下的内容留 2% 线性亮度,换算成屏幕
+        // 上的 sRGB 观感约 15%,亮字和卡片边框就会"淡淡透出来"(溢出菜单盖在卡片列表上
+        // 时实测如此)。菜单盖在别的内容上,背景必须不透明。
+        let bg = region().background.expect("菜单有背景色");
+        assert_eq!(bg.a, 1.0, "菜单背景 alpha 必须是 1.0,实际 {}", bg.a);
+    }
+
     use super::*;
     use dozer_panel_files::menu::MenuItem;
 
