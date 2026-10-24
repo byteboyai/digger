@@ -63,7 +63,17 @@
 | 格式 | `rustfmt --edition 2024 --check` 对本任务改动文件 | 干净 |
 | 干净快照 | `git archive d01c841` → 独立目录(名称/数据目录不含 "digger") | 见下 |
 
-CLEAN_RESULT_PLACEHOLDER
+### 干净快照实测
+
+`/private/tmp/s6d3q-clean.yCGLat`(不含 "digger"),数据根 `/private/tmp/s6d3q-data.YEzI8L`,临时 `HOME` `/private/tmp/s6d3q-home.gnYczz`,自己的 `target`,归档自代码提交 `10c2cb8`(之后的 `b32108c` 只删了一张误标截图与改报告,不含代码):
+
+| 命令 | 退出码 | 结果 |
+| --- | --- | --- |
+| `cargo metadata --locked --offline` | 0 | 锁文件可复现 |
+| `cargo test --workspace --no-fail-fast` | 0 | **539 通过 / 0 失败 / 0 ignored** |
+| `cargo clippy --workspace --all-targets` | 0 | 仅基线 `block v0.1.6` 1 条 |
+
+注:交接单提到的偶发失败 `apps::tests::closing_during_startup_waits_and_releases_the_root` 本轮没有出现。
 
 ## 待用户
 
