@@ -1,7 +1,7 @@
 # S8 群聊面板:抽成共享库,Digger 接入
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:设计稿,待用户审阅。**2026-10-25:S6 与 S3b 之后的修订见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md`,冲突处以它为准**
 - 路径:架构级,**分三期交付,每期单独写实施计划**(S8a Dozer 抽库、S8b Digger 接群列表与状态、S8c Digger 接聊天内容 webview 与发布)
 - 相关:`2026-10-18-conversations-panel-s7-design.md`(同类的「列表 + webview 内容」面板,S7 的做法是本文的模板)、`2026-10-18-agent-panel-s6-design.md`(`diggerd` 与 `digger.db`)、`2026-10-18-agent-panel-s6d-design.md`(Digger 里已有的原生 webview 宿主做法、覆盖层互斥)、Dozer `2026-10-02-group-chat-panel-design.md`
 
@@ -92,7 +92,7 @@ Digger 要有与 Dozer 一模一样的群聊面板:在当前项目里建一个�
 
 未解:
 
-- Q1 群聊会在用户发言时拉起 Agent 命令行并让它们在项目目录里工作(与 Dozer 完全一致,不是只读聊天)。Digger v1 照做、不额外加首次使用的确认弹窗,理由是建群与加成员都是用户的明确操作。是否接受?
+- Q1 **【2026-10-25 订正,原文写反了】** 群聊会在用户发言时以**只读**方式拉起被 @ 的成员 Agent 命令行(Claude:`--allowedTools Read,Grep,Glob` 加禁用 Bash/Edit/Write 等;Codex:`--sandbox read-only`;严禁 `--dangerously-skip-permissions` / `-y`),工作目录是项目目录,所以成员**能读**项目文件作答、**不能修改**任何东西(与 Dozer 完全一致)。Digger v1 照做、不额外加首次使用的确认弹窗,理由是建群与加成员都是用户的明确操作。详见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md` §1.1。是否接受?
 - Q2 「转待办」在 Digger 里隐藏,待办面板接入 Digger 之后再打开。是否接受?
 - Q3 页面产物需要重新构建并提交(6.2 的加法)。构建环境用 Dozer 现有的 `npm`(`web/group-chat-content`),产物字节会变。是否接受这条对 Dozer 的改动?(Dozer 用户可见行为不变,黄金测试固定。)
 

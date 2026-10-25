@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust、iced 0.14、`dozer-panel-group-chat`(S8a 的 `libs-*` tag)、`dozer-panel-host`、`dozer-services`、`dozer-client`、byteui、tokio。
 
-**Spec:** `docs/superpowers/specs/2026-10-18-group-chat-panel-s8-design.md`(§6.3 登记与布局、数据、轮询、键盘;§6.4 S8b;§7 Digger 单测;§8 D1、D3、D5、Q1–Q2)。前置:S8a 已合并并切 tag;S6d 系列、S7 系列已合并(`AgentPanel`、`menu_overlay`、`Overlay` 枚举、`AgentShell` 状态、`ConversationsPanel`)。已批准的取舍:Q1 成员 Agent 在项目目录里工作、不加额外首次确认;Q2 「转待办」隐藏;右栏 `[agent, group_chat, conversations, apps, usage]`。
+**Spec:** `docs/superpowers/specs/2026-10-18-group-chat-panel-s8-design.md`(§6.3 登记与布局、数据、轮询、键盘;§6.4 S8b;§7 Digger 单测;§8 D1、D3、D5、Q1–Q2)。前置:S8a 已合并并切 tag;S6d 系列、S7 系列已合并(`AgentPanel`、`menu_overlay`、`Overlay` 枚举、`AgentShell` 状态、`ConversationsPanel`)。已批准的取舍:Q1 成员 Agent **只读**地在项目目录里作答(能读不能改,**2026-10-25 订正,原文写成「在项目目录里工作」**)、不加额外首次确认;Q2 「转待办」隐藏(**2026-10-25:S3b-1 合并后改为开启,见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md` §5 Q1**);右栏 `[agent, group_chat, conversations, apps, usage]`。
 
 ## Global Constraints
 

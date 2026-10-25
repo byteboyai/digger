@@ -1,7 +1,7 @@
 # S7 会话(Conversations)面板:抽成共享库,Digger 接入
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅
+- 状态:设计稿,待用户审阅。**2026-10-25:S6 与 S3b 之后的修订见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md`,冲突处以它为准**
 - 路径:架构级,**分三期交付,每期单独写实施计划**(S7a Dozer 抽库、S7b Digger 接列表、S7c Digger 接审阅详情与发布)
 - 相关:`2026-10-18-agent-panel-s6-design.md`(`diggerd` 与 `digger.db`)、`2026-10-18-agent-panel-s6c-design.md`(S6c-2 里 Agent 卡片的 transcript 尾部解析留在 Agent 库)、`2026-10-18-preview-engine-s5b2-design.md`(webview 宿主的分层做法)、`2026-10-18-project-panel-s5a-design.md`(Q2:Digger 不做静默补录)、Dozer `2026-09-15-conversations-extension-pilot-design.md`
 
