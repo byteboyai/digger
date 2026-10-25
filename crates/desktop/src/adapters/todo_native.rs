@@ -237,6 +237,28 @@ impl Native {
     pub(crate) fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }
+
+    /// 测试用:当前项目的新载荷是否还没推过(不消费)。
+    #[cfg(test)]
+    pub(crate) fn pending_project(&self, state: &WorkspaceState) -> Option<i64> {
+        let desired = Stamped::new(
+            LocaleStamp {
+                ui_locale: Locale::default_locale(),
+                locale_revision: 0,
+            },
+            current_view_payload(
+                state,
+                &|_| false,
+                self.project_id,
+                dozer_panel_todo::today_ymd(),
+                &agent_icon_data,
+            ),
+        );
+        self.push
+            .pending_push(&desired)
+            .map(|p| p.stamp.locale_revision)
+            .map(|_| self.project_id)
+    }
 }
 
 /// 导航只放行本协议入口(严格 CSP 的一部分)。
@@ -403,6 +425,25 @@ mod tests {
         assert_eq!(decoded, json);
         let envelope: serde_json::Value = serde_json::from_str(&decoded).unwrap();
         assert_eq!(envelope["payload"]["items"][0]["text"], hostile);
+    }
+
+    #[test]
+    fn switching_project_pushes_the_new_projects_payload_without_rebuilding_the_view() {
+        let mut native = Native::new();
+        native.set_project(Some(7));
+        let _ = native.sync(window::Id::unique(), true, rect(), &state("一"));
+        let epoch = native.epoch();
+        assert!(native.is_live());
+        native.update(Event::Ready(epoch));
+
+        native.set_project(Some(8));
+        assert!(native.is_live(), "切换项目不重建 webview");
+        assert_eq!(native.epoch(), epoch, "重建才需要换 epoch");
+        assert_eq!(
+            native.pending_project(&state("一")),
+            Some(8),
+            "新项目的 payload 还没推过"
+        );
     }
 
     #[test]

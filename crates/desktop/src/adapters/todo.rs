@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 use dozer_model::AgentKind;
 use dozer_panel_todo::{Message, WorkspaceState};
 use dozer_services::{Services, TodoService};
+use iced::Element;
+
+use crate::product::Msg;
+use iced_widget::core::{Border, Padding};
 
 /// 面板可见时的刷新节奏,与 Dozer `TODO_POLL_INTERVAL` 同值。
 pub const POLL_INTERVAL: Duration = Duration::from_millis(1000);
@@ -69,6 +73,7 @@ impl TodoPanel {
     /// 切当前项目(不丢别的项目的状态)。
     pub fn set_project(&mut self, project_id: Option<i64>) {
         self.current = project_id;
+        self.native.set_project(project_id);
         if let Some(id) = project_id {
             self.states.entry(id).or_default();
         }
@@ -111,6 +116,19 @@ impl TodoPanel {
 
     /// 处理一条库消息,返回需要产品落地的效果。
     pub fn update(&mut self, msg: Message) -> Vec<TodoEffect> {
+        // 库的少数变体由内核拦截,产品给出明确去向。
+        match &msg {
+            Message::ToggleListCollapse => return vec![TodoEffect::ToggleListCollapse],
+            Message::TextInputMenuOpen(_)
+            | Message::DetailClose
+            | Message::DetailReplyInput(_)
+            | Message::DetailReplySubmit
+            | Message::CategoryContextMenuOpen(_)
+            | Message::CategoryRowPress(_)
+            | Message::Hover(_, _) => return Vec::new(),
+            _ => {}
+        }
+
         let project_id = match msg.result_project() {
             Some(pid) if Some(pid) != self.current => {
                 // Review Focus 2:上一个项目的在途结果不能写进当前项目,也不能
@@ -125,19 +143,6 @@ impl TodoPanel {
                 pid
             }
         };
-
-        // 库的少数变体由内核拦截,产品给出明确去向。
-        match &msg {
-            Message::ToggleListCollapse => return vec![TodoEffect::ToggleListCollapse],
-            Message::TextInputMenuOpen(_)
-            | Message::DetailClose
-            | Message::DetailReplyInput(_)
-            | Message::DetailReplySubmit
-            | Message::CategoryContextMenuOpen(_)
-            | Message::CategoryRowPress(_)
-            | Message::Hover(_, _) => return Vec::new(),
-            _ => {}
-        }
 
         let state = self.states.entry(project_id).or_default();
         let Some(handle) = self.handle.clone() else {
@@ -221,6 +226,47 @@ impl TodoPanel {
         state.take_diagnostics()
     }
 
+    /// 两栏视图(左分类树 | 右内容)。没有当前项目时给一块空态。
+    pub fn panes(&self, collapsed: bool) -> (Element<'_, Msg>, Element<'_, Msg>) {
+        let Some(state) = self.current_state() else {
+            let empty: Element<'_, Msg> = iced::widget::text("请先打开一个 Project").into();
+            return (empty, iced::widget::text("").into());
+        };
+        let display = TodoDisplay { collapsed };
+        let (list, content) = dozer_panel_todo::view::view(
+            &display,
+            state,
+            self.native.failed(),
+            iced::Length::Fill,
+            Border::default(),
+            iced::Length::Fill,
+            Border::default(),
+        );
+        (list.map(Msg::Todo), content.map(Msg::Todo))
+    }
+
+    pub fn list_view(&self, collapsed: bool) -> Element<'_, Msg> {
+        self.panes(collapsed).0
+    }
+
+    pub fn content_view(&self, collapsed: bool) -> Element<'_, Msg> {
+        self.panes(collapsed).1
+    }
+
+    pub fn sync_native(
+        &mut self,
+        window: iced::window::Id,
+        visible: bool,
+        rect: bytehost_core::LogicalRect,
+    ) -> iced::Task<crate::adapters::todo_native::Event> {
+        let empty = WorkspaceState::default();
+        let state = self
+            .current
+            .and_then(|id| self.states.get(&id))
+            .unwrap_or(&empty);
+        self.native.sync(window, visible, rect, state)
+    }
+
     /// 给库构造服务束:只有 `todo` 是真实的,其余全是 `UnavailableService`。
     fn services(&self) -> Services {
         use crate::adapters::project::UnavailableService;
@@ -245,6 +291,90 @@ impl TodoPanel {
         }
     }
 
+}
+
+/// 待办的展示适配:面板头、折叠按钮、分隔线与内边距。悬停动画在 Digger
+/// 一期不做(与 Usage 的显式最小口径一致),返回 0。
+pub(crate) struct TodoDisplay {
+    collapsed: bool,
+}
+
+impl dozer_panel_todo::adapter::PanelDisplay for TodoDisplay {
+    fn hover_progress(&self, _slot: bytehost_desktop::HoverSlot) -> f32 {
+        0.0
+    }
+
+    fn list_collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    fn list_collapse_button<'a, M: Clone + 'a>(
+        &self,
+        collapsed: bool,
+        tooltip_collapse: String,
+        tooltip_expand: String,
+        on_select: M,
+        _on_hover: impl Fn(bool) -> M + 'a,
+    ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+        use byteui::interaction::icons::{self, IconKind};
+        use iced::widget::{button, container, text, tooltip};
+        let (icon, tip) = if collapsed {
+            (IconKind::PanelRightOpen, tooltip_expand)
+        } else {
+            (IconKind::PanelRightClose, tooltip_collapse)
+        };
+        tooltip(
+            button(icons::view(
+                icon,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().dim,
+            ))
+            .on_press(on_select),
+            container(text(tip).size(byteui::theme::font::body()))
+                .padding(6)
+                .style(container::rounded_box),
+            tooltip::Position::Bottom,
+        )
+        .into()
+    }
+
+    fn panel_head<'a, M: 'a>(
+        &self,
+        icon: byteui::interaction::icons::IconKind,
+        title: String,
+    ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+        use iced::widget::{column, row, text};
+        let tokens = byteui::theme::color::current();
+        column![
+            row![
+                byteui::interaction::icons::view(
+                    icon,
+                    byteui::theme::icon_size::row(),
+                    tokens.tab_active_border,
+                ),
+                text(title)
+                    .size(byteui::theme::font::title())
+                    .color(tokens.tab_active_border),
+            ]
+            .spacing(8)
+            .height(iced::Length::Fixed(
+                byteui::theme::geometry::tab_button_size()
+            ))
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(4)
+        .into()
+    }
+
+    fn header_padding(&self) -> Padding {
+        Padding::from([8.0, 20.0])
+    }
+
+    fn tab_divider<'a, M: 'a>(
+        &self,
+    ) -> Element<'a, M, iced_widget::Theme, iced_renderer::Renderer> {
+        byteui::layout::divider::horizontal()
+    }
 }
 
 #[cfg(test)]

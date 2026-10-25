@@ -42,6 +42,10 @@ pub fn project_id() -> PanelId {
 pub fn files_id() -> PanelId {
     id("digger.files")
 }
+/// 待办面板(共享 `dozer-panel-todo` 库):分类树 + 任务列表。
+pub fn todo_id() -> PanelId {
+    id("digger.todo")
+}
 pub fn agent_id() -> PanelId {
     id("digger.agent")
 }
@@ -56,6 +60,7 @@ pub fn all_panels() -> Vec<PanelId> {
         usage_id(),
         project_id(),
         files_id(),
+        todo_id(),
     ]
 }
 
@@ -68,6 +73,7 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
         "digger.usage" => ("用量", IconKind::BarChart3),
         "digger.project" => ("项目", IconKind::Briefcase),
         "digger.files" => ("文件", IconKind::FolderTree),
+        "digger.todo" => ("待办", IconKind::ListTodo),
         "digger.agent" => ("Agent", IconKind::Brain),
         _ => return None,
     };
@@ -101,7 +107,7 @@ pub fn rules(panel: &PanelId) -> Option<PanelRules> {
                 min_first_px: list_min_width(),
             }),
         }),
-        "digger.project" | "digger.files" => Some(PanelRules {
+        "digger.project" | "digger.files" | "digger.todo" => Some(PanelRules {
             default_side: Side::Left,
             pane: Some(PaneRules {
                 spec: PaneSpec::new(true, true),
@@ -130,7 +136,7 @@ pub fn defaults() -> Defaults {
     let (w, h) = byteui::theme::geometry::initial_window_size();
     Defaults {
         rails: [
-            vec![project_id(), files_id(), markdown_id(), info_id()],
+            vec![project_id(), files_id(), todo_id(), markdown_id(), info_id()],
             vec![agent_id(), apps_id(), usage_id()],
         ],
         selected: [markdown_id(), agent_id()],
@@ -327,8 +333,8 @@ mod tests {
         assert_eq!(seen, want);
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), files_id(), markdown_id(), info_id()],
-            "project first, then files, then the content panels, like Dozer"
+            [project_id(), files_id(), todo_id(), markdown_id(), info_id()],
+            "project, files, todo, then the content panels, like Dozer"
         );
         assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         assert_eq!(model.selected(Side::Left), &markdown_id());
@@ -349,8 +355,8 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [info_id(), markdown_id(), files_id()],
-            "the file says where project lives, so files is appended to its default side"
+            [info_id(), markdown_id(), files_id(), todo_id()],
+            "the file says where project lives, so new panels are appended to its default side"
         );
         assert_eq!(
             model.rail(Side::Right),
@@ -392,8 +398,8 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), files_id(), info_id(), markdown_id()],
-            "the user's order is kept, the project panel lands first and files right after it"
+            [project_id(), files_id(), info_id(), markdown_id(), todo_id()],
+            "the user's order is kept, the new panels land on their default side"
         );
         assert_eq!(
             model.rail(Side::Right),
@@ -428,8 +434,8 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), files_id(), info_id(), markdown_id()],
-            "files lands right after the project panel, everything else keeps its order"
+            [project_id(), files_id(), info_id(), markdown_id(), todo_id()],
+            "files lands right after project; todo is appended to the default side"
         );
         assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         let _ = std::fs::remove_dir_all(&dir);
@@ -798,7 +804,7 @@ mod tests {
         assert_eq!(first.left_width(), 500.0, "the user's width is kept");
         assert_eq!(
             first.rail(Side::Left),
-            [project_id(), files_id(), info_id(), markdown_id()]
+            [project_id(), files_id(), info_id(), markdown_id(), todo_id()]
         );
         assert_eq!(first.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         drag_left_width_to(&mut first, 744.0);
@@ -819,6 +825,41 @@ mod tests {
         // 注册表里已经没有 id=7:调用方传 None,读到的就是全局布局。
         let loaded = load_scoped(&global, None);
         assert_eq!(loaded.model().left_width(), 400.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn todo_is_a_left_pair_like_project_and_files() {
+        let r = rules(&todo_id()).expect("todo has rules");
+        assert_eq!(r.default_side, Side::Left);
+        let pane = r.pane.expect("todo is a pair");
+        assert_eq!(pane.spec, bytehost_desktop::PaneSpec::new(true, true));
+        assert_eq!(pane.min_first_px, list_min_width());
+        assert_eq!(
+            meta(&todo_id()).unwrap().title,
+            "待办",
+            "icon/meta exist for the rail"
+        );
+        assert_eq!(meta(&todo_id()).unwrap().icon, IconKind::ListTodo);
+        assert!(all_panels().contains(&todo_id()));
+    }
+
+    /// Review Focus 5:旧布局里没有 todo 时,原有面板顺序不变,todo 追加到默认侧末尾。
+    #[test]
+    fn a_saved_layout_without_todo_still_loads_and_appends_it() {
+        let (model, dir) = load_json(
+            "todo-old",
+            r#"{ "left": ["digger.project","digger.files","digger.markdown","digger.info"], "right": ["digger.agent","digger.apps","digger.usage"] }"#,
+        );
+        assert_eq!(
+            model.rail(Side::Left),
+            [project_id(), files_id(), markdown_id(), info_id(), todo_id()],
+            "old relative order is kept; todo is appended to its default side"
+        );
+        assert_eq!(
+            model.rail(Side::Right),
+            [agent_id(), apps_id(), usage_id()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

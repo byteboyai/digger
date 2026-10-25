@@ -125,6 +125,12 @@ pub enum Msg {
     /// 「用量」面板的库消息(Task 20)。
     Usage(dozer_panel_usage::Message),
     NativeUsage(crate::adapters::usage_native::Event),
+    /// 「待办」面板的库消息(S3b-1)。
+    Todo(dozer_panel_todo::Message),
+    /// 待办原生 webview 的回传。
+    NativeTodo(crate::adapters::todo_native::Event),
+    /// 待办面板可见时的 1 秒轮询。
+    TodoPoll,
     /// 「文件」面板的库消息(共享 `dozer-panel-files` 库)。
     Files(dozer_panel_files::Message),
     /// 文件系统监听:当前项目的工作区有增删改,文件树与 git 着色要跟进。
@@ -200,6 +206,8 @@ pub struct ProductShell {
     apps: crate::apps::AppsState,
     /// 「用量」面板适配(共享 `dozer-panel-usage` 库 + 注入的真实用量服务)。
     usage: crate::adapters::usage::UsagePanel,
+    /// 「待办」面板适配(S3b-1):按项目状态 + `diggerd` 的 TodoService。
+    todo: crate::adapters::todo::TodoPanel,
     /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
     markdown: crate::markdown::MarkdownPanel,
     /// 项目注册表与已开页签(Project 是 host 层共享业务,ADR-014)。
@@ -329,6 +337,20 @@ fn usage_native_rect(layout: UsageLayout, content: Rect, pair: Option<PairRects>
     }
 }
 
+/// 待办 webview 的矩形:配对第二块(内容区)扣掉库视图为 iced 预留的顶部行
+/// 与底部新增输入。列表收起时内容区独占整块;整个面板不可见时由调用方传
+/// `visible=false` 销毁。
+fn todo_native_rect(content: Rect, pair: Option<PairRects>, add_input_h: f32) -> Rect {
+    let slot = pair.map(|p| p.second).unwrap_or(content);
+    let top = dozer_panel_todo::adapter::top_row_inner_h_px();
+    Rect::new(
+        slot.x,
+        slot.y + top,
+        slot.w,
+        (slot.h - top - add_input_h).max(1.0),
+    )
+}
+
 /// 本帧要把哪些预览页面放到哪:`sync_native` 的纯数据半段。
 ///
 /// 只读骨架(选中的配对面板)与预览状态,顺便把两个面板的页签条可用宽度
@@ -406,6 +428,7 @@ impl ProductShell {
             (shell::usage_id(), "用量"),
             (shell::project_id(), "项目"),
             (shell::files_id(), "文件"),
+            (shell::todo_id(), "待办"),
             (shell::agent_id(), "Agent"),
         ] {
             catalog
@@ -444,6 +467,11 @@ impl ProductShell {
             apps.attach_usage(ledger.clone(), scope_path.to_string_lossy().to_string());
         }
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
+        let todo_client = dozer_client::Client::new(digger_paths::product().socket_path());
+        let todo = crate::adapters::todo::TodoPanel::new(
+            Arc::new(todo_client.clone()),
+            todo_client,
+        );
         let markdown = crate::markdown::MarkdownPanel::new();
         // 项目数据与布局同在一个数据目录里:生产是产品数据根,测试是各自的临时目录。
         let data_dir = shell_path
@@ -483,6 +511,7 @@ impl ProductShell {
             project_shell_blocked: None,
             apps,
             usage,
+            todo,
             markdown,
             projects,
             project,
@@ -663,6 +692,9 @@ impl ProductShell {
             // 进入「用量」面板:触发一次取数(库的 on_activate,Task 20)。
             self.usage.activate();
         }
+        if *panel == shell::todo_id() {
+            self.activate_todo_panel();
+        }
         if *panel == shell::project_id() {
             // 进入「项目」面板:当前项目的信息/文档/记忆一次拉齐(库的 on_activate)。
             self.activate_project_panel();
@@ -714,6 +746,18 @@ impl ProductShell {
             self.activate_project_panel();
         }
         self.activate_files_panel();
+        self.activate_todo_panel();
+    }
+
+    /// 把待办面板切到当前项目;面板可见时立即拉一次列表与分类。
+    fn activate_todo_panel(&mut self) {
+        let project = self.projects.current_project().cloned();
+        self.todo.set_project(project.as_ref().map(|p| p.id));
+        if self.panel_visible(&shell::todo_id())
+            && let Some(project) = project
+        {
+            self.todo.activate(Some(PathBuf::from(project.path)));
+        }
     }
 
     /// 把 Project 面板切到当前项目(切入面板 / 换项目页签时都走这里)。没有项目时什么都不做。
@@ -865,6 +909,23 @@ impl ProductShell {
                 .and_then(|side| shell::pair_rects(&self.shell, side));
             usage_native_rect(self.usage_layout(), content, pair)
         });
+        let todo_rect = content_of(&shell::todo_id()).map(|content| {
+            let pair = self
+                .shell
+                .side_of(&shell::todo_id())
+                .and_then(|side| shell::pair_rects(&self.shell, side));
+            let add_h = self
+                .todo
+                .current_state()
+                .map(|s| s.add_input_height())
+                .unwrap_or(dozer_panel_todo::ADD_INPUT_MIN_HEIGHT);
+            let pair = if self.pane_collapsed(&shell::todo_id()) {
+                None
+            } else {
+                pair
+            };
+            todo_native_rect(content, pair, add_h)
+        });
         let markdown_rect = content_of(&shell::markdown_id());
         let hidden = LogicalRect {
             x: 0.0,
@@ -903,11 +964,20 @@ impl ProductShell {
             )
         }
         .map(Msg::Markdown);
+        let todo_task = self
+            .todo
+            .sync_native(
+                window,
+                todo_rect.is_some() && !closing,
+                todo_rect.map(logical).unwrap_or(hidden),
+            )
+            .map(Msg::NativeTodo);
         let preview_tasks = self.sync_preview_native(&rects, closing);
         Task::batch([
             apps_task,
             usage_task,
             markdown_task,
+            todo_task,
             Task::batch(preview_tasks),
         ])
     }
@@ -1039,6 +1109,29 @@ impl ProductShell {
                 tokens.bg,
                 tokens.panel,
             ),
+        };
+        container(body)
+            .padding(0)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn todo_view<'a>(&'a self, area: &BodyArea) -> Element<'a, Msg> {
+        let tokens = color::current();
+        let collapsed = self.pane_collapsed(&shell::todo_id());
+        let (list, content) = self.todo.panes(collapsed);
+        let body: Element<'_, Msg> = if collapsed {
+            content
+        } else {
+            pair_view(
+                area,
+                list,
+                content,
+                Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
+                tokens.bg,
+                tokens.panel,
+            )
         };
         container(body)
             .padding(0)
@@ -1680,6 +1773,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.info" => self.info_view(),
             "digger.apps" => self.apps_view(),
             "digger.usage" => self.usage_view(area),
+            "digger.todo" => self.todo_view(area),
             "digger.markdown" => self.markdown_view(),
             "digger.project" => self.project_view(area),
             "digger.files" => self.files_view(area),
@@ -1799,6 +1893,11 @@ fn publish_panes(panes: &bytehost_desktop::PaneStore) {
 }
 
 /// 每个已注册面板此刻的可见性(下标与 [`shell::all_panels`] 对齐)。
+/// 待办轮询只在面板真正可见且未在退出时订阅。
+fn todo_poll_active(shell: &ProductShell) -> bool {
+    !shell.closing && shell.panel_visible(&shell::todo_id())
+}
+
 fn preview_panel_visible(flags: &[bool]) -> bool {
     [shell::files_id(), shell::project_id()]
         .iter()
@@ -2022,6 +2121,33 @@ impl Product<Msg> for ProductShell {
             }
             Msg::NativeUsage(event) => {
                 self.usage.native.update(event);
+                Task::none()
+            }
+            Msg::Todo(message) => {
+                for effect in self.todo.update(message) {
+                    match effect {
+                        crate::adapters::todo::TodoEffect::ToggleListCollapse => {
+                            return self.on_shell(ShellMsg::TogglePane(shell::todo_id()));
+                        }
+                        crate::adapters::todo::TodoEffect::AssignAgent { .. } => {
+                            // Task 5 接线;当前 update 不会产生该效果。
+                        }
+                    }
+                }
+                for (level, text) in self.todo.take_notices() {
+                    eprintln!("digger: todo 面板/{level}: {text}"); // cli-output
+                }
+                for text in self.todo.take_diagnostics() {
+                    eprintln!("digger: todo 面板诊断: {text}"); // cli-output
+                }
+                Task::none()
+            }
+            Msg::NativeTodo(event) => {
+                let _ = self.todo.native.update(event);
+                Task::none()
+            }
+            Msg::TodoPoll => {
+                self.todo.poll(std::time::Instant::now());
                 Task::none()
             }
             Msg::Files(m) => self.on_files_message(m),
@@ -2595,6 +2721,12 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
             .then_some(Msg::Projects(crate::projects::Message::DragEnd))
         }));
     }
+    // 待办面板可见时每秒轮询一次(收起整个面板即停,省电)。
+    if todo_poll_active(shell) {
+        subs.push(
+            iced::time::every(crate::adapters::todo::POLL_INTERVAL).map(|_| Msg::TodoPoll),
+        );
+    }
     // 名称编辑框的真焦点态只有渲染时(Operation)读得到:用一个 16ms 的订阅在帧与帧之间
     // 把它取回来(同 Dozer 的 `CaptureNameEditFocus`,这里借订阅当逐帧钩子)。
     if let Some(project) = shell.projects.current_project().map(|p| p.id)
@@ -2712,6 +2844,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         .attach_handle(tokio::runtime::Handle::current());
     shell.files.attach_handle(tokio::runtime::Handle::current());
     shell.agent.attach_handle(tokio::runtime::Handle::current());
+    shell.todo.attach_handle(tokio::runtime::Handle::current());
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
     // 缺资源时宿主只会整块白屏:启动即点名报出,与 selftest 同一份名单。
@@ -2763,6 +2896,18 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     let native_usage = match shell.usage.native.take_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|event| (Msg::NativeUsage(event), rx))
+        })),
+        None => Task::none(),
+    };
+    let todo_task = match shell.todo.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::Todo(event), rx))
+        })),
+        None => Task::none(),
+    };
+    let native_todo = match shell.todo.native.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::NativeTodo(event), rx))
         })),
         None => Task::none(),
     };
@@ -2840,6 +2985,8 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             reply_task,
             usage_task,
             native_usage,
+            todo_task,
+            native_todo,
             markdown_task,
             project_task,
             files_task,
@@ -3837,7 +3984,7 @@ mod tests {
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 7);
+        assert_eq!(shell.catalog.len(), 8);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
@@ -4563,6 +4710,89 @@ mod tests {
         assert!(
             shell.surface_callbacks.is_empty(),
             "Surface 只在 update_host 路由一次,Product::update 不再分发"
+        );
+    }
+
+    /// Review Focus 3:待办 webview 的底边永远给新增输入框让位,顶边让开库的
+    /// 顶栏行;列表收起 / 宽窄窗口都不重叠。
+    #[test]
+    fn todo_native_rect_never_overlaps_the_add_input() {
+        let top = dozer_panel_todo::adapter::top_row_inner_h_px();
+        let add = dozer_panel_todo::ADD_INPUT_MIN_HEIGHT;
+        for (content, second) in [
+            (
+                Rect::new(0.0, 0.0, 640.0, 800.0),
+                Rect::new(260.0, 0.0, 380.0, 800.0),
+            ),
+            (
+                Rect::new(0.0, 0.0, 1600.0, 900.0),
+                Rect::new(500.0, 0.0, 1100.0, 900.0),
+            ),
+            (
+                Rect::new(0.0, 0.0, 700.0, 500.0),
+                Rect::new(300.0, 0.0, 400.0, 500.0),
+            ),
+        ] {
+            let pair = PairRects {
+                first: Rect::new(content.x, content.y, 0.0, content.h),
+                second,
+                divider: Rect::new(second.x, second.y, 0.0, second.h),
+            };
+            for pair in [Some(pair), None] {
+                let rect = todo_native_rect(content, pair, add);
+                let slot = pair.map(|p| p.second).unwrap_or(content);
+                assert!(rect.x >= slot.x && rect.y >= slot.y + top);
+                assert!(rect.x + rect.w <= slot.x + slot.w + 0.001);
+                assert!(
+                    rect.y + rect.h + add <= slot.y + slot.h + 0.001,
+                    "webview must not cover the add input: {rect:?} vs {slot:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn todo_native_is_destroyed_when_the_panel_is_not_visible() {
+        let mut shell = fresh("todo-destroy");
+        shell.window = Some(window::Id::unique());
+        shell.todo.set_project(Some(1));
+        press(&mut shell, &shell::todo_id());
+        let _ = shell.sync_native();
+        assert!(shell.todo.native.is_live(), "visible todo builds the view");
+        press(&mut shell, &shell::info_id());
+        let _ = shell.sync_native();
+        assert!(
+            !shell.todo.native.is_live(),
+            "switching away must destroy the native view"
+        );
+    }
+
+    #[test]
+    fn the_poll_tick_is_subscribed_only_while_the_panel_is_visible() {
+        let mut shell = fresh("todo-poll");
+        assert!(!todo_poll_active(&shell), "todo is not selected by default");
+        press(&mut shell, &shell::todo_id());
+        assert!(todo_poll_active(&shell));
+        press(&mut shell, &shell::info_id());
+        assert!(!todo_poll_active(&shell));
+        shell.closing = true;
+        assert!(!todo_poll_active(&shell));
+    }
+
+    #[test]
+    fn todo_message_variants_route_into_the_panel() {
+        let mut shell = fresh("todo-route");
+        press(&mut shell, &shell::todo_id());
+        assert!(!shell.pane_collapsed(&shell::todo_id()));
+        let _ = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::Todo(
+                dozer_panel_todo::Message::ToggleListCollapse,
+            )),
+        );
+        assert!(
+            shell.pane_collapsed(&shell::todo_id()),
+            "ToggleListCollapse must flip the shell PaneStore"
         );
     }
 }
