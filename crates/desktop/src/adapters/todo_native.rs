@@ -8,8 +8,8 @@
 use bytehost_core::LogicalRect;
 use dozer_model::{AgentKind, Locale, LocaleStamp, Stamped};
 use dozer_panel_todo::{
-    TodoWebviewEvent, WebviewPushState, WorkspaceState, current_view_payload,
-    encode_todo_push, parse_todo_event,
+    TodoWebviewEvent, WebviewPushState, WorkspaceState, current_view_payload, encode_todo_push,
+    parse_todo_event,
 };
 use iced::{Task, window};
 use std::cell::RefCell;
@@ -221,11 +221,9 @@ impl Native {
     }
 
     pub fn failed(&self) -> Option<String> {
-        self.error.clone().or_else(|| {
-            self.push
-                .failed()
-                .map(|text| text.fallback.clone())
-        })
+        self.error
+            .clone()
+            .or_else(|| self.push.failed().map(|text| text.fallback.clone()))
     }
 
     #[cfg(test)]
@@ -305,8 +303,8 @@ fn agent_icon_data(agent: AgentKind) -> dozer_panel_todo::adapter::AgentIconData
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dozer_model::TodoInfo;
     use dozer_model::LocaleStamp;
+    use dozer_model::TodoInfo;
 
     fn state(text: &str) -> WorkspaceState {
         WorkspaceState {

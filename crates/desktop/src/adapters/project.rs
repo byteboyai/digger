@@ -99,10 +99,7 @@ impl UnavailableService {
 }
 
 impl dozer_services::TranscriptService for UnavailableService {
-    fn delete_project_transcripts(
-        &self,
-        _cwd: String,
-    ) -> BoxFuture<'_, Result<u32, ServiceError>> {
+    fn delete_project_transcripts(&self, _cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
         Box::pin(async { Err(self.error()) })
     }
     fn backfill_project_transcripts(

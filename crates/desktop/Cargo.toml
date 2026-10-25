@@ -78,6 +78,8 @@ dozer-panel-todo.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# 集成测试在进程内拉起真实 diggerd(S3b-1 Task 6)。
+dozerd.workspace = true
 rusqlite.workspace = true
 # 测试里用运行时同款的 `task::into_stream` 数一个 Task 发出的窗口动作(`iced::runtime` 不对外公开)。
 iced_runtime = "0.14"

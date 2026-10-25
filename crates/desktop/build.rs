@@ -26,7 +26,6 @@ fn copy_todo() {
     ] {
         let input = source.join(name);
         println!("cargo:rerun-if-changed={}", input.display());
-        std::fs::copy(input, out.join(dest))
-            .expect("shared Todo assets must be built and present");
+        std::fs::copy(input, out.join(dest)).expect("shared Todo assets must be built and present");
     }
 }

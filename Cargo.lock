@@ -1092,6 +1092,7 @@ dependencies = [
  "dozer-panel-usage",
  "dozer-preview-core",
  "dozer-services",
+ "dozerd",
  "iced",
  "iced_core",
  "iced_renderer",

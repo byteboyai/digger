@@ -55,6 +55,10 @@ mod tests {
     fn todo_and_usage_host_pages_are_different_files() {
         let usage = include_bytes!(concat!(env!("OUT_DIR"), "/host.html"));
         assert_ne!(HOST, usage);
-        assert!(std::str::from_utf8(HOST).unwrap().contains("todo-content.js"));
+        assert!(
+            std::str::from_utf8(HOST)
+                .unwrap()
+                .contains("todo-content.js")
+        );
     }
 }

@@ -72,6 +72,15 @@ impl TodoPanel {
 
     /// 切当前项目(不丢别的项目的状态)。
     pub fn set_project(&mut self, project_id: Option<i64>) {
+        if self.current != project_id
+            && let Some(old) = self.current
+            && let Some(state) = self.states.get(&old)
+        {
+            // 切走后旧项目的在途结果作废:即便稍后切回来,也不能被上一轮
+            // 的迟到 Loaded 覆盖。
+            state.requests.invalidate("todos");
+            state.requests.invalidate("categories");
+        }
         self.current = project_id;
         self.native.set_project(project_id);
         if let Some(id) = project_id {
@@ -103,13 +112,9 @@ impl TodoPanel {
         let ctx = dozer_panel_host::ActivationCtx {
             project_id,
             project_path,
-            io: dozer_panel_host::PanelIo::new(
-                services,
-                handle,
-                move |message| {
-                    let _ = tx.send(message);
-                },
-            ),
+            io: dozer_panel_host::PanelIo::new(services, handle, move |message| {
+                let _ = tx.send(message);
+            }),
         };
         dozer_panel_todo::on_activate(state, &ctx);
     }
@@ -160,16 +165,9 @@ impl TodoPanel {
         };
         let service = Arc::clone(&self.service);
         let tx = self.tx.clone();
-        dozer_panel_todo::update(
-            state,
-            msg,
-            project_id,
-            &service,
-            &handle,
-            move |message| {
-                let _ = tx.send(message);
-            },
-        );
+        dozer_panel_todo::update(state, msg, project_id, &service, &handle, move |message| {
+            let _ = tx.send(message);
+        });
         Vec::new()
     }
 
@@ -328,9 +326,8 @@ impl TodoPanel {
     /// 给库构造服务束:只有 `todo` 是真实的,其余全是 `UnavailableService`。
     fn services(&self) -> Services {
         use crate::adapters::project::UnavailableService;
-        let unavailable = |reason: &str| -> Arc<UnavailableService> {
-            Arc::new(UnavailableService::new(reason))
-        };
+        let unavailable =
+            |reason: &str| -> Arc<UnavailableService> { Arc::new(UnavailableService::new(reason)) };
         Services {
             usage: unavailable("Todo 面板不用用量服务"),
             todo: Arc::clone(&self.service),
@@ -348,7 +345,6 @@ impl TodoPanel {
             session: unavailable("Todo 面板不用 session 服务"),
         }
     }
-
 }
 
 /// 待办的展示适配:面板头、折叠按钮、分隔线与内边距。悬停动画在 Digger
@@ -476,11 +472,7 @@ mod tests {
         }
 
         fn seed(&self, project_id: i64, items: Vec<TodoInfo>) {
-            self.data
-                .lock()
-                .unwrap()
-                .items
-                .insert(project_id, items);
+            self.data.lock().unwrap().items.insert(project_id, items);
         }
 
         fn record(&self, call: impl Into<String>) {
@@ -567,11 +559,10 @@ mod tests {
             let mut data = self.data.lock().unwrap();
             let id = data.next_id;
             data.next_id += 1;
-            data.items.entry(project_id).or_default().push(todo(
-                id,
-                project_id,
-                &text,
-            ));
+            data.items
+                .entry(project_id)
+                .or_default()
+                .push(todo(id, project_id, &text));
             Box::pin(async { Ok(()) })
         }
 
@@ -580,11 +571,7 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
-        fn edit_todo_text(
-            &self,
-            id: i64,
-            text: String,
-        ) -> BoxFuture<'_, Result<(), ServiceError>> {
+        fn edit_todo_text(&self, id: i64, text: String) -> BoxFuture<'_, Result<(), ServiceError>> {
             self.record(format!("edit:{id}:{text}"));
             Box::pin(async { Ok(()) })
         }
@@ -731,7 +718,10 @@ mod tests {
         // A 的结果还没取走就切到 B。
         p.set_project(Some(2));
         drain(&mut p, &rt);
-        assert!(p.state(2).unwrap().items().is_empty(), "B 不能被 A 的结果污染");
+        assert!(
+            p.state(2).unwrap().items().is_empty(),
+            "B 不能被 A 的结果污染"
+        );
         p.set_project(Some(1));
         assert!(p.state(1).unwrap().items().is_empty(), "A 的在途结果应作废");
     }
@@ -739,7 +729,10 @@ mod tests {
     #[test]
     fn unavailable_reads_keep_the_last_list_and_stay_silent() {
         let fake = Arc::new(FakeTodo::new());
-        fake.seed(7, vec![todo(1, 7, "一"), todo(2, 7, "二"), todo(3, 7, "三")]);
+        fake.seed(
+            7,
+            vec![todo(1, 7, "一"), todo(2, 7, "二"), todo(3, 7, "三")],
+        );
         let (mut p, rt) = panel(fake.clone());
         p.set_project(Some(7));
         p.activate(None);
@@ -747,7 +740,10 @@ mod tests {
         assert_eq!(p.state(7).unwrap().items().len(), 3);
 
         fake.down.store(true, Ordering::SeqCst);
-        p.update(Message::LoadFailed(ServiceErrorKind::Unavailable, "down".into()));
+        p.update(Message::LoadFailed(
+            ServiceErrorKind::Unavailable,
+            "down".into(),
+        ));
         assert_eq!(p.state(7).unwrap().items().len(), 3);
         assert!(p.take_notices().is_empty());
 
@@ -761,7 +757,10 @@ mod tests {
     fn non_unavailable_read_failures_produce_a_notice() {
         let (mut p, _rt) = panel(Arc::new(FakeTodo::new()));
         p.set_project(Some(7));
-        p.update(Message::LoadFailed(ServiceErrorKind::Rejected, "boom".into()));
+        p.update(Message::LoadFailed(
+            ServiceErrorKind::Rejected,
+            "boom".into(),
+        ));
         let notices = p.take_notices();
         assert_eq!(notices.len(), 1);
         assert!(!notices[0].1.is_empty());
@@ -857,13 +856,7 @@ mod tests {
 
     fn page_panel() -> (TodoPanel, tokio::runtime::Runtime, Arc<FakeTodo>) {
         let fake = Arc::new(FakeTodo::new());
-        fake.seed(
-            7,
-            vec![
-                todo(1, 7, "一"),
-                todo(2, 7, "二"),
-            ],
-        );
+        fake.seed(7, vec![todo(1, 7, "一"), todo(2, 7, "二")]);
         let (mut p, rt) = panel(fake.clone());
         p.set_project(Some(7));
         p.activate(None);
@@ -873,15 +866,24 @@ mod tests {
 
     #[test]
     fn page_events_become_the_same_messages_as_dozer() {
-        use dozer_panel_todo::{
-            SetStatusTarget, TodoWebviewEvent as Ev,
-        };
+        use dozer_panel_todo::{SetStatusTarget, TodoWebviewEvent as Ev};
 
         let (mut p, rt, fake) = page_panel();
         for (event, expected) in [
-            (Ev::Add { text: "新任务".into() }, "add:7:新任务"),
+            (
+                Ev::Add {
+                    text: "新任务".into(),
+                },
+                "add:7:新任务",
+            ),
             (Ev::Toggle { id: 1 }, "toggle:1:true"),
-            (Ev::EditText { id: 2, text: "改".into() }, "edit:2:改"),
+            (
+                Ev::EditText {
+                    id: 2,
+                    text: "改".into(),
+                },
+                "edit:2:改",
+            ),
             (
                 Ev::Reorder {
                     id: 2,
@@ -944,10 +946,7 @@ mod tests {
         use dozer_panel_todo::TodoWebviewEvent as Ev;
         let (mut p, rt, fake) = page_panel();
         let before = fake.mutations.lock().unwrap().len();
-        assert!(
-            p.handle_webview_event(Ev::Toggle { id: -1 })
-                .is_empty()
-        );
+        assert!(p.handle_webview_event(Ev::Toggle { id: -1 }).is_empty());
         drain(&mut p, &rt);
         assert_eq!(fake.mutations.lock().unwrap().len(), before);
     }

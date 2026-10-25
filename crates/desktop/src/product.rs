@@ -468,10 +468,8 @@ impl ProductShell {
         }
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
         let todo_client = dozer_client::Client::new(digger_paths::product().socket_path());
-        let todo = crate::adapters::todo::TodoPanel::new(
-            Arc::new(todo_client.clone()),
-            todo_client,
-        );
+        let todo =
+            crate::adapters::todo::TodoPanel::new(Arc::new(todo_client.clone()), todo_client);
         let markdown = crate::markdown::MarkdownPanel::new();
         // 项目数据与布局同在一个数据目录里:生产是产品数据根,测试是各自的临时目录。
         let data_dir = shell_path
@@ -2147,7 +2145,9 @@ impl Product<Msg> for ProductShell {
                     return Task::none();
                 };
                 for effect in self.todo.handle_webview_event(event) {
-                    if let crate::adapters::todo::TodoEffect::AssignAgent { todo_id, agent } = effect {
+                    if let crate::adapters::todo::TodoEffect::AssignAgent { todo_id, agent } =
+                        effect
+                    {
                         self.todo.assign_agent(todo_id, agent);
                     }
                 }
@@ -2730,9 +2730,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     }
     // 待办面板可见时每秒轮询一次(收起整个面板即停,省电)。
     if todo_poll_active(shell) {
-        subs.push(
-            iced::time::every(crate::adapters::todo::POLL_INTERVAL).map(|_| Msg::TodoPoll),
-        );
+        subs.push(iced::time::every(crate::adapters::todo::POLL_INTERVAL).map(|_| Msg::TodoPoll));
     }
     // 名称编辑框的真焦点态只有渲染时(Operation)读得到:用一个 16ms 的订阅在帧与帧之间
     // 把它取回来(同 Dozer 的 `CaptureNameEditFocus`,这里借订阅当逐帧钩子)。
@@ -4793,9 +4791,7 @@ mod tests {
         assert!(!shell.pane_collapsed(&shell::todo_id()));
         let _ = Product::update(
             &mut shell,
-            HostMessage::Product(Msg::Todo(
-                dozer_panel_todo::Message::ToggleListCollapse,
-            )),
+            HostMessage::Product(Msg::Todo(dozer_panel_todo::Message::ToggleListCollapse)),
         );
         assert!(
             shell.pane_collapsed(&shell::todo_id()),

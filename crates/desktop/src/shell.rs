@@ -136,7 +136,13 @@ pub fn defaults() -> Defaults {
     let (w, h) = byteui::theme::geometry::initial_window_size();
     Defaults {
         rails: [
-            vec![project_id(), files_id(), todo_id(), markdown_id(), info_id()],
+            vec![
+                project_id(),
+                files_id(),
+                todo_id(),
+                markdown_id(),
+                info_id(),
+            ],
             vec![agent_id(), apps_id(), usage_id()],
         ],
         selected: [markdown_id(), agent_id()],
@@ -333,7 +339,13 @@ mod tests {
         assert_eq!(seen, want);
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), files_id(), todo_id(), markdown_id(), info_id()],
+            [
+                project_id(),
+                files_id(),
+                todo_id(),
+                markdown_id(),
+                info_id()
+            ],
             "project, files, todo, then the content panels, like Dozer"
         );
         assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
@@ -398,7 +410,13 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), files_id(), info_id(), markdown_id(), todo_id()],
+            [
+                project_id(),
+                files_id(),
+                info_id(),
+                markdown_id(),
+                todo_id()
+            ],
             "the user's order is kept, the new panels land on their default side"
         );
         assert_eq!(
@@ -434,7 +452,13 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), files_id(), info_id(), markdown_id(), todo_id()],
+            [
+                project_id(),
+                files_id(),
+                info_id(),
+                markdown_id(),
+                todo_id()
+            ],
             "files lands right after project; todo is appended to the default side"
         );
         assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
@@ -804,7 +828,13 @@ mod tests {
         assert_eq!(first.left_width(), 500.0, "the user's width is kept");
         assert_eq!(
             first.rail(Side::Left),
-            [project_id(), files_id(), info_id(), markdown_id(), todo_id()]
+            [
+                project_id(),
+                files_id(),
+                info_id(),
+                markdown_id(),
+                todo_id()
+            ]
         );
         assert_eq!(first.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         drag_left_width_to(&mut first, 744.0);
@@ -853,13 +883,16 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Left),
-            [project_id(), files_id(), markdown_id(), info_id(), todo_id()],
+            [
+                project_id(),
+                files_id(),
+                markdown_id(),
+                info_id(),
+                todo_id()
+            ],
             "old relative order is kept; todo is appended to its default side"
         );
-        assert_eq!(
-            model.rail(Side::Right),
-            [agent_id(), apps_id(), usage_id()]
-        );
+        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
