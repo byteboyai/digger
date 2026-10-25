@@ -39,6 +39,7 @@ pub struct TodoPanel {
     tx: tokio::sync::mpsc::UnboundedSender<Message>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<Message>>,
     last_poll: Option<Instant>,
+    pub native: crate::adapters::todo_native::Native,
 }
 
 impl TodoPanel {
@@ -53,6 +54,7 @@ impl TodoPanel {
             tx,
             rx: Some(rx),
             last_poll: None,
+            native: crate::adapters::todo_native::Native::new(),
         }
     }
 

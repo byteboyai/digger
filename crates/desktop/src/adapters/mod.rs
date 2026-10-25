@@ -33,6 +33,8 @@ pub mod tab_chrome;
 
 /// 待办面板适配(S3b-1)。
 pub mod todo;
+/// 待办面板的 wry 宿主(S3b-1)。
+pub mod todo_native;
 
 /// 待办面板的嵌入 web 资源(S3b-1)。
 pub mod todo_assets;
