@@ -13,7 +13,7 @@ fn features() -> McpFeatures {
     McpFeatures {
         memory: true,
         summary: false,
-        todos: false,
+        todos: true,
         preview: false,
         file_edit: false,
     }
