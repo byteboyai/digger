@@ -1890,12 +1890,12 @@ fn publish_panes(panes: &bytehost_desktop::PaneStore) {
     CURRENT_PANES.with(|p| *p.borrow_mut() = Some(panes.clone()));
 }
 
-/// 每个已注册面板此刻的可见性(下标与 [`shell::all_panels`] 对齐)。
 /// 待办轮询只在面板真正可见且未在退出时订阅。
 fn todo_poll_active(shell: &ProductShell) -> bool {
     !shell.closing && shell.panel_visible(&shell::todo_id())
 }
 
+/// 每个已注册面板此刻的可见性(下标与 [`shell::all_panels`] 对齐)。
 fn preview_panel_visible(flags: &[bool]) -> bool {
     [shell::files_id(), shell::project_id()]
         .iter()
@@ -2145,10 +2145,13 @@ impl Product<Msg> for ProductShell {
                     return Task::none();
                 };
                 for effect in self.todo.handle_webview_event(event) {
-                    if let crate::adapters::todo::TodoEffect::AssignAgent { todo_id, agent } =
-                        effect
-                    {
-                        self.todo.assign_agent(todo_id, agent);
+                    match effect {
+                        crate::adapters::todo::TodoEffect::ToggleListCollapse => {
+                            return self.on_shell(ShellMsg::TogglePane(shell::todo_id()));
+                        }
+                        crate::adapters::todo::TodoEffect::AssignAgent { todo_id, agent } => {
+                            self.todo.assign_agent(todo_id, agent);
+                        }
                     }
                 }
                 self.sync_native()
