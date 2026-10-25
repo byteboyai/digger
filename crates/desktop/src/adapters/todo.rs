@@ -206,6 +206,64 @@ impl TodoPanel {
         );
     }
 
+    /// 页面事件 → 库的 `route_event` → 同一条 `Message` / 指派 / 详情路口。
+    pub fn handle_webview_event(
+        &mut self,
+        event: dozer_panel_todo::TodoWebviewEvent,
+    ) -> Vec<TodoEffect> {
+        use dozer_panel_todo::Routed;
+        let Some(project_id) = self.current else {
+            return Vec::new();
+        };
+        let items = match self.states.get(&project_id) {
+            Some(state) => state.items().to_vec(),
+            None => return Vec::new(),
+        };
+        match dozer_panel_todo::route_event(&items, event) {
+            Some(Routed::Message(message)) => self.update(message),
+            Some(Routed::AssignAgent { idx, agent }) => items
+                .get(idx)
+                .map(|item| TodoEffect::AssignAgent {
+                    todo_id: item.id,
+                    agent,
+                })
+                .into_iter()
+                .collect(),
+            Some(Routed::OpenDetail { .. }) => {
+                eprintln!("digger: todo detail not available in Digger yet"); // cli-output
+                Vec::new()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// 指派 agent:只写库里的归属字段,不触发执行。
+    pub fn assign_agent(&self, todo_id: i64, agent: AgentKind) {
+        let (Some(project_id), Some(handle)) = (self.current, self.handle.clone()) else {
+            return;
+        };
+        let Some(state) = self.states.get(&project_id) else {
+            return;
+        };
+        // 与 Dozer 同款:先让旧刷新作废,再取本次令牌;结果回来后走 Mutated,
+        // 库会按既有约定重新拉一次列表。
+        state.requests.invalidate("todos");
+        let token = state.requests.begin(Some(project_id), "todos");
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        handle.spawn(async move {
+            let result = client
+                .assign_todo_agent(todo_id, agent)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Message::AsyncResult(
+                token,
+                Box::new(Message::Mutated(result)),
+            ));
+        });
+    }
+
     /// 排空库的提示发件箱(产品落 stderr;没有 Toast 机制)。
     pub fn take_notices(&mut self) -> Vec<(String, String)> {
         let Some(state) = self.current.and_then(|id| self.states.get_mut(&id)) else {
@@ -795,5 +853,215 @@ mod tests {
             disposition(&Message::ToggleListCollapse),
             D::Effect
         ));
+    }
+
+    fn page_panel() -> (TodoPanel, tokio::runtime::Runtime, Arc<FakeTodo>) {
+        let fake = Arc::new(FakeTodo::new());
+        fake.seed(
+            7,
+            vec![
+                todo(1, 7, "一"),
+                todo(2, 7, "二"),
+            ],
+        );
+        let (mut p, rt) = panel(fake.clone());
+        p.set_project(Some(7));
+        p.activate(None);
+        drain(&mut p, &rt);
+        (p, rt, fake)
+    }
+
+    #[test]
+    fn page_events_become_the_same_messages_as_dozer() {
+        use dozer_panel_todo::{
+            SetStatusTarget, TodoWebviewEvent as Ev,
+        };
+
+        let (mut p, rt, fake) = page_panel();
+        for (event, expected) in [
+            (Ev::Add { text: "新任务".into() }, "add:7:新任务"),
+            (Ev::Toggle { id: 1 }, "toggle:1:true"),
+            (Ev::EditText { id: 2, text: "改".into() }, "edit:2:改"),
+            (
+                Ev::Reorder {
+                    id: 2,
+                    after_id: None,
+                },
+                "reorder:2:None",
+            ),
+            (
+                Ev::SetStatus {
+                    id: 1,
+                    state: SetStatusTarget::Done,
+                },
+                "status:1:Done",
+            ),
+            (
+                Ev::SetPlanDate {
+                    id: 1,
+                    date: "08-10".into(),
+                },
+                "plan:1:Some(\"08-10\")",
+            ),
+            (
+                Ev::SetCategory {
+                    id: 1,
+                    category_id: Some(9),
+                },
+                "category:1:Some(9)",
+            ),
+        ] {
+            assert!(p.handle_webview_event(event).is_empty(), "no host effect");
+            drain(&mut p, &rt);
+            assert!(
+                fake.mutations.lock().unwrap().iter().any(|m| m == expected),
+                "missing {expected}; got {:?}",
+                fake.mutations.lock().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn an_event_for_a_task_that_no_longer_exists_is_ignored() {
+        use dozer_panel_todo::TodoWebviewEvent as Ev;
+        let (mut p, rt, fake) = page_panel();
+        let before = fake.mutations.lock().unwrap().len();
+        for event in [
+            Ev::Toggle { id: 99 },
+            Ev::EditText {
+                id: 99,
+                text: "x".into(),
+            },
+        ] {
+            assert!(p.handle_webview_event(event).is_empty());
+            drain(&mut p, &rt);
+        }
+        assert_eq!(fake.mutations.lock().unwrap().len(), before);
+    }
+
+    #[test]
+    fn events_for_optimistic_placeholder_ids_are_ignored() {
+        use dozer_panel_todo::TodoWebviewEvent as Ev;
+        let (mut p, rt, fake) = page_panel();
+        let before = fake.mutations.lock().unwrap().len();
+        assert!(
+            p.handle_webview_event(Ev::Toggle { id: -1 })
+                .is_empty()
+        );
+        drain(&mut p, &rt);
+        assert_eq!(fake.mutations.lock().unwrap().len(), before);
+    }
+
+    #[test]
+    fn assigning_an_agent_calls_the_client_and_refreshes() {
+        use dozer_panel_todo::TodoWebviewEvent as Ev;
+        let (mut p, _rt, _fake) = page_panel();
+        let effects = p.handle_webview_event(Ev::AssignAgent {
+            id: 2,
+            agent: AgentKind::Codebuddy,
+        });
+        assert_eq!(
+            effects,
+            vec![TodoEffect::AssignAgent {
+                todo_id: 2,
+                agent: AgentKind::Codebuddy,
+            }]
+        );
+    }
+
+    #[test]
+    fn open_detail_is_a_documented_no_op() {
+        use dozer_panel_todo::TodoWebviewEvent as Ev;
+        let (mut p, _rt, fake) = page_panel();
+        let before = fake.mutations.lock().unwrap().len();
+        assert!(p.handle_webview_event(Ev::OpenDetail { id: 1 }).is_empty());
+        assert_eq!(fake.mutations.lock().unwrap().len(), before);
+    }
+
+    #[test]
+    fn add_height_events_resize_the_native_rect() {
+        use dozer_panel_todo::TodoWebviewEvent as Ev;
+        let (mut p, _rt, _fake) = page_panel();
+        let before = p.state(7).unwrap().add_input_height();
+        assert!(
+            p.handle_webview_event(Ev::AddHeight { px: 200.0 })
+                .is_empty()
+        );
+        assert!(p.state(7).unwrap().add_input_height() > before);
+    }
+
+    #[test]
+    fn assigning_an_agent_calls_the_client_and_refreshes_via_mutated() {
+        use dozer_core::protocol::{PROTOCOL_VERSION, Reply, Request, decode_line, encode_line};
+        use std::path::PathBuf;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let path = PathBuf::from(format!(
+            "/tmp/digger-todo-assign-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let _ = dozer_core::paths::install(digger_paths::product());
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&calls);
+
+        let fake = Arc::new(FakeTodo::new());
+        fake.seed(7, vec![todo(2, 7, "原任务")]);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+
+        rt.spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let seen = Arc::clone(&seen);
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let mut lines = tokio::io::BufReader::new(r).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let reply = match decode_line::<Request>(&line) {
+                            Ok(Request::Hello { .. }) => Reply::Hello {
+                                protocol: PROTOCOL_VERSION,
+                                product: "digger".into(),
+                            },
+                            Ok(Request::AssignTodoAgent { id, agent }) => {
+                                seen.lock().unwrap().push((id, agent));
+                                Reply::Todo {
+                                    todo: todo(id, 7, "原任务"),
+                                }
+                            }
+                            _ => Reply::Error {
+                                message: "unexpected".into(),
+                            },
+                        };
+                        let _ = w.write_all(encode_line(&reply).as_bytes()).await;
+                    }
+                });
+            }
+        });
+
+        let service: Arc<dyn TodoService> = fake.clone();
+        let mut p = TodoPanel::new(service, dozer_client::Client::new(path.clone()));
+        p.attach_handle(rt.handle().clone());
+        p.set_project(Some(7));
+        let before = fake.list_calls.load(Ordering::SeqCst);
+        p.assign_agent(2, AgentKind::Claude);
+        rt.block_on(async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+        drain(&mut p, &rt);
+        rt.block_on(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        });
+        drain(&mut p, &rt);
+        assert_eq!(calls.lock().unwrap().as_slice(), &[(2, AgentKind::Claude)]);
+        assert!(
+            fake.list_calls.load(Ordering::SeqCst) > before,
+            "Mutated(Ok) must trigger a list refresh"
+        );
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -2129,8 +2129,8 @@ impl Product<Msg> for ProductShell {
                         crate::adapters::todo::TodoEffect::ToggleListCollapse => {
                             return self.on_shell(ShellMsg::TogglePane(shell::todo_id()));
                         }
-                        crate::adapters::todo::TodoEffect::AssignAgent { .. } => {
-                            // Task 5 接线;当前 update 不会产生该效果。
+                        crate::adapters::todo::TodoEffect::AssignAgent { todo_id, agent } => {
+                            self.todo.assign_agent(todo_id, agent);
                         }
                     }
                 }
@@ -2143,8 +2143,15 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::NativeTodo(event) => {
-                let _ = self.todo.native.update(event);
-                Task::none()
+                let Some(event) = self.todo.native.update(event) else {
+                    return Task::none();
+                };
+                for effect in self.todo.handle_webview_event(event) {
+                    if let crate::adapters::todo::TodoEffect::AssignAgent { todo_id, agent } = effect {
+                        self.todo.assign_agent(todo_id, agent);
+                    }
+                }
+                self.sync_native()
             }
             Msg::TodoPoll => {
                 self.todo.poll(std::time::Instant::now());
