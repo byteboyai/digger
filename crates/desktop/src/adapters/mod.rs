@@ -31,5 +31,8 @@ pub mod preview_bridge;
 /// 预览页签栏部件(页签 / 溢出入口 / 下拉 / 模式按钮)。
 pub mod tab_chrome;
 
+/// 待办面板的嵌入 web 资源(S3b-1)。
+pub mod todo_assets;
+
 /// 预览面板的 `PanelDisplay<Msg>` 实现(库视图反过来要的展示能力)。
 pub mod preview_display;
