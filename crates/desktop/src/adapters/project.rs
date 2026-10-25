@@ -87,7 +87,7 @@ pub(crate) struct UnavailableService {
 }
 
 impl UnavailableService {
-    fn new(reason: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
         }
@@ -95,6 +95,32 @@ impl UnavailableService {
 
     fn error(&self) -> ServiceError {
         ServiceError::new(ServiceErrorKind::Unavailable, self.reason.clone())
+    }
+}
+
+impl dozer_services::TranscriptService for UnavailableService {
+    fn delete_project_transcripts(&self, _cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn backfill_project_transcripts(
+        &self,
+        _cwd: String,
+    ) -> BoxFuture<'_, Result<u32, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn submit_summary_batch(
+        &self,
+        _cwd: String,
+        _provider: Option<dozer_model::AgentKind>,
+        _model: Option<String>,
+    ) -> BoxFuture<'_, Result<(i64, u32), ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn get_summary_batch(
+        &self,
+        _batch_id: i64,
+    ) -> BoxFuture<'_, Result<Option<dozer_model::SummaryBatchInfo>, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
     }
 }
 

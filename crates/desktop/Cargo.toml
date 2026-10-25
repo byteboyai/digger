@@ -35,6 +35,8 @@ digger-editor = { path = "../editor" }
 dozer-model.workspace = true
 dozer-services.workspace = true
 dozer-panel-usage.workspace = true
+# 同源 Todo 面板库(S3b-1):待办列表 + 分类树 + web 资源。
+dozer-panel-todo.workspace = true
 # 同源 Project 面板库(S5a):与其适配层一起接入「项目」面板。
 dozer-panel-project.workspace = true
 dozer-panel-files.workspace = true
@@ -72,9 +74,12 @@ libc = "0.2"
 
 [build-dependencies]
 dozer-panel-usage.workspace = true
+dozer-panel-todo.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# 集成测试在进程内拉起真实 diggerd(S3b-1 Task 6)。
+dozerd.workspace = true
 rusqlite.workspace = true
 # 测试里用运行时同款的 `task::into_stream` 数一个 Task 发出的窗口动作(`iced::runtime` 不对外公开)。
 iced_runtime = "0.14"
