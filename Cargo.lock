@@ -1083,6 +1083,7 @@ dependencies = [
  "dozer-mcp",
  "dozer-model",
  "dozer-panel-agent",
+ "dozer-panel-conversations",
  "dozer-panel-files",
  "dozer-panel-host",
  "dozer-panel-preview",

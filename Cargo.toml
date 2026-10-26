@@ -51,6 +51,8 @@ dozer-services = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-
 dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-26a" }
 # 同源 Todo 面板库(S3b-1):待办数据/视图/web 资源;与其它 dozer-panel-* 同 tag。
 dozer-panel-todo = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-26a" }
+# 同源会话面板库(S7b):列表、历史导入与审阅状态。
+dozer-panel-conversations = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-26a" }
 # 同源 Project 面板库(S5a):状态 / 更新 / 视图;依赖闭包不含 dozer-app/client/core。
 dozer-panel-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-26a" }
 # 同源 Files 面板库(S5b-1):文件树状态 / 更新 / 视图 / 菜单;依赖闭包同样不含 dozer-app/client/core。

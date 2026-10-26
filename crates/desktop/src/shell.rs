@@ -49,11 +49,16 @@ pub fn todo_id() -> PanelId {
 pub fn agent_id() -> PanelId {
     id("digger.agent")
 }
+/// 会话面板:落盘 id 不随显示名称变化。
+pub fn conversations_id() -> PanelId {
+    id("digger.conversations")
+}
 
 /// 产品的全部面板。落盘时清单里有而文件里没有的面板,会回到它的默认栏(新版本新增面板不会重置用户布局)。
 pub fn all_panels() -> Vec<PanelId> {
     vec![
         agent_id(),
+        conversations_id(),
         markdown_id(),
         info_id(),
         apps_id(),
@@ -75,6 +80,7 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
         "digger.files" => ("文件", IconKind::FolderTree),
         "digger.todo" => ("待办", IconKind::ListTodo),
         "digger.agent" => ("Agent", IconKind::Brain),
+        "digger.conversations" => ("会话", IconKind::BotMessageSquare),
         _ => return None,
     };
     Some(PanelMeta {
@@ -99,7 +105,7 @@ pub fn list_min_width() -> f32 {
 /// ——配对的第一块(列表)默认渲染在前,预览在后(右)。列表可拖窄收起,收起后预览独占整块。
 pub fn rules(panel: &PanelId) -> Option<PanelRules> {
     match panel.as_str() {
-        "digger.usage" | "digger.agent" => Some(PanelRules {
+        "digger.usage" | "digger.agent" | "digger.conversations" => Some(PanelRules {
             default_side: Side::Right,
             pane: Some(PaneRules {
                 spec: PaneSpec::new(false, true),
@@ -143,7 +149,7 @@ pub fn defaults() -> Defaults {
                 markdown_id(),
                 info_id(),
             ],
-            vec![agent_id(), apps_id(), usage_id()],
+            vec![agent_id(), conversations_id(), apps_id(), usage_id()],
         ],
         selected: [markdown_id(), agent_id()],
         left_width: 640.0,
@@ -174,15 +180,50 @@ pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
 }
 
 fn load_file(path: &Path) -> Loaded {
-    let json = std::fs::read_to_string(path)
-        .ok()
-        .map(|j| agent_first_on_right(&files_after_project(&project_first_on_left(&j))));
+    let json = std::fs::read_to_string(path).ok().map(|j| {
+        conversations_after_agent(&agent_first_on_right(&files_after_project(
+            &project_first_on_left(&j),
+        )))
+    });
     persist::load(
         json.as_deref(),
         &all_panels(),
         &defaults(),
         &metrics_from_theme(),
     )
+}
+
+/// 旧布局缺会话时放到右栏 Agent 后面;Agent 在左栏时放到右栏最前。
+/// 只改读入文本中的栏顺序,保留两侧的选中字段;已放置(任一栏)则原样返回。
+/// 不写盘,更高 schema 的保护仍由 `Loaded::may_save` 执行。
+fn conversations_after_agent(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_owned();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return json.to_owned();
+    };
+    let wire = conversations_id();
+    if ["left", "right"].iter().any(|side| {
+        object
+            .get(*side)
+            .and_then(|v| v.as_array())
+            .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(wire.as_str())))
+    }) {
+        return json.to_owned();
+    }
+    let right = object
+        .entry("right")
+        .or_insert_with(|| serde_json::json!([]));
+    let Some(right) = right.as_array_mut() else {
+        return json.to_owned();
+    };
+    let at = right
+        .iter()
+        .position(|v| v.as_str() == Some(agent_id().as_str()))
+        .map_or(0, |i| i + 1);
+    right.insert(at, serde_json::Value::String(wire.as_str().to_owned()));
+    value.to_string()
 }
 
 /// 旧布局文件里没有 Agent 面板:读盘前把它放到右栏最前面,不碰任何一侧的选中面板(S6d-1 Q1 只管新用户)。
@@ -276,6 +317,13 @@ pub fn save_window_size(path: &Path, model: &ShellModel) -> std::io::Result<()> 
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
         return Ok(());
     };
+    if value
+        .get("schema_version")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|version| version > u64::from(persist::SCHEMA_VERSION))
+    {
+        return Ok(());
+    }
     let (w, h) = model.window();
     let Some(object) = value.as_object_mut() else {
         return Ok(());
@@ -303,6 +351,198 @@ pub fn update(model: &mut ShellModel, msg: ShellMsg) -> Outcome {
 mod tests {
     use super::*;
     use bytehost_chrome::Divider;
+
+    #[test]
+    fn conversations_panel_id_is_the_persisted_wire_name() {
+        let panel = conversations_id();
+        assert_eq!(panel.as_str(), "digger.conversations");
+        assert!(all_panels().contains(&panel));
+        let meta = meta(&panel).expect("registered conversations metadata");
+        assert_eq!(meta.title, "会话");
+        assert_eq!(meta.icon, IconKind::BotMessageSquare);
+    }
+
+    #[test]
+    fn the_default_layout_puts_conversations_right_after_agent_and_keeps_agent_selected() {
+        let d = defaults();
+        assert_eq!(
+            d.rails[1],
+            [
+                agent_id(),
+                id("digger.conversations"),
+                apps_id(),
+                usage_id()
+            ]
+        );
+        assert_eq!(d.selected, [markdown_id(), agent_id()]);
+    }
+
+    #[test]
+    fn an_old_file_without_the_panel_places_it_after_agent_and_keeps_the_users_selection() {
+        let (model, dir) = load_json(
+            "conversations-old",
+            r#"{"left":["digger.project","digger.files","digger.markdown"],"right":["digger.agent","digger.apps","digger.usage"],"selected_left":"digger.files","selected_right":"digger.usage"}"#,
+        );
+        assert_eq!(
+            model.rail(Side::Right),
+            [
+                agent_id(),
+                id("digger.conversations"),
+                apps_id(),
+                usage_id()
+            ]
+        );
+        assert_eq!(model.selected(Side::Left), &files_id());
+        assert_eq!(model.selected(Side::Right), &usage_id());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        for raw in ["", "not json", "[]", "null", r#"{"right":"invalid"}"#] {
+            assert_eq!(conversations_after_agent(raw), raw);
+        }
+        let once = conversations_after_agent(r#"{"left":["digger.agent"]}"#);
+        assert_eq!(conversations_after_agent(&once), once);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&once).unwrap()["right"],
+            serde_json::json!(["digger.conversations"])
+        );
+        for (tag, json) in [
+            (
+                "right",
+                r#"{"left":["digger.markdown"],"right":["digger.apps","digger.conversations","digger.agent","digger.usage"],"selected_left":"digger.markdown","selected_right":"digger.usage"}"#,
+            ),
+            (
+                "left",
+                r#"{"left":["digger.conversations","digger.markdown"],"right":["digger.agent","digger.apps","digger.usage"],"selected_left":"digger.markdown","selected_right":"digger.usage"}"#,
+            ),
+        ] {
+            assert_eq!(
+                conversations_after_agent(json),
+                json,
+                "existing placement is untouched"
+            );
+            let (model, dir) = load_json(&format!("conversations-{tag}"), json);
+            let path = dir.join("shell.json");
+            persist::save_atomic(&path, &model).unwrap();
+            let again = load(&path).into_model();
+            for side in [Side::Left, Side::Right] {
+                assert_eq!(again.rail(side), model.rail(side));
+                assert_eq!(again.selected(side), model.selected(side));
+            }
+            let value: serde_json::Value = serde_json::from_str(json).unwrap();
+            let side = if tag == "left" {
+                Side::Left
+            } else {
+                Side::Right
+            };
+            let key = if tag == "left" { "left" } else { "right" };
+            let original: Vec<_> = value[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            let restored: Vec<_> = model
+                .rail(side)
+                .iter()
+                .map(|p| p.as_str())
+                .filter(|p| original.contains(p))
+                .collect();
+            assert_eq!(restored, original, "already placed panel must stay put");
+            assert!(model.rail(side).contains(&id("digger.conversations")));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn an_old_file_without_agent_in_the_right_rail_gets_it_at_the_front() {
+        for (tag, right) in [
+            ("occupied", r#"["digger.apps","digger.usage"]"#),
+            ("empty", "[]"),
+        ] {
+            let json = format!(
+                r#"{{"left":["digger.agent","digger.markdown"],"right":{right},"selected_left":"digger.agent","selected_right":"digger.usage"}}"#
+            );
+            let (model, dir) = load_json(&format!("conversations-no-agent-{tag}"), &json);
+            assert_eq!(model.rail(Side::Right)[0], id("digger.conversations"));
+            assert_eq!(model.selected(Side::Left), &agent_id());
+            if tag == "occupied" {
+                assert_eq!(model.selected(Side::Right), &usage_id());
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_newer_schema_file_is_still_never_written() {
+        let dir = tmp_dir("conversations-newer");
+        let path = dir.join("shell.json");
+        let original = r#"{"schema_version":999,"left":["digger.markdown"],"right":["digger.agent","digger.usage"],"selected_right":"digger.usage"}"#;
+        std::fs::write(&path, original).unwrap();
+        let loaded = load(&path);
+        assert!(!loaded.may_save());
+        save_window_size(&path, loaded.model()).unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn agent_usage_and_conversations_are_the_pair_panels() {
+        for panel in [agent_id(), usage_id(), id("digger.conversations")] {
+            let r = rules(&panel).expect("right pair rules");
+            assert_eq!(r.default_side, Side::Right);
+            let p = r.pane.expect("paired");
+            assert_eq!(p.spec, PaneSpec::new(false, true));
+            assert_eq!(
+                p.default_split,
+                byteui::theme::geometry::default_split_ratio()
+            );
+            assert_eq!(p.min_first_px, list_min_width());
+        }
+    }
+
+    #[test]
+    fn pair_rects_for_conversations_have_nonnegative_sizes_at_the_minimum_window() {
+        let d = defaults();
+        for side in [Side::Left, Side::Right] {
+            let mut rails = d.rails.clone();
+            for rail in &mut rails {
+                rail.retain(|p| *p != conversations_id());
+            }
+            rails[if side == Side::Left { 0 } else { 1 }].push(id("digger.conversations"));
+            let mut selected = d.selected.clone();
+            selected[if side == Side::Left { 0 } else { 1 }] = id("digger.conversations");
+            let mut model = ShellModel::new(rails, selected, d.left_width, d.min_window).unwrap();
+            let rects = pair_rects(&model, side).expect("conversations pair");
+            for rect in [rects.first, rects.second] {
+                assert!(rect.w >= 0.0 && rect.w.is_finite());
+                assert!(rect.h >= 0.0 && rect.h.is_finite());
+            }
+            let x = if side == Side::Left {
+                rects.first.x + 1.0
+            } else {
+                rects.first.right() - 1.0
+            };
+            update(&mut model, ShellMsg::DividerPress(Divider::Pair(side)));
+            update(
+                &mut model,
+                ShellMsg::CursorMoved {
+                    x,
+                    y: rects.first.y + 1.0,
+                },
+            );
+            update(&mut model, ShellMsg::PointerReleased);
+            assert!(
+                model.panes().get(&conversations_id()).unwrap().collapsed,
+                "dragging the list below its minimum collapses it on {side:?}"
+            );
+            let rects = pair_rects(&model, side).expect("collapsed pair");
+            assert_eq!(rects.first.w, 0.0);
+            assert!(rects.second.w >= 0.0 && rects.second.w.is_finite());
+        }
+    }
 
     #[test]
     fn panel_ids_are_the_persisted_wire_names_and_must_not_change() {
@@ -348,7 +588,10 @@ mod tests {
             ],
             "project, files, todo, then the content panels, like Dozer"
         );
-        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
+        assert_eq!(
+            model.rail(Side::Right),
+            [agent_id(), conversations_id(), apps_id(), usage_id()]
+        );
         assert_eq!(model.selected(Side::Left), &markdown_id());
         assert_eq!(model.selected(Side::Right), &agent_id());
         assert_eq!(d.left_width, 640.0);
@@ -372,7 +615,13 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [agent_id(), apps_id(), usage_id(), project_id()]
+            [
+                agent_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id(),
+                project_id()
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -421,7 +670,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [agent_id(), apps_id(), usage_id()],
+            [agent_id(), conversations_id(), apps_id(), usage_id()],
             "the new panels land on their default side"
         );
         assert_eq!(model.left_width(), 500.0);
@@ -461,7 +710,10 @@ mod tests {
             ],
             "files lands right after project; todo is appended to the default side"
         );
-        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
+        assert_eq!(
+            model.rail(Side::Right),
+            [agent_id(), conversations_id(), apps_id(), usage_id()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -530,7 +782,10 @@ mod tests {
             "old",
             r#"{ "left": ["digger.project","digger.files","digger.markdown","digger.info"], "right": ["digger.apps","digger.usage"], "selected_right": "digger.usage", "left_width": 500.0 }"#,
         );
-        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
+        assert_eq!(
+            model.rail(Side::Right),
+            [agent_id(), conversations_id(), apps_id(), usage_id()]
+        );
         assert_eq!(
             model.selected(Side::Right),
             &usage_id(),
@@ -836,7 +1091,10 @@ mod tests {
                 todo_id()
             ]
         );
-        assert_eq!(first.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
+        assert_eq!(
+            first.rail(Side::Right),
+            [agent_id(), conversations_id(), apps_id(), usage_id()]
+        );
         drag_left_width_to(&mut first, 744.0);
         persist::save_atomic(&project, &first).unwrap();
         assert_eq!(std::fs::read(&global).unwrap(), global_bytes);
@@ -892,7 +1150,10 @@ mod tests {
             ],
             "old relative order is kept; todo is appended to its default side"
         );
-        assert_eq!(model.rail(Side::Right), [agent_id(), apps_id(), usage_id()]);
+        assert_eq!(
+            model.rail(Side::Right),
+            [agent_id(), conversations_id(), apps_id(), usage_id()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

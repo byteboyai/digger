@@ -430,6 +430,7 @@ impl ProductShell {
             (shell::files_id(), "文件"),
             (shell::todo_id(), "待办"),
             (shell::agent_id(), "Agent"),
+            (shell::conversations_id(), "会话"),
         ] {
             catalog
                 .register(CatalogEntry {
@@ -1115,6 +1116,25 @@ impl ProductShell {
             .into()
     }
 
+    // S7b Task 1:先固定配对布局;Task 2 接入按项目的真实列表。
+    fn conversations_view(&self, area: &BodyArea) -> Element<'_, Msg> {
+        let tokens = color::current();
+        pair_view(
+            area,
+            container(iced::widget::text("会话"))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            container(iced::widget::text("审阅详情即将可用"))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
+            tokens.bg,
+            tokens.panel,
+        )
+    }
+
     fn todo_view<'a>(&'a self, area: &BodyArea) -> Element<'a, Msg> {
         let tokens = color::current();
         let collapsed = self.pane_collapsed(&shell::todo_id());
@@ -1776,6 +1796,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.project" => self.project_view(area),
             "digger.files" => self.files_view(area),
             "digger.agent" => self.agent_view(area),
+            "digger.conversations" => self.conversations_view(area),
             _ => column![].into(),
         }
     }
@@ -3987,12 +4008,21 @@ mod tests {
     }
 
     #[test]
+    fn conversations_is_registered_as_a_native_panel() {
+        let shell = fresh("conversations-catalog");
+        let id = PanelId::new("digger.conversations").unwrap();
+        let entry = shell.catalog.get(&id).expect("conversations registered");
+        assert_eq!(entry.title, "会话");
+        assert!(entry.surfaces.is_empty());
+    }
+
+    #[test]
     fn registers_product_panels() {
         let shell = ProductShell::new();
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 8);
+        assert_eq!(shell.catalog.len(), 9);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
