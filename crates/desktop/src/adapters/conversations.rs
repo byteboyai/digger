@@ -15,6 +15,9 @@ use iced::{Element, Length, Task};
 
 use super::agent::{AgentShell, AgentShellMsg, Status};
 use super::conversations_display::{ConversationsDisplay, relative_time};
+use super::conversations_import::{
+    ImportEvent, ImportMarker, ImportPrompt, ImportState, LOG_DISCLOSURE, READ_DISCLOSURE,
+};
 use crate::product::Msg;
 
 pub struct NoTodos;
@@ -32,7 +35,6 @@ pub struct ConversationsPanel {
     conversation: Arc<dyn ConversationService>,
     summary: Arc<dyn SummaryService>,
     // Used by the explicit import action in Task 4; never called on activation.
-    #[allow(dead_code)]
     pub(crate) transcript: Arc<dyn TranscriptService>,
     handle: Option<tokio::runtime::Handle>,
     tx: tokio::sync::mpsc::UnboundedSender<(i64, Message)>,
@@ -41,6 +43,11 @@ pub struct ConversationsPanel {
     pub(crate) dirty: HashSet<i64>,
     requests: Vec<(i64, ConversationsRequest)>,
     caps: ConversationsCapabilities,
+    imports: HashMap<i64, ImportState>,
+    import_marker: ImportMarker,
+    marker_path: std::path::PathBuf,
+    import_tx: tokio::sync::mpsc::UnboundedSender<(i64, ImportEvent)>,
+    import_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(i64, ImportEvent)>>,
 }
 impl ConversationsPanel {
     pub fn new(
@@ -48,8 +55,28 @@ impl ConversationsPanel {
         summary: Arc<dyn SummaryService>,
         transcript: Arc<dyn TranscriptService>,
     ) -> Self {
+        Self::new_with_marker_path(
+            conversation,
+            summary,
+            transcript,
+            digger_paths::config_dir().join("conversations-imported.json"),
+        )
+    }
+    pub(crate) fn new_with_marker_path(
+        conversation: Arc<dyn ConversationService>,
+        summary: Arc<dyn SummaryService>,
+        transcript: Arc<dyn TranscriptService>,
+        marker_path: std::path::PathBuf,
+    ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (import_tx, import_rx) = tokio::sync::mpsc::unbounded_channel();
+        let import_marker = ImportMarker::load(&marker_path);
         Self {
+            imports: HashMap::new(),
+            import_marker,
+            marker_path,
+            import_tx,
+            import_rx: Some(import_rx),
             states: HashMap::new(),
             displays: HashMap::new(),
             conversation,
@@ -71,6 +98,126 @@ impl ConversationsPanel {
         &mut self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<(i64, Message)>> {
         self.rx.take()
+    }
+    pub fn take_import_receiver(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<(i64, ImportEvent)>> {
+        self.import_rx.take()
+    }
+    pub fn import_prompt(&self, pid: i64, daemon_ready: bool) -> Option<ImportPrompt> {
+        (daemon_ready
+            && !self.import_marker.is_marked(pid)
+            && self
+                .states
+                .get(&pid)
+                .and_then(|s| s.sessions())
+                .is_some_and(|s| s.is_empty()))
+        .then_some(ImportPrompt)
+    }
+    pub fn update_import(
+        &mut self,
+        pid: i64,
+        event: ImportEvent,
+        project: Option<&ProjectInfo>,
+        daemon_ready: bool,
+        closing: bool,
+    ) -> Task<Msg> {
+        let Some(project) =
+            project.filter(|p| p.id == pid && !closing && self.states.contains_key(&pid))
+        else {
+            return Task::none();
+        };
+        match event {
+            ImportEvent::Start => {
+                if self.import_prompt(pid, daemon_ready).is_none()
+                    || !matches!(
+                        self.imports.get(&pid),
+                        None | Some(ImportState::Idle | ImportState::Failed(_))
+                    )
+                {
+                    return Task::none();
+                }
+                let Some(handle) = self.handle.as_ref() else {
+                    return Task::none();
+                };
+                let token = self.states[&pid]
+                    .requests
+                    .begin(Some(pid), "host-history-import");
+                self.imports.insert(pid, ImportState::Importing);
+                let service = self.transcript.clone();
+                let cwd = project.path.clone();
+                let tx = self.import_tx.clone();
+                // Construct the service future inside the spawned task, too:
+                // an implementation can block before returning its BoxFuture.
+                handle.spawn(async move {
+                    let result = service
+                        .backfill_project_transcripts(cwd)
+                        .await
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send((pid, ImportEvent::Finished(token, result)));
+                });
+            }
+            ImportEvent::Finished(token, result) => {
+                if !matches!(self.imports.get(&pid), Some(ImportState::Importing))
+                    || !self.states[&pid].requests.accepts(&token)
+                {
+                    return Task::none();
+                }
+                match result {
+                    Ok(count) => {
+                        self.imports.insert(pid, ImportState::Done(count));
+                        self.import_marker.mark(pid, count, now_ms());
+                        if let Err(error) = self.import_marker.save(&self.marker_path) {
+                            let message = format!("导入已完成,但无法保存导入提示标记: {error}");
+                            eprintln!("digger: conversations: {message}");
+                            self.notice = Some(message);
+                        }
+                        return self.activate(project);
+                    }
+                    Err(error) => {
+                        eprintln!("digger: conversations import: {error}");
+                        self.notice = Some(format!("历史会话导入失败: {error}"));
+                        self.imports.insert(pid, ImportState::Failed(error));
+                    }
+                }
+            }
+        }
+        Task::none()
+    }
+    fn import_view(&self, pid: i64) -> Option<Element<'_, Msg>> {
+        let state = self.imports.get(&pid).cloned().unwrap_or_default();
+        // Completion outlives prompt eligibility (marker set / list now nonempty).
+        let completion = match state {
+            ImportState::Done(0) => Some("没有找到可导入的会话".to_owned()),
+            ImportState::Done(count) => Some(format!("已导入 {count} 条会话")),
+            _ => None,
+        };
+        let logs = digger_paths::logs_dir().display().to_string();
+        let disclosure = column![text(LOG_DISCLOSURE), text(logs)].spacing(4);
+        if let Some(completion) = completion {
+            return Some(
+                column![text(completion), disclosure]
+                    .spacing(6)
+                    .padding(12)
+                    .into(),
+            );
+        }
+        self.import_prompt(pid, true)?;
+        let mut content = column![text(READ_DISCLOSURE)].spacing(6);
+        let label = match &state {
+            ImportState::Importing => "正在导入…",
+            ImportState::Failed(error) => {
+                content =
+                    content.push(text(error.clone()).color(byteui::theme::color::current().red));
+                "重试"
+            }
+            _ => "导入此项目的历史会话",
+        };
+        let action = button(text(label)).on_press_maybe(
+            (state != ImportState::Importing)
+                .then_some(Msg::ConversationsImport(pid, ImportEvent::Start)),
+        );
+        Some(content.push(action).push(disclosure).padding(12).into())
     }
     pub fn state(&self, pid: i64) -> Option<&WorkspaceState> {
         self.states.get(&pid)
@@ -205,6 +352,7 @@ impl ConversationsPanel {
         std::mem::take(&mut self.requests)
     }
     pub fn close_project(&mut self, pid: i64) {
+        self.imports.remove(&pid);
         self.states.remove(&pid);
         self.displays.remove(&pid);
         self.dirty.remove(&pid);
@@ -235,6 +383,11 @@ impl ConversationsPanel {
                     Length::Fixed(width),
                     Default::default(),
                 );
+                let list: Element<'_, Msg> = if let Some(import) = self.import_view(project.id) {
+                    column![import, list].height(Length::Fill).into()
+                } else {
+                    list
+                };
                 pair_view(
                     area,
                     list,

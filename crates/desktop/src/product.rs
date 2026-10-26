@@ -128,6 +128,7 @@ pub enum Msg {
     /// 「待办」面板的库消息(S3b-1)。
     Todo(dozer_panel_todo::Message),
     Conversations(i64, dozer_panel_conversations::Message),
+    ConversationsImport(i64, crate::adapters::conversations_import::ImportEvent),
     ConversationsNoticeDismiss,
     /// 待办原生 webview 的回传。
     NativeTodo(crate::adapters::todo_native::Event),
@@ -2258,6 +2259,28 @@ impl Product<Msg> for ProductShell {
                 let requests = self.run_conversation_requests();
                 Task::batch([task, requests])
             }
+            Msg::ConversationsImport(pid, event) => {
+                if matches!(
+                    event,
+                    crate::adapters::conversations_import::ImportEvent::Start
+                ) && self.projects.current_project_id() != Some(pid)
+                {
+                    return Task::none();
+                }
+                let project = self
+                    .projects
+                    .open_ids()
+                    .contains(&pid)
+                    .then(|| self.projects.project_by_id(pid))
+                    .flatten();
+                self.conversations.update_import(
+                    pid,
+                    event,
+                    project.as_ref(),
+                    self.agent.shell.status == crate::adapters::agent::Status::Ready,
+                    self.closing,
+                )
+            }
             Msg::ConversationsNoticeDismiss => {
                 self.conversations.dismiss_notice();
                 Task::none()
@@ -3243,6 +3266,14 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let conversations_import_task = match shell.conversations.take_import_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|(pid, event)| (Msg::ConversationsImport(pid, event), rx))
+        })),
+        None => Task::none(),
+    };
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
     for panel in shell::all_panels() {
@@ -3273,6 +3304,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             daemon_task,
             agent_task,
             conversations_task,
+            conversations_import_task,
             preview_cmds_task,
             Task::batch(initial),
         ]),
@@ -4276,6 +4308,41 @@ mod tests {
         shell.conversations = panel;
         shell.agent.shell.status = crate::adapters::agent::Status::Ready;
         (shell, rt, fake)
+    }
+
+    #[test]
+    fn conversations_import_start_is_limited_to_current_project_and_never_runs_during_exit() {
+        use crate::adapters::conversations::tests::{FakeTranscript, import_panel, project};
+        use crate::adapters::conversations_import::ImportEvent;
+        let (mut shell, rt, _) = conversations_shell("conv-import-explicit-scope");
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(FakeTranscript::default());
+        shell.conversations = import_panel(&rt, &dir.path().join("marker.json"), fake.clone());
+        let a = project(1, "/a");
+        let b = project(2, "/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Activate(b.id)),
+        );
+        send(
+            &mut shell,
+            Msg::ConversationsImport(a.id, ImportEvent::Start),
+        );
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert!(fake.calls.lock().unwrap().is_empty());
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Activate(a.id)),
+        );
+        shell.closing = true;
+        send(
+            &mut shell,
+            Msg::ConversationsImport(a.id, ImportEvent::Start),
+        );
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert!(fake.calls.lock().unwrap().is_empty());
     }
 
     #[test]

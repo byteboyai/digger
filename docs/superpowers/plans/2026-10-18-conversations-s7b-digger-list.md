@@ -10,6 +10,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-conversations-panel-s7-design.md`(§6.3 登记与布局、数据、历史导入、键盘;§6.4 S7b;§7 Digger 单测;§8 Q1–Q3)。前置:S7a 已合并并切 tag;S6d-1、S6d-2、S6d-3 已合并(提供 `AgentPanel`、`menu_overlay`、`Daemon`、`AgentShell` 状态、覆盖层互斥)。已批准的取舍:Q1 历史导入走明确按钮;Q2 「生成总结」在 Digger v1 隐藏;Q3 右栏 `[agent, conversations, apps, usage]`、默认选中仍是 Agent。
 
+## 2026-10-26 用户确认的导入接口取舍
+
+- 沿用现有 `TranscriptService::backfill_project_transcripts -> Result<u32, ServiceError>`，不修改 Dozer、共享库、守护进程或协议，也不读取日志来绕开接口。
+- 成功只显示 `Done(n)` 的条数；`n == 0` 显示“没有找到可导入的会话”。部分成功属于成功，同样写提示标记。
+- 导入按钮旁和完成提示里分别显示“个别文件读取失败不会在这里列出,详情见 diggerd 日志”，同时展示由 `digger_paths::logs_dir()` 获得的真实日志目录，不写死路径。
+- 整体 `Err` 显示错误、不写标记、允许重试；测试继续使用真实接口的成功条数/整体失败，不伪造不存在的失败明细。
+- 已知缺口：部分成功拿不到失败条数和原因；需要在 dozer-services 的 TranscriptService 加带失败明细的返回，并走 Dozer 新 libs tag；Dozer 的 Project 面板同样受限。
+
 ## Global Constraints
 
 - **库不改。** 缺口只能报告,不在 Digger 里绕开库;依赖方向、`check-host-deps.sh`、`check-shared-deps.sh`、Cargo.lock 重复检查同 S6d。
@@ -25,7 +33,7 @@
 ## Review Focus
 
 1. **项目隔离与路径边界:** 父子目录项目(`/a` 与 `/a/b` 同时打开)、末尾斜杠、符号链接、大小写不敏感的卷;A 项目导入不影响 B 项目的列表与标记;项目页签关闭后标记与状态的清理。→ Task 2、4。
-2. **导入的安全性与响应:** 连点按钮只触发一次;导入中关闭项目页签或退出;数千个会话文件时界面不卡(在后台线程);读取受限目录失败时部分成功也要显示条数与错误;重复导入不产生重复会话;`HOME` 未设置。→ Task 4。
+2. **导入的安全性与响应:** 连点按钮只触发一次;导入中关闭项目页签或退出;数千个会话文件时界面不卡(在后台线程);读取受限目录部分失败时显示成功条数并提示失败详情在日志里;重复导入不产生重复会话;`HOME` 未设置。→ Task 4。
 3. **刷新风暴:** 同一项目短时间内多次 `TurnEnded`、面板不可见时的 `TurnEnded`(不起刷新,首次可见时补一次)、刷新结果乱序到达(旧结果不得覆盖新结果,库的 `RequestTrackers` 负责,这里用测试固定)。→ Task 3。
 4. **守护进程不可用与恢复:** 不可用时显示原因而不是「没有会话」;恢复后「重试」重新取数;不可用期间导入按钮不可点并说明原因。→ Task 2、4。
 5. **布局迁移与窄宽度:** 旧布局无该面板、右栏为空、已含该面板(幂等)、更高 schema 版本(不回写);配对窄到 `min_first_px` 以下时列表收起,占位块宽度不为负。→ Task 1。
@@ -100,15 +108,17 @@
   - `ImportMarker`:文件 `<config_dir>/conversations-imported.json`,内容 `{ "schema_version": 1, "projects": { "<project_id>": { "at_ms": u64, "count": u32 } } }`;`ImportMarker::load(path) -> Self`(缺失、损坏、更高版本一律当空,**更高版本不回写**)、`is_marked(project_id) -> bool`、`mark(project_id, count, now_ms)`、`save(path) -> io::Result<()>`(临时文件 + 重命名)。
   - `ConversationsPanel::import_prompt(&self, pid) -> Option<ImportPrompt>`:仅当该项目状态存在、列表已加载且为空、标记未设、守护进程可用时为 `Some`;视图在列表为空时显示说明文案与按钮(`Idle`)、「正在导入…」(`Importing`,按钮不可点)、`Done(n)` 的条数提示、`Failed(msg)` 的错误与「重试」。说明文案固定包含:只显示 Digger 装好 hook 之后产生的会话;导入会读取 `~/.claude/` 等位置的会话文件并把文本存进 `digger.db`。
   - 导入流程:`Start`(仅 `Idle`/`Failed` 时接受,置 `Importing`)→ 后台 `TranscriptService::backfill_project_transcripts(project.path)` → `Finished(Ok(n))`:置 `Done(n)`、`ImportMarker::mark` + `save`、触发列表刷新;`Finished(Err)`:置 `Failed`,**不**写标记。`close_project` 清掉该项目的导入态(后台任务结果到达时找不到状态即丢弃,不 panic)。
-- [ ] **Step 1: 写失败测试:** `prompt_appears_only_for_an_empty_loaded_list_without_a_marker_and_with_a_live_daemon`(逐条件取反各一条);`start_while_importing_is_ignored`(连点只调一次 `backfill`);`success_marks_saves_and_refreshes`(假服务返回 7 → 标记文件含该项目、`count == 7`、列表刷新被触发、提示显示 7);`failure_does_not_mark_and_allows_retry`;`zero_imported_still_marks_and_shows_that_nothing_was_found`;`closing_the_project_during_import_drops_the_result_quietly`;`marker_for_project_a_does_not_affect_project_b`;`marker_file_corrupt_missing_or_newer_is_treated_as_empty_and_newer_is_never_written`;`marker_save_is_atomic`(写入中途失败不留下半个文件);`non_empty_list_never_shows_the_prompt_even_without_a_marker`;`disclosure_text_is_always_shown_with_the_button`;`import_runs_off_the_ui_thread`(用一个阻塞 200ms 的假服务,`update` 本身在 50ms 内返回)。
-- [ ] **Step 2: 运行确认失败,实现。**
+- [x] **Step 1: 写失败测试:** `prompt_appears_only_for_an_empty_loaded_list_without_a_marker_and_with_a_live_daemon`(逐条件取反各一条);`start_while_importing_is_ignored`(连点只调一次 `backfill`);`success_marks_saves_and_refreshes`(假服务返回 7 → 标记文件含该项目、`count == 7`、列表刷新被触发、提示显示 7);`failure_does_not_mark_and_allows_retry`;`zero_imported_still_marks_and_shows_that_nothing_was_found`;`closing_the_project_during_import_drops_the_result_quietly`;`marker_for_project_a_does_not_affect_project_b`;`marker_file_corrupt_missing_or_newer_is_treated_as_empty_and_newer_is_never_written`;`marker_save_is_atomic`(写入中途失败不留下半个文件);`non_empty_list_never_shows_the_prompt_even_without_a_marker`;`disclosure_text_is_always_shown_with_the_button`;`import_runs_off_the_ui_thread`(用一个阻塞 200ms 的假服务,`update` 本身在 50ms 内返回)。
+- [x] **Step 2: 运行确认失败,实现。**
 - [ ] **Step 3: 验证。** `cargo test -p digger-desktop`;沙箱真机:临时 `HOME` 下放 3 个伪造的 Claude transcript(位于该项目对应的 `~/.claude/projects/<编码后的路径>/`),点按钮前列表为空,点后出现 3 条,第二次打开面板不再提示;截图留证。
-- [ ] **Step 4: 提交。**
+- [x] **Step 4: 提交。**
+
+Task 4 实现说明（2026-10-26）：完成提示独立于空列表提示条件；Finished 带 WorkspaceState 的 RequestToken，重开同 pid 也拒绝旧 owner。标记保存失败保留 Done 的实际计数并显示现有通知条。按钮与完成均采用上方用户确认的日志披露策略。Step 3 的人工导入/重启留给 Task 5，由用户点击；本任务只运行 headless widget tree 和隔离路径单测。
 
 ### Task 5: 门禁、真机回归与交付
 
 - [ ] **Step 1: 全量。** `cargo build --workspace && cargo test --workspace && cargo clippy --workspace --all-targets && cargo fmt --check`;`check-host-deps.sh`(含 `--self-test`)、`check-shared-deps.sh`、`check-shell-regions.sh`、Cargo.lock 重复检查。
-- [ ] **Step 2: 真机回归**(沙箱 `DIGGER_DATA_DIR` 与临时 `HOME`;点击由用户做,我启动并截图):① 全新数据根开项目,会话面板空态说明正确、按钮在;② 在 Agent 面板里跑一次真实 Claude 会话到回合结束,会话面板**无需切换**自动出现这条会话;③ 点导入,历史出现,标记生效,重启后不再提示;④ 开两个项目,列表互不串;`/a` 与 `/a/b` 嵌套项目各自正确;⑤ 搜索、Agent 筛选(菜单位置、当前项锁定)、「更多…」分页、折叠列表;⑥ `diggerd` 改名后启动:显示原因,恢复后「重试」可用,导入按钮此时不可点;⑦ 旧 `shell.json`(无该面板)启动后顺序与选中面板符合预期;⑧ 与 Dozer 同机并存,各自只看到自己库里的会话。逐项记录,任一项不符先停下。
+- [ ] **Step 2: 真机回归**(沙箱 `DIGGER_DATA_DIR` 与临时 `HOME`;点击由用户做,我启动并截图):① 全新数据根开项目,会话面板空态说明正确、按钮在;② 在 Agent 面板里跑一次真实 Claude 会话到回合结束,会话面板**无需切换**自动出现这条会话;③ 点导入,历史出现,成功只显示条数并提示失败详情在实际 diggerd 日志目录里,0 条显示“没有找到可导入的会话”,标记生效,重启后不再提示;④ 开两个项目,列表互不串;`/a` 与 `/a/b` 嵌套项目各自正确;⑤ 搜索、Agent 筛选(菜单位置、当前项锁定)、「更多…」分页、折叠列表;⑥ `diggerd` 改名后启动:显示原因,恢复后「重试」可用,导入按钮此时不可点;⑦ 旧 `shell.json`(无该面板)启动后顺序与选中面板符合预期;⑧ 与 Dozer 同机并存,各自只看到自己库里的会话。逐项记录,任一项不符先停下。
 - [ ] **Step 3: 记录已知缺口** 到 `docs/superpowers/notes/2026-10-18-conversations-s7b.md`:Digger 里删除项目不会清理该项目的会话(`TranscriptService::delete_project_transcripts` 未接,Project 面板仍用占位),留给用户裁决是否在 S7c 或单独处理;列表宽度取值;悬停为阶跃。
 - [ ] **Step 4: 报告** 写明:各项真机结果与截图路径、依赖升级到的 tag、哪些依赖人工、与计划不符之处。合并到 `main` 前向用户确认。**不发布。**
 
