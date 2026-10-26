@@ -706,3 +706,88 @@ fn conversations_pane_styles_match_the_agent_list_and_review_regions() {
     assert_eq!(detail.gap, 4.);
     assert_eq!(list.line_height, 1.2);
 }
+
+fn actual_view_has_pane_toggle(
+    panel: &ConversationsPanel,
+    project: &ProjectInfo,
+    collapsed: bool,
+    mirrored: bool,
+) -> bool {
+    let shared = ready();
+    let mut area = area(1000., collapsed);
+    area.mirrored = mirrored;
+    area.side = if mirrored {
+        bytehost_chrome::Side::Left
+    } else {
+        bytehost_chrome::Side::Right
+    };
+    area.pair = Some(bytehost_chrome::PairRects {
+        first: bytehost_chrome::Rect {
+            x: if mirrored { 0. } else { 650. },
+            y: 0.,
+            w: 350.,
+            h: 600.,
+        },
+        second: bytehost_chrome::Rect {
+            x: if mirrored { 356. } else { 0. },
+            y: 0.,
+            w: 644.,
+            h: 600.,
+        },
+        divider: bytehost_chrome::Rect {
+            x: if mirrored { 350. } else { 644. },
+            y: 0.,
+            w: 6.,
+            h: 600.,
+        },
+    });
+    let mut view = panel.view(Some(project), &area, &shared);
+    let (_, node, _, _) = layout(&mut view, 1000.);
+    fn centers(layout: iced_core::Layout<'_>, points: &mut Vec<iced_core::Point>) {
+        points.push(layout.bounds().center());
+        for child in layout.children() {
+            centers(child, points);
+        }
+    }
+    // Probe centers from the actual laid-out widget tree, including icon buttons
+    // whose text is deliberately only present in their tooltip overlay.
+    let mut points = vec![];
+    centers(iced_core::Layout::new(&node), &mut points);
+    points.into_iter().any(|point| {
+        click(&mut view, point, 1000.).iter().any(|message| {
+            matches!(message,
+            Msg::Shell(bytehost_chrome::ShellMsg::TogglePane(id))
+                if *id == crate::shell::conversations_id())
+        })
+    })
+}
+
+#[test]
+fn the_actual_expanded_conversations_view_has_a_clickable_collapse_control() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let project = project(1, "/a");
+    panel.ensure_state(&project);
+    let _ = panel.update(1, Message::SessionsRefreshed(1, Ok(vec![])), Some(&project));
+    for mirrored in [false, true] {
+        assert!(
+            actual_view_has_pane_toggle(&panel, &project, false, mirrored),
+            "expanded mirrored={mirrored}"
+        );
+    }
+}
+
+#[test]
+fn the_actual_collapsed_conversations_view_has_a_clickable_expand_control() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let project = project(1, "/a");
+    panel.ensure_state(&project);
+    let _ = panel.update(1, Message::SessionsRefreshed(1, Ok(vec![])), Some(&project));
+    for mirrored in [false, true] {
+        assert!(
+            actual_view_has_pane_toggle(&panel, &project, true, mirrored),
+            "collapsed mirrored={mirrored}"
+        );
+    }
+}

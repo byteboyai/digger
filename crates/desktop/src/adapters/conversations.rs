@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bytehost_chrome::{BodyArea, Divider, ShellMsg, pair_view};
 use dozer_model::ProjectInfo;
 use dozer_panel_conversations::adapter::{
-    ConversationsCapabilities, ConversationsRequest, LinkedTodos,
+    ConversationsCapabilities, ConversationsRequest, LinkedTodos, PanelDisplay,
 };
 use dozer_panel_conversations::{Message, WorkspaceState};
 use dozer_services::{ConversationService, SummaryService, TranscriptService};
@@ -187,13 +187,13 @@ impl ConversationsPanel {
                 pair_view(
                     area,
                     list,
-                    placeholder(),
+                    placeholder(Some(display)),
                     Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
                     tokens.bg,
                     tokens.panel,
                 )
             } else {
-                placeholder()
+                placeholder(None)
             }
         } else {
             // Same unopened-project treatment as ProjectPanel.
@@ -221,12 +221,21 @@ impl ConversationsPanel {
         }
     }
 }
-fn placeholder<'a>() -> Element<'a, Msg> {
-    container(text("审阅详情即将可用"))
+fn placeholder<'a>(display: Option<&ConversationsDisplay>) -> Element<'a, Msg> {
+    let mut header = row![text("审阅详情即将可用").width(Length::Fill)]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+    if let Some(display) = display {
+        header =
+            header.push(display.list_collapse_button("收起会话列表".into(), "展开会话列表".into()));
+    }
+    container(header)
+        .padding(8)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
 }
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
