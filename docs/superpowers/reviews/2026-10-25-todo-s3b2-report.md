@@ -29,8 +29,8 @@ Task 1（打开待办工具并补测试）、Task 2（agent 改动在面板一�
 |---|---|---|
 | 1 | Digger 会话同时配 `dozer` 与 `digger` MCP 时的已知并存失败 | 无法在单测里模拟 agent 的 MCP 状态页；写进验收清单第 6 条，明确 `dozer` 失败与待办工具无关 |
 | 2 | 会话不属于任何已登记项目 | `a_session_outside_any_registered_project_gets_a_readable_error` |
-| 3 | 空白任务文字 | `blank_todo_text_is_accepted_today_like_dozer`（钉住现状） |
-| 4 | 用别的项目任务 id 仍可改 | `todo_ids_are_not_scoped_to_the_session_project`（钉住现状） |
+| 3 | 空白任务文字 | `blank_todo_text_is_rejected_and_creates_no_task`（2026-10-26 随 libs-2026-10-26a 改为断言拒绝；原为钉住现状） |
+| 4 | 用别的项目任务 id 修改 | `a_session_cannot_toggle_or_edit_another_projects_todo`（2026-10-26 随 libs-2026-10-26a 改为断言拒绝；原为钉住现状） |
 | 5 | 已开着会话看不到新工具 | 验收清单开头与第 8 条要求重开会话 |
 
 主路径测试：`add_then_list_then_toggle_then_edit`（真实 daemon + 独立 `Client` 读回）与 `agent_added_todo_shows_up_within_one_poll_interval`（`TodoPanel::poll` 推时间，不真等 1 秒）。
@@ -61,8 +61,7 @@ Task 1（打开待办工具并补测试）、Task 2（agent 改动在面板一�
 
 ## 已知行为（不算本次 bug）
 
-- `add_todo("")` 成功并产生空任务；与 Dozer 现状一致，收紧需改 `dozer-mcp` / `dozerd` 并走 Dozer 新 libs tag。
-- `toggle_todo` / `edit_todo_text` 不校验任务 id 是否属于会话项目；与 Dozer 现状一致，收紧另议。
+- （已于 2026-10-26 解决）空白任务文字与跨项目任务 id 现在被 `dozer-mcp` 拒绝，Digger 重钉到 `libs-2026-10-26a` 后生效。
 - Digger 会话里若同时配置 `dozer` MCP，`dozer-mcp` 缺 `DOZER_SESSION_ID` 可能显示启动失败；与待办工具无关。
 - 升级前已开着的 Agent 会话看不到新增的 4 个工具，必须重开会话。
 - 详情弹窗、文本框右键菜单、写失败 Toast 仍按 S3b-1 的已知缺位处理。
