@@ -1,0 +1,136 @@
+{
+  "source_head": "e90c6c9",
+  "archive": "/private/tmp/s7b-clean-20261026",
+  "test_threads": 1,
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--workspace"
+      ],
+      "exit": 0,
+      "seconds": 60.36
+    },
+    {
+      "name": "test",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--no-fail-fast"
+      ],
+      "exit": 101,
+      "seconds": 1000.9
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets"
+      ],
+      "exit": 0,
+      "seconds": 26.68
+    },
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 0.28
+    },
+    {
+      "name": "host",
+      "command": [
+        "bash",
+        "scripts/check-host-deps.sh"
+      ],
+      "exit": 0,
+      "seconds": 0.36
+    },
+    {
+      "name": "host-self",
+      "command": [
+        "bash",
+        "scripts/check-host-deps.sh",
+        "--self-test"
+      ],
+      "exit": 0,
+      "seconds": 1.03
+    },
+    {
+      "name": "duplicates",
+      "command": [
+        "cargo",
+        "tree",
+        "--duplicates"
+      ],
+      "exit": 0,
+      "seconds": 0.19
+    }
+  ],
+  "shared": [
+    {
+      "name": "shared-archive",
+      "cwd": "/private/tmp/s7b-clean-20261026",
+      "exit": 128
+    },
+    {
+      "name": "shared-worktree",
+      "cwd": "/private/tmp/digger-s7b",
+      "exit": 0
+    }
+  ],
+  "shell": {
+    "command": "CARGO_NET_OFFLINE=true BYTEUI=/private/tmp/s7b-byteui-reference DOZER=/Users/chrischiang/Projects/CoralProjects/byteboy/dozer /opt/homebrew/bin/bash scripts/check-shell-regions.sh",
+    "exit": 0,
+    "reference_rev": "51ca9aa5d3290155cdd0b2e72884601af2603651",
+    "reference_resolution": "Seeded temporary ByteUI snapshot Cargo.lock from validated Digger archive; offline cargo resolution, no tracked source changes",
+    "log": "/private/tmp/s7b-final-shell-locked.log"
+  },
+  "totals": {
+    "passed": 712,
+    "failed": 1,
+    "ignored": 0,
+    "total": 713,
+    "summaries": 27,
+    "failed_tests": [
+      "a_restart_after_a_kill_reaps_the_recorded_orphan_and_leaves_unrelated_processes_alone"
+    ],
+    "baseline_total": 627,
+    "added": 86,
+    "deleted": 0,
+    "expected_total": 713
+  },
+  "lock": {
+    "shared_package_count": 26,
+    "shared_duplicate_names": {},
+    "dozer_sources": [
+      "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-26a#609a18df198f5c3c1ae804cff6defb8cb05c3378"
+    ]
+  },
+  "lock_sha256": "49712a59e7089c69262a33bd4f2404f4acd19b09b112bc1360b610181b5dfa8f",
+  "host_mutations": {
+    "bytehost": "blocked",
+    "iced": "blocked",
+    "wry": "blocked",
+    "restored": "pass"
+  },
+  "manual_acceptance": {
+    "status": "pending",
+    "items": 9,
+    "screenshots": [],
+    "launcher": "/private/tmp/s7b-manual-20261026/launch.sh",
+    "gui_observations": [
+      "direct desktop launch: LSModifyNotification / hiservices-xpc connection invalid",
+      "Orca get-app-state pid:9250: app_not_found",
+      "open temporary app: -10827 kLSNoExecutableErr"
+    ]
+  }
+}
