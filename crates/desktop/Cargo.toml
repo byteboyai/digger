@@ -78,6 +78,9 @@ dozer-panel-usage.workspace = true
 dozer-panel-todo.workspace = true
 
 [dev-dependencies]
+# Headless widget layout/operation tests without a window or GPU.
+iced_renderer = { version = "0.14", default-features = false, features = ["tiny-skia"] }
+iced_tiny_skia = { version = "0.14", default-features = false }
 tempfile = "3"
 # 集成测试在进程内拉起真实 diggerd(S3b-1 Task 6)。
 dozerd.workspace = true

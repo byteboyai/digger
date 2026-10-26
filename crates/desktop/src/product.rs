@@ -127,6 +127,8 @@ pub enum Msg {
     NativeUsage(crate::adapters::usage_native::Event),
     /// 「待办」面板的库消息(S3b-1)。
     Todo(dozer_panel_todo::Message),
+    Conversations(i64, dozer_panel_conversations::Message),
+    ConversationsNoticeDismiss,
     /// 待办原生 webview 的回传。
     NativeTodo(crate::adapters::todo_native::Event),
     /// 待办面板可见时的 1 秒轮询。
@@ -208,6 +210,7 @@ pub struct ProductShell {
     usage: crate::adapters::usage::UsagePanel,
     /// 「待办」面板适配(S3b-1):按项目状态 + `diggerd` 的 TodoService。
     todo: crate::adapters::todo::TodoPanel,
+    conversations: crate::adapters::conversations::ConversationsPanel,
     /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
     markdown: crate::markdown::MarkdownPanel,
     /// 项目注册表与已开页签(Project 是 host 层共享业务,ADR-014)。
@@ -471,6 +474,13 @@ impl ProductShell {
         let todo_client = dozer_client::Client::new(digger_paths::product().socket_path());
         let todo =
             crate::adapters::todo::TodoPanel::new(Arc::new(todo_client.clone()), todo_client);
+        let (conversation, summary, transcript) =
+            crate::daemon::Daemon::new().conversation_services();
+        let conversations = crate::adapters::conversations::ConversationsPanel::new(
+            conversation,
+            summary,
+            transcript,
+        );
         let markdown = crate::markdown::MarkdownPanel::new();
         // 项目数据与布局同在一个数据目录里:生产是产品数据根,测试是各自的临时目录。
         let data_dir = shell_path
@@ -516,6 +526,7 @@ impl ProductShell {
             project,
             files,
             agent: crate::adapters::agent::AgentPanel::new(),
+            conversations,
             term_style: crate::fonts::terminal_style(),
             preview: None,
             preview_bridge: None,
@@ -691,6 +702,9 @@ impl ProductShell {
             // 进入「用量」面板:触发一次取数(库的 on_activate,Task 20)。
             self.usage.activate();
         }
+        if *panel == shell::conversations_id() {
+            return self.activate_conversations_panel();
+        }
         if *panel == shell::todo_id() {
             self.activate_todo_panel();
         }
@@ -710,6 +724,18 @@ impl ProductShell {
             }
         }
         Task::none()
+    }
+
+    fn activate_conversations_panel(&mut self) -> Task<Msg> {
+        let Some(project) = self.projects.current_project().cloned() else {
+            return Task::none();
+        };
+        self.conversations.ensure_state(&project);
+        if self.agent.shell.status == crate::adapters::agent::Status::Ready {
+            self.conversations.activate(&project)
+        } else {
+            Task::none()
+        }
     }
 
     /// 当前项目从 `before` 换成了现在这个(页签点击 / 关闭 / 删除 / 列表修剪都走这里):
@@ -746,6 +772,9 @@ impl ProductShell {
         }
         self.activate_files_panel();
         self.activate_todo_panel();
+        if self.panel_visible(&shell::conversations_id()) {
+            let _ = self.activate_conversations_panel();
+        }
     }
 
     /// 把待办面板切到当前项目;面板可见时立即拉一次列表与分类。
@@ -791,6 +820,7 @@ impl ProductShell {
             .update(crate::projects::Message::Close(project.id));
         let _ = close;
         let _ = self.agent.close_project(project.id);
+        self.conversations.close_project(project.id);
         self.on_current_project_changed(before, before != Some(project.id));
         let (project, tx) = (project.clone(), self.delete_tx.clone());
         self.project
@@ -1116,23 +1146,9 @@ impl ProductShell {
             .into()
     }
 
-    // S7b Task 1:先固定配对布局;Task 2 接入按项目的真实列表。
     fn conversations_view(&self, area: &BodyArea) -> Element<'_, Msg> {
-        let tokens = color::current();
-        pair_view(
-            area,
-            container(iced::widget::text("会话"))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            container(iced::widget::text("审阅详情即将可用"))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
-            tokens.bg,
-            tokens.panel,
-        )
+        self.conversations
+            .view(self.projects.current_project(), area, &self.agent.shell)
     }
 
     fn todo_view<'a>(&'a self, area: &BodyArea) -> Element<'a, Msg> {
@@ -1990,7 +2006,15 @@ impl Product<Msg> for ProductShell {
                     let grid = self.current_agent_grid().unwrap_or((80, 24));
                     enter = self.agent.ensure_started(&project, grid);
                 }
-                Task::batch([task, enter])
+                let conversations = if !was_ready
+                    && self.agent.shell.status == crate::adapters::agent::Status::Ready
+                    && self.panel_visible(&shell::conversations_id())
+                {
+                    self.activate_conversations_panel()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, enter, conversations])
             }
             Msg::Agent(pid, m) => {
                 // macOS:Agent 页签溢出下拉走原生菜单(与预览页签一致)。库发的锚点是 `(0, 0)`。
@@ -2142,6 +2166,20 @@ impl Product<Msg> for ProductShell {
                 self.usage.native.update(event);
                 Task::none()
             }
+            Msg::Conversations(pid, message) => {
+                let pid = message.result_project().unwrap_or(pid);
+                let project = self
+                    .projects
+                    .open_ids()
+                    .contains(&pid)
+                    .then(|| self.projects.project_by_id(pid))
+                    .flatten();
+                self.conversations.update(pid, message, project.as_ref())
+            }
+            Msg::ConversationsNoticeDismiss => {
+                self.conversations.dismiss_notice();
+                Task::none()
+            }
             Msg::Todo(message) => {
                 for effect in self.todo.update(message) {
                     match effect {
@@ -2215,6 +2253,12 @@ impl Product<Msg> for ProductShell {
                 let task = self.projects.update(m).map(Msg::Projects);
                 // 消失的项目页签:abort 转发并 kill 该项目全部会话(会话语义同 Dozer)。
                 self.close_agent_for(&open_before);
+                for id in open_before
+                    .iter()
+                    .filter(|id| !self.projects.open_ids().contains(id))
+                {
+                    self.conversations.close_project(*id);
+                }
                 if before != self.projects.current_project_id() {
                     self.agent.reset_input_state();
                 }
@@ -2227,7 +2271,17 @@ impl Product<Msg> for ProductShell {
                     let grid = self.current_agent_grid().unwrap_or((80, 24));
                     enter = self.agent.ensure_started(&project, grid);
                 }
-                Task::batch([task, enter])
+                let conversations = if self.panel_visible(&shell::conversations_id())
+                    && self
+                        .projects
+                        .current_project_id()
+                        .is_some_and(|id| self.conversations.state(id).is_none())
+                {
+                    self.activate_conversations_panel()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, enter, conversations])
             }
             Msg::ProjectFocusFrame(id) => {
                 let Some(project) = self
@@ -2344,6 +2398,7 @@ impl Product<Msg> for ProductShell {
                         .projects
                         .update(crate::projects::Message::Close(project_id));
                     let _ = self.agent.close_project(project_id);
+                    self.conversations.close_project(project_id);
                     self.on_current_project_changed(before, before != Some(project_id));
                     // 被删项目的布局文件不留孤儿。
                     if let Some(path) = self.project_shell_path_for(project_id) {
@@ -2874,6 +2929,9 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     shell.files.attach_handle(tokio::runtime::Handle::current());
     shell.agent.attach_handle(tokio::runtime::Handle::current());
     shell.todo.attach_handle(tokio::runtime::Handle::current());
+    shell
+        .conversations
+        .attach_handle(tokio::runtime::Handle::current());
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
     // 缺资源时宿主只会整块白屏:启动即点名报出,与 selftest 同一份名单。
@@ -2997,6 +3055,14 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let conversations_task = match shell.conversations.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|(pid, m)| (Msg::Conversations(pid, m), rx))
+        })),
+        None => Task::none(),
+    };
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
     for panel in shell::all_panels() {
@@ -3026,6 +3092,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             lifecycle_task,
             daemon_task,
             agent_task,
+            conversations_task,
             preview_cmds_task,
             Task::batch(initial),
         ]),
@@ -4014,6 +4081,204 @@ mod tests {
         let entry = shell.catalog.get(&id).expect("conversations registered");
         assert_eq!(entry.title, "会话");
         assert!(entry.surfaces.is_empty());
+    }
+
+    fn conversations_shell(
+        tag: &str,
+    ) -> (
+        ProductShell,
+        tokio::runtime::Runtime,
+        Arc<crate::adapters::conversations::tests::FakeConversation>,
+    ) {
+        let rt = crate::adapters::conversations::tests::runtime();
+        let (panel, fake, _) = crate::adapters::conversations::tests::panel(&rt);
+        let mut shell = fresh(tag);
+        shell.conversations = panel;
+        shell.agent.shell.status = crate::adapters::agent::Status::Ready;
+        (shell, rt, fake)
+    }
+
+    #[test]
+    fn conversations_results_route_to_the_token_project_even_while_it_is_unfocused() {
+        use crate::adapters::conversations::tests::{project, row};
+        use dozer_panel_conversations::Message as C;
+        let (mut shell, _rt, _) = conversations_shell("conv-token-routing");
+        let a = project(1, "/a");
+        let b = project(2, "/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        shell.conversations.ensure_state(&a);
+        shell.conversations.ensure_state(&b);
+        let token = shell
+            .conversations
+            .state(a.id)
+            .unwrap()
+            .requests
+            .begin(Some(a.id), "sessions");
+        send(
+            &mut shell,
+            Msg::Conversations(
+                b.id,
+                C::AsyncResult(
+                    token,
+                    Box::new(C::SessionsRefreshed(a.id, Ok(vec![row("a")]))),
+                ),
+            ),
+        );
+        assert_eq!(
+            shell.conversations.state(a.id).unwrap().sessions().unwrap()[0].conversation_id,
+            "a"
+        );
+        assert!(
+            shell
+                .conversations
+                .state(b.id)
+                .unwrap()
+                .sessions()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn conversations_tab_close_reclaims_state_and_drops_late_results() {
+        use crate::adapters::conversations::tests::{project, row};
+        use dozer_panel_conversations::Message as C;
+        let (mut shell, _rt, _) = conversations_shell("conv-close");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Close(a.id)),
+        );
+        assert!(shell.conversations.state(a.id).is_none());
+        send(
+            &mut shell,
+            Msg::Conversations(a.id, C::SessionsRefreshed(a.id, Ok(vec![row("late")]))),
+        );
+        assert!(shell.conversations.state(a.id).is_none());
+    }
+
+    #[test]
+    fn conversations_project_delete_reclaims_state() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, _rt, _) = conversations_shell("conv-delete");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        send(
+            &mut shell,
+            Msg::ProjectDeleteDone {
+                project_id: a.id,
+                deregistered: true,
+                errors: vec![],
+            },
+        );
+        assert!(shell.conversations.state(a.id).is_none());
+    }
+
+    #[test]
+    fn conversations_shared_daemon_recovery_fetches_once_without_starting_another_lifecycle() {
+        use crate::adapters::agent::{AgentShellMsg, Status};
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell("conv-recovery");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.agent.shell.status = Status::Unavailable("offline".into());
+        press(&mut shell, &shell::conversations_id());
+        assert!(shell.conversations.state(a.id).is_some());
+        assert!(fake.calls.lock().unwrap().is_empty());
+        send(&mut shell, Msg::AgentShell(AgentShellMsg::Ensured(Ok(()))));
+        let (pid, m) = receive(&mut shell.conversations, &rt);
+        send(&mut shell, Msg::Conversations(pid, m));
+        assert_eq!(fake.calls.lock().unwrap().len(), 1);
+        assert!(
+            shell
+                .conversations
+                .state(a.id)
+                .unwrap()
+                .sessions()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn conversations_project_switch_refreshes_the_visible_new_project_only() {
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell("conv-switch");
+        let a = project(1, "/a");
+        let b = project(2, "/a/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        press(&mut shell, &shell::conversations_id());
+        let _ = receive(&mut shell.conversations, &rt);
+        // The new project's persisted layout also has Conversations selected.
+        let mut defaults = shell::defaults();
+        defaults.selected[1] = shell::conversations_id();
+        let layout = ShellModel::new(
+            defaults.rails,
+            defaults.selected,
+            defaults.left_width,
+            defaults.window,
+        )
+        .unwrap();
+        let path = shell.project_shell_path_for(a.id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        bytehost_chrome::persist::save_atomic(&path, &layout).unwrap();
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Activate(a.id)),
+        );
+        let _ = receive(&mut shell.conversations, &rt);
+        let calls = fake.calls.lock().unwrap();
+        assert_eq!(
+            calls.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(),
+            vec!["/a/b", "/a"]
+        );
+    }
+
+    #[test]
+    fn conversations_deleting_the_current_project_refreshes_the_remaining_visible_project() {
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell("conv-delete-switch");
+        let a = project(1, "/a");
+        let b = project(2, "/a/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        press(&mut shell, &shell::conversations_id());
+        let _ = receive(&mut shell.conversations, &rt);
+        let mut defaults = shell::defaults();
+        defaults.selected[1] = shell::conversations_id();
+        let model = ShellModel::new(
+            defaults.rails,
+            defaults.selected,
+            defaults.left_width,
+            defaults.window,
+        )
+        .unwrap();
+        let path = shell.project_shell_path_for(a.id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        bytehost_chrome::persist::save_atomic(&path, &model).unwrap();
+        send(
+            &mut shell,
+            Msg::ProjectDeleteDone {
+                project_id: b.id,
+                deregistered: true,
+                errors: vec![],
+            },
+        );
+        assert!(shell.conversations.state(b.id).is_none());
+        assert_eq!(shell.projects.current_project_id(), Some(a.id));
+        let _ = receive(&mut shell.conversations, &rt);
+        assert_eq!(
+            fake.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.0.clone())
+                .collect::<Vec<_>>(),
+            vec!["/a/b", "/a"]
+        );
     }
 
     #[test]

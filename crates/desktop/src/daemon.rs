@@ -68,6 +68,18 @@ impl Daemon {
         Arc::new(self.client.clone())
     }
 
+    /// All conversation traits wrap clones of this Client and share its socket.
+    pub fn conversation_services(
+        &self,
+    ) -> (
+        Arc<dyn dozer_services::ConversationService>,
+        Arc<dyn dozer_services::SummaryService>,
+        Arc<dyn dozer_services::TranscriptService>,
+    ) {
+        let client = Arc::new(self.client.clone());
+        (client.clone(), client.clone(), client)
+    }
+
     /// 确保守护进程在跑并能响应请求。
     ///
     /// 先尝试连接并握手;连不上就 spawn 一个 `diggerd`,隔 1 秒重试最多 3 次。
@@ -365,5 +377,67 @@ mod tests {
             .expect("list over the fake socket");
         assert!(sessions.is_empty());
         let _ = fs::remove_file(s);
+    }
+    #[tokio::test]
+    async fn conversation_services_all_use_the_same_daemon_client() {
+        install_product();
+        let path = sock("conv-services");
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let calls = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let calls = calls.clone();
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let mut lines = BufReader::new(r).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let reply = match decode_line::<Request>(&line).unwrap() {
+                            Request::Hello { .. } => Reply::Hello {
+                                protocol: PROTOCOL_VERSION,
+                                product: "digger".into(),
+                            },
+                            Request::ListConversationsWithSummaries { .. } => {
+                                calls.lock().unwrap().push("conversation");
+                                Reply::ConversationsWithSummaries { rows: vec![] }
+                            }
+                            Request::GetSummaryJob { .. } => {
+                                calls.lock().unwrap().push("summary");
+                                Reply::SummaryJob { job: None }
+                            }
+                            Request::BackfillProjectTranscripts { .. } => {
+                                calls.lock().unwrap().push("transcript");
+                                Reply::BackfillDone { imported_files: 3 }
+                            }
+                            other => panic!("unexpected {other:?}"),
+                        };
+                        w.write_all(encode_line(&reply).as_bytes()).await.unwrap();
+                    }
+                });
+            }
+        });
+        let (conversation, summary, transcript) =
+            Daemon::with_socket(path.clone()).conversation_services();
+        assert!(
+            conversation
+                .list_conversations_with_summaries("/a".into(), None, 500, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(summary.get_summary_job(1).await.unwrap().is_none());
+        assert_eq!(
+            transcript
+                .backfill_project_transcripts("/a".into())
+                .await
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["conversation", "summary", "transcript"]
+        );
+        let _ = fs::remove_file(path);
     }
 }
