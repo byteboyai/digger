@@ -105,6 +105,51 @@ impl ConversationsPanel {
         });
         Task::none()
     }
+    /// Only existing, correctly scoped projects participate in turn refreshes.
+    pub fn on_turn_ended(
+        &mut self,
+        pid: i64,
+        project: Option<&ProjectInfo>,
+        visible: bool,
+    ) -> Task<Msg> {
+        let Some(project) = project.filter(|p| p.id == pid && self.states.contains_key(&pid))
+        else {
+            return Task::none();
+        };
+        if visible {
+            self.activate(project)
+        } else {
+            self.dirty.insert(pid);
+            Task::none()
+        }
+    }
+    pub fn set_search_focused(&mut self, pid: i64, focused: bool) {
+        if let Some(state) = self.states.get_mut(&pid) {
+            state.set_search_focused(focused);
+        }
+    }
+    /// Focus and fallback menu flags must never survive a hidden/inactive project.
+    pub fn reset_inactive_focus(&mut self, active: Option<i64>) {
+        for (&pid, state) in &mut self.states {
+            if Some(pid) != active {
+                state.set_search_focused(false);
+                state.set_agent_picker_open(false);
+                // Invalidate even a not-yet-delivered focus query across hide/show.
+                state.requests.begin(Some(pid), "host-search-focus");
+            }
+        }
+    }
+    pub fn close_agent_filters(&mut self) {
+        for state in self.states.values_mut() {
+            state.set_agent_picker_open(false);
+        }
+    }
+    #[cfg(any(not(target_os = "macos"), test))]
+    pub fn open_agent_filter(&mut self, pid: i64) {
+        if let Some(state) = self.states.get_mut(&pid) {
+            state.set_agent_picker_open(true);
+        }
+    }
     pub fn update(&mut self, pid: i64, msg: Message, project: Option<&ProjectInfo>) -> Task<Msg> {
         // A result's scope is authoritative, even when a host envelope names another project.
         let pid = msg.result_project().unwrap_or(pid);
@@ -155,7 +200,7 @@ impl ConversationsPanel {
         }
         Task::none()
     }
-    /// Native-menu requests are retained for the product's Task 3 menu dispatcher.
+    /// Host requests are consumed by the product after each library update.
     pub fn take_requests(&mut self) -> Vec<(i64, ConversationsRequest)> {
         std::mem::take(&mut self.requests)
     }

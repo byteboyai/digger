@@ -16,6 +16,8 @@ pub(crate) struct FakeConversation {
     pub calls: Mutex<Vec<ListCall>>,
     pub turns: Mutex<Vec<(String, i64, u32)>>,
     pub error: Mutex<Option<ServiceError>>,
+    pub responses:
+        Mutex<std::collections::VecDeque<tokio::sync::oneshot::Receiver<ConversationRows>>>,
 }
 impl ConversationService for FakeConversation {
     fn list_conversations_with_summaries(
@@ -29,6 +31,9 @@ impl ConversationService for FakeConversation {
             .lock()
             .unwrap()
             .push((cwd.clone(), agent, limit, offset));
+        if let Some(response) = self.responses.lock().unwrap().pop_front() {
+            return Box::pin(async move { Ok(response.await.unwrap()) });
+        }
         let result = self
             .error
             .lock()
@@ -790,4 +795,252 @@ fn the_actual_collapsed_conversations_view_has_a_clickable_expand_control() {
             "collapsed mirrored={mirrored}"
         );
     }
+}
+
+#[test]
+fn turn_ended_refreshes_only_the_matching_visible_project() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    let b = project(2, "/b");
+    panel.ensure_state(&a);
+    let _ = panel.on_turn_ended(1, Some(&b), true);
+    let _ = panel.on_turn_ended(2, Some(&b), true);
+    let _ = panel.on_turn_ended(1, None, true);
+    rt.block_on(async { tokio::task::yield_now().await });
+    assert!(fake.calls.lock().unwrap().is_empty());
+    assert!(panel.dirty.is_empty());
+    let _ = panel.on_turn_ended(1, Some(&a), true);
+    apply(&mut panel, &rt, &a);
+    assert_eq!(
+        *fake.calls.lock().unwrap(),
+        vec![("/a".into(), None, 500, 0)]
+    );
+}
+
+#[test]
+fn turn_ended_while_hidden_marks_dirty_and_the_next_visibility_refreshes_once() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    for _ in 0..10 {
+        let _ = panel.on_turn_ended(1, Some(&a), false);
+    }
+    assert!(panel.dirty.contains(&1));
+    rt.block_on(async { tokio::task::yield_now().await });
+    assert!(fake.calls.lock().unwrap().is_empty());
+    let _ = panel.activate(&a);
+    apply(&mut panel, &rt, &a);
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+    assert!(!panel.dirty.contains(&1));
+    panel.close_project(1);
+    let _ = panel.on_turn_ended(1, Some(&a), false);
+    assert!(!panel.dirty.contains(&1));
+}
+
+#[test]
+fn ten_turn_ended_events_in_a_row_leave_only_the_latest_result_applied() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let mut senders = vec![];
+    for _ in 0..10 {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        senders.push(tx);
+        fake.responses.lock().unwrap().push_back(rx);
+        let _ = panel.on_turn_ended(1, Some(&a), true);
+    }
+    rt.block_on(async { tokio::task::yield_now().await });
+    assert_eq!(fake.calls.lock().unwrap().len(), 10);
+    for (index, sender) in senders.into_iter().enumerate().rev() {
+        sender
+            .send(vec![conversation(&index.to_string(), "result")])
+            .unwrap();
+        apply(&mut panel, &rt, &a);
+    }
+    assert_eq!(
+        panel.state(1).unwrap().sessions().unwrap()[0].conversation_id,
+        "9"
+    );
+}
+
+#[test]
+fn escape_and_outside_click_close_the_filter_menu_without_changing_the_filter() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let _ = panel.update(
+        1,
+        Message::AgentFilterSelect(Some(AgentKind::Claude)),
+        Some(&a),
+    );
+    for _ in 0..2 {
+        panel.ensure_state(&a).set_agent_picker_open(true);
+        let _ = panel.update(1, Message::AgentFilterClose, Some(&a));
+        assert!(!panel.state(1).unwrap().agent_picker_open());
+        assert_eq!(
+            panel.state(1).unwrap().agent_filter(),
+            Some(AgentKind::Claude)
+        );
+    }
+}
+
+#[test]
+fn selecting_an_agent_resets_paging_and_closes_the_menu() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let rows = (0..100).map(|i| row(&format!("row {i}"))).collect();
+    let _ = panel.update(1, Message::SessionsRefreshed(1, Ok(rows)), Some(&a));
+    let first = view_texts(&panel, Some(&a), &ready(), 500., false);
+    let _ = panel.update(1, Message::ListMore, Some(&a));
+    let more = view_texts(&panel, Some(&a), &ready(), 500., false);
+    assert!(more.len() > first.len());
+    panel.ensure_state(&a).set_agent_picker_open(true);
+    let _ = panel.update(
+        1,
+        Message::AgentFilterSelect(Some(AgentKind::Claude)),
+        Some(&a),
+    );
+    assert!(!panel.state(1).unwrap().agent_picker_open());
+    assert_eq!(
+        view_texts(&panel, Some(&a), &ready(), 500., false).len(),
+        first.len()
+    );
+}
+
+/// Execute the runtime's actual query Operation against the library's text input.
+pub(crate) fn search_focus_feedback(
+    panel: &ConversationsPanel,
+    project: &ProjectInfo,
+    rt: &tokio::runtime::Runtime,
+    task: Task<Msg>,
+    focused: bool,
+) -> Msg {
+    use iced::futures::StreamExt;
+    let mut stream = iced_runtime::task::into_stream(task).expect("focus query task");
+    let iced_runtime::Action::Widget(mut operation) = rt.block_on(stream.next()).unwrap() else {
+        panic!("widget operation")
+    };
+    let ready = ready();
+    let mut view = panel.view(Some(project), &area(500., false), &ready);
+    let (mut tree, node, renderer, _) = layout(&mut view, 500.);
+    let mut focus: Box<dyn iced_core::widget::Operation> = if focused {
+        Box::new(iced_core::widget::operation::focusable::focus(
+            dozer_panel_conversations::view::conversation_search_field_id(),
+        ))
+    } else {
+        Box::new(iced_core::widget::operation::focusable::unfocus())
+    };
+    view.as_widget_mut().operate(
+        &mut tree,
+        iced_core::Layout::new(&node),
+        &renderer,
+        focus.as_mut(),
+    );
+    view.as_widget_mut().operate(
+        &mut tree,
+        iced_core::Layout::new(&node),
+        &renderer,
+        operation.as_mut(),
+    );
+    let _ = operation.finish();
+    drop(operation);
+    let iced_runtime::Action::Output(message) = rt.block_on(stream.next()).unwrap() else {
+        panic!("focus feedback")
+    };
+    message
+}
+
+#[test]
+fn conversations_real_search_text_input_captures_characters_before_agent_subscription() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let ready = ready();
+    let mut view = panel.view(Some(&a), &area(500., false), &ready);
+    let (mut tree, node, renderer, _) = layout(&mut view, 500.);
+    view.as_widget_mut().operate(
+        &mut tree,
+        iced_core::Layout::new(&node),
+        &renderer,
+        &mut iced_core::widget::operation::focusable::focus(
+            dozer_panel_conversations::view::conversation_search_field_id(),
+        ),
+    );
+    let event = iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Character("x".into()),
+        modified_key: iced::keyboard::Key::Character("x".into()),
+        physical_key: iced::keyboard::key::Physical::Unidentified(
+            iced::keyboard::key::NativeCode::Unidentified,
+        ),
+        location: iced::keyboard::Location::Standard,
+        modifiers: iced::keyboard::Modifiers::default(),
+        text: Some("x".into()),
+        repeat: false,
+    };
+    let mut messages = vec![];
+    let mut shell = iced_core::Shell::new(&mut messages);
+    view.as_widget_mut().update(
+        &mut tree,
+        &iced::Event::Keyboard(event.clone()),
+        iced_core::Layout::new(&node),
+        iced_core::mouse::Cursor::Unavailable,
+        &renderer,
+        &mut iced_core::clipboard::Null,
+        &mut shell,
+        &iced_core::Rectangle::with_size(iced_core::Size::new(500., 600.)),
+    );
+    assert!(shell.is_event_captured());
+    assert!(crate::product::agent_key_message(shell.event_status(), &event).is_none());
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, Msg::Conversations(1, Message::SearchInput(s)) if s == "x"))
+    );
+}
+
+#[test]
+fn conversations_filter_request_preserves_anchor_current_and_present_without_an_iced_overlay() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let a = project(17, "/a");
+    panel.ensure_state(&a);
+    let mut codex = row("codex");
+    codex.agent = AgentKind::Codex;
+    let _ = panel.update(
+        17,
+        Message::SessionsRefreshed(17, Ok(vec![row("claude"), codex])),
+        Some(&a),
+    );
+    let _ = panel.update(
+        17,
+        Message::AgentFilterSelect(Some(AgentKind::Claude)),
+        Some(&a),
+    );
+    let _ = panel.update(17, Message::AgentFilterOpen { at: (12., 34.) }, Some(&a));
+    assert!(!panel.state(17).unwrap().agent_picker_open());
+    let requests = panel.take_requests();
+    let [
+        (
+            17,
+            ConversationsRequest::ShowAgentFilter {
+                at,
+                current,
+                present,
+            },
+        ),
+    ] = requests.as_slice()
+    else {
+        panic!("one scoped request")
+    };
+    assert_eq!(*at, (12., 34.));
+    assert_eq!(*current, Some(AgentKind::Claude));
+    assert!(present.contains(&AgentKind::Claude) && present.contains(&AgentKind::Codex));
+    assert!(panel.take_requests().is_empty());
 }

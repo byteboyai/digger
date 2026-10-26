@@ -145,6 +145,8 @@ pub enum Msg {
     Projects(crate::projects::Message),
     /// 每帧焦点探针:`view` 刚渲染完(库的 `text_input` 焦点态已写回),`id` 是渲染时聚焦的项目。
     ProjectFocusFrame(i64),
+    ConversationSearchFocusFrame(i64),
+    ConversationSearchFocused(i64, bytehost_core::request::RequestToken, bool),
     /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
@@ -1227,14 +1229,82 @@ impl ProductShell {
         )
     }
 
-    /// Agent 自己的浮层 / 确认框是否打开:打开时键盘不投终端。
+    /// Hidden Agent panes, focused conversation search and iced overlays block terminal keys.
     pub(crate) fn agent_keys_blocked(&self) -> bool {
-        self.agent.overlay_is_open()
+        !self.panel_visible(&shell::agent_id())
+            || self
+                .conversation_search_project()
+                .and_then(|pid| self.conversations.state(pid))
+                .is_some_and(|state| state.search_focused() || state.agent_picker_open())
+            || self.preview_overlay_open()
+            || self.agent.overlay_is_open()
             || self
                 .projects
                 .current_project()
                 .and_then(|p| self.agent.states.get(&p.id))
                 .is_some_and(|state| state.pending_close_tab.is_some())
+    }
+
+    fn conversation_search_project(&self) -> Option<i64> {
+        (self.panel_visible(&shell::conversations_id())
+            && !self.pane_collapsed(&shell::conversations_id())
+            && self.agent.shell.status == crate::adapters::agent::Status::Ready
+            && !self.closing)
+            .then(|| self.projects.current_project_id())
+            .flatten()
+    }
+
+    fn run_conversation_requests(&mut self) -> Task<Msg> {
+        #[cfg(target_os = "macos")]
+        let mut tasks = vec![];
+        for (pid, request) in self.conversations.take_requests() {
+            if self.conversation_search_project() != Some(pid)
+                || self.conversations.state(pid).is_none()
+            {
+                continue;
+            }
+            match request {
+                dozer_panel_conversations::adapter::ConversationsRequest::ShowAgentFilter {
+                    at,
+                    current,
+                    present,
+                } => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let items = crate::adapters::native_menu::conversation_filter_items(
+                            pid, current, &present,
+                        );
+                        if let Some(message) = byteui::native_menu::show(items, at) {
+                            tasks.push(Task::done(message));
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = (at, current, present);
+                        self.show_iced_conversation_filter(pid);
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Task::batch(tasks)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Task::none()
+        }
+    }
+
+    #[cfg(any(not(target_os = "macos"), test))]
+    fn show_iced_conversation_filter(&mut self, pid: i64) {
+        self.dismiss_agent_overflow();
+        self.agent.close_picker();
+        if let Some(state) = self.agent.states.get_mut(&pid) {
+            // A previous overflow can already have dismissed the product picker.
+            state.agent_picker_open = false;
+        }
+        self.conversations.open_agent_filter(pid);
     }
 
     /// 关闭溢出下拉:产品态清掉,并让库把 `term_tab_overflow_anchor` 也归零。
@@ -2017,6 +2087,13 @@ impl Product<Msg> for ProductShell {
                 Task::batch([task, enter, conversations])
             }
             Msg::Agent(pid, m) => {
+                if matches!(
+                    m,
+                    dozer_panel_agent::update::Message::PickerToggle
+                        | dozer_panel_agent::update::Message::OverflowToggle { .. }
+                ) {
+                    self.conversations.close_agent_filters();
+                }
                 // macOS:Agent 页签溢出下拉走原生菜单(与预览页签一致)。库发的锚点是 `(0, 0)`。
                 #[cfg(target_os = "macos")]
                 if matches!(m, dozer_panel_agent::update::Message::OverflowToggle { .. }) {
@@ -2051,6 +2128,9 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::AgentKey(event) => {
+                if self.agent_keys_blocked() {
+                    return Task::none();
+                }
                 let visible = self.panel_visible(&shell::agent_id());
                 let project = self.projects.current_project();
                 self.agent.on_key(&event, visible, project, self.closing)
@@ -2174,7 +2254,9 @@ impl Product<Msg> for ProductShell {
                     .contains(&pid)
                     .then(|| self.projects.project_by_id(pid))
                     .flatten();
-                self.conversations.update(pid, message, project.as_ref())
+                let task = self.conversations.update(pid, message, project.as_ref());
+                let requests = self.run_conversation_requests();
+                Task::batch([task, requests])
             }
             Msg::ConversationsNoticeDismiss => {
                 self.conversations.dismiss_notice();
@@ -2282,6 +2364,37 @@ impl Product<Msg> for ProductShell {
                     Task::none()
                 };
                 Task::batch([task, enter, conversations])
+            }
+            Msg::ConversationSearchFocusFrame(pid) => {
+                if self.conversation_search_project() != Some(pid)
+                    || self.conversations.state(pid).is_none()
+                {
+                    return Task::none();
+                }
+                let token = self
+                    .conversations
+                    .state(pid)
+                    .unwrap()
+                    .requests
+                    .begin(Some(pid), "host-search-focus");
+                iced::widget::operation::is_focused(
+                    dozer_panel_conversations::view::conversation_search_field_id(),
+                )
+                .map(move |focused| Msg::ConversationSearchFocused(pid, token.clone(), focused))
+            }
+            Msg::ConversationSearchFocused(pid, token, focused) => {
+                let active = self.conversation_search_project();
+                self.conversations.reset_inactive_focus(active);
+                if active == Some(pid)
+                    && self.projects.open_ids().contains(&pid)
+                    && self
+                        .conversations
+                        .state(pid)
+                        .is_some_and(|state| state.requests.accepts(&token))
+                {
+                    self.conversations.set_search_focused(pid, focused);
+                }
+                Task::none()
             }
             Msg::ProjectFocusFrame(id) => {
                 let Some(project) = self
@@ -2667,15 +2780,31 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
         HostMessage::Surface(event) => route_lifecycle(shell, event),
         HostMessage::Product(m) => Product::update(shell, HostMessage::Product(m)),
     };
-    // Agent 回合结束:Project 面板在眼前且是当前项目时刷新记忆列表。
+    // One drain fans turn completion out to Project memories and Conversations.
+    let mut turn_tasks = vec![];
     for (pid, event) in shell.agent.drain_host_events() {
         if matches!(
             event,
             dozer_panel_agent::adapter::AgentHostEvent::TurnEnded { .. }
         ) {
             shell.on_agent_turn_ended(pid);
+            let project = shell
+                .projects
+                .project_by_id(pid)
+                .filter(|_| shell.projects.open_ids().contains(&pid));
+            let visible = shell.panel_visible(&shell::conversations_id())
+                && shell.projects.current_project_id() == Some(pid)
+                && shell.agent.shell.status == crate::adapters::agent::Status::Ready;
+            turn_tasks.push(
+                shell
+                    .conversations
+                    .on_turn_ended(pid, project.as_ref(), visible),
+            );
         }
     }
+    let task = Task::batch(std::iter::once(task).chain(turn_tasks));
+    let search_project = shell.conversation_search_project();
+    shell.conversations.reset_inactive_focus(search_project);
     // 退出分支自己将销毁与 shutdown 串行；其他更新后同步内容与几何。
     let native = shell.sync_native();
     shell
@@ -2721,6 +2850,9 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NameFocusProbe(i64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ConversationSearchFocusProbe(i64);
+
 /// 键盘事件是否该作为 Agent 输入投上去:`Captured` 的按键已被别处(输入框等)
 /// 消费,绝不能进终端;Agent 自己的浮层(选择器 / 关页签确认)打开时也不投。
 pub fn agent_key_message(
@@ -2731,7 +2863,7 @@ pub fn agent_key_message(
 }
 
 /// `listen_with` 的事件映射(必须是无捕获函数指针):光标与"浮层打开"状态
-/// 由 `view` 每帧写 thread-local,见 `main.rs` 的 `CURRENT_CURSOR` /
+/// 由 `view` 每帧写进进程级原子,见 `lib.rs` 的 `CURRENT_CURSOR` /
 /// `AGENT_KEYS_BLOCKED`。
 fn agent_event(
     event: iced::Event,
@@ -2773,7 +2905,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     }
     // 终端输入:键盘只在未被控件消费时投;鼠标按下带最近一次光标位置;
     // 拖入文件走窗口事件。`listen_with` 只收函数指针,光标与浮层状态由
-    // `view` 每帧写 thread-local(同 `CURRENT_WINDOW` 的手法)。
+    // `view` 每帧写进进程级原子,供订阅工作线程读取。
     let agent_input = iced::event::listen_with(agent_event);
     // 左键按下 / 松开与修饰键:文件树的单击 / 拖拽 / 多选靠它们(库对这些消息的 `update` 不处理)。
     let pointer = iced::event::listen_with(|evt, _status, _id| match evt {
@@ -2834,6 +2966,54 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
                 )
             },
         ));
+    }
+    if let Some(pid) = shell.conversation_search_project() {
+        subs.push(Subscription::run_with(
+            ConversationSearchFocusProbe(pid),
+            |probe| {
+                let pid = probe.0;
+                iced::stream::channel(
+                    1,
+                    move |mut out: iced::futures::channel::mpsc::Sender<Msg>| async move {
+                        use iced::futures::SinkExt;
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                            if out
+                                .send(Msg::ConversationSearchFocusFrame(pid))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    },
+                )
+            },
+        ));
+    }
+    #[cfg(any(not(target_os = "macos"), test))]
+    if let Some(pid) = shell.conversation_search_project()
+        && shell
+            .conversations
+            .state(pid)
+            .is_some_and(|state| state.agent_picker_open())
+    {
+        subs.push(
+            iced::event::listen_with(|event, _, _| {
+                matches!(
+                    event,
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                        ..
+                    })
+                )
+                .then_some(())
+            })
+            .with(pid)
+            .map(|(pid, ())| {
+                Msg::Conversations(pid, dozer_panel_conversations::Message::AgentFilterClose)
+            }),
+        );
     }
     // 右键菜单打开时订阅 Esc:关掉浮层(点空白走浮层自己的透明按下区)。
     if shell.files.has_modal() || shell.files.menu().is_some() {
@@ -4507,6 +4687,256 @@ mod tests {
         assert!(shell.agent.confirm_is_open(Some(7)));
         // 覆盖层同样阻断键盘。
         shell.agent.open_overflow(7, (0.0, 0.0));
+        assert!(shell.agent_keys_blocked());
+    }
+
+    fn focus_search(shell: &mut ProductShell, pid: i64, focused: bool) {
+        let empty = dozer_panel_conversations::WorkspaceState::default();
+        let state = shell.conversations.state(pid).unwrap_or(&empty);
+        let token = state.requests.begin(Some(pid), "host-search-focus");
+        send(shell, Msg::ConversationSearchFocused(pid, token, focused));
+    }
+
+    #[test]
+    fn conversations_hidden_filter_requests_are_drained_without_opening_or_changing_filter() {
+        use crate::adapters::conversations::tests::project;
+        use dozer_panel_conversations::Message as C;
+        let (mut shell, _rt, _) = conversations_shell("conv-hidden-menu");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        send(
+            &mut shell,
+            Msg::Conversations(
+                1,
+                C::AgentFilterSelect(Some(dozer_model::AgentKind::Claude)),
+            ),
+        );
+        send(
+            &mut shell,
+            Msg::Conversations(1, C::AgentFilterOpen { at: (0., 0.) }),
+        );
+        assert!(shell.conversations.take_requests().is_empty());
+        assert!(!shell.conversations.state(1).unwrap().agent_picker_open());
+        assert_eq!(
+            shell.conversations.state(1).unwrap().agent_filter(),
+            Some(dozer_model::AgentKind::Claude)
+        );
+    }
+
+    #[test]
+    fn conversations_iced_fallback_closes_agent_overlays_and_agent_picker_closes_it() {
+        use crate::adapters::agent::PickerMenu;
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, rt, _) = conversations_shell("conv-iced-fallback");
+        shell.agent.attach_handle(rt.handle().clone());
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        shell
+            .agent
+            .states
+            .insert(1, dozer_panel_agent::state::AgentPanelState::new());
+        shell.agent.open_picker(PickerMenu { pid: 1, at: None });
+        shell.show_iced_conversation_filter(1);
+        assert!(!shell.agent.overlay_is_open());
+        assert!(shell.conversations.state(1).unwrap().agent_picker_open());
+        send(
+            &mut shell,
+            Msg::Agent(1, dozer_panel_agent::update::Message::PickerToggle),
+        );
+        assert!(!shell.conversations.state(1).unwrap().agent_picker_open());
+        assert!(shell.agent.picker.is_some());
+        shell.agent.open_overflow(1, (0., 0.));
+        shell.show_iced_conversation_filter(1);
+        assert!(!shell.agent.overlay_is_open());
+        assert!(shell.conversations.state(1).unwrap().agent_picker_open());
+        assert!(shell.agent.states[&1].term_tab_overflow_anchor.is_none());
+        assert!(!shell.agent.states[&1].agent_picker_open);
+        send(
+            &mut shell,
+            Msg::Conversations(1, dozer_panel_conversations::Message::AgentFilterClose),
+        );
+        assert!(!shell.conversations.state(1).unwrap().agent_picker_open());
+    }
+
+    #[test]
+    fn overlays_stay_mutually_exclusive_with_the_agent_picker_and_overflow_menu() {
+        use crate::adapters::agent::PickerMenu;
+        let mut shell = fresh("conv-iced-overlay-exclusion");
+        shell
+            .agent
+            .states
+            .insert(1, dozer_panel_agent::state::AgentPanelState::new());
+        shell.agent.open_picker(PickerMenu { pid: 1, at: None });
+        assert!(shell.agent.picker.is_some() && shell.agent.overflow.is_none());
+        shell.agent.open_overflow(1, (0., 0.));
+        assert!(shell.agent.picker.is_none() && shell.agent.overflow.is_some());
+        shell.agent.open_picker(PickerMenu { pid: 1, at: None });
+        assert!(shell.agent.picker.is_some() && shell.agent.overflow.is_none());
+        assert!(shell.agent_keys_blocked());
+    }
+
+    #[test]
+    fn conversations_real_focus_operation_updates_gain_and_loss_and_rejects_closed_owner() {
+        use crate::adapters::conversations::tests::{project, search_focus_feedback};
+        let (mut shell, rt, _) = conversations_shell("conv-real-focus");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        press(&mut shell, &shell::conversations_id());
+        for focused in [true, false] {
+            let task = Product::update(
+                &mut shell,
+                HostMessage::Product(Msg::ConversationSearchFocusFrame(1)),
+            );
+            let message = search_focus_feedback(&shell.conversations, &a, &rt, task, focused);
+            send(&mut shell, message);
+            assert_eq!(
+                shell.conversations.state(1).unwrap().search_focused(),
+                focused
+            );
+        }
+        let task = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::ConversationSearchFocusFrame(1)),
+        );
+        let stale = search_focus_feedback(&shell.conversations, &a, &rt, task, true);
+        shell.conversations.close_project(1);
+        shell.conversations.ensure_state(&a);
+        send(&mut shell, stale);
+        assert!(
+            !shell.conversations.state(1).unwrap().search_focused(),
+            "closed owner's query must not focus a reopened state"
+        );
+    }
+
+    #[test]
+    fn conversations_opposite_rail_allows_agent_keys_until_search_really_has_focus() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, _rt, _) = conversations_shell("conv-both-rails");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a);
+        press(&mut shell, &shell::conversations_id());
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::RailDragMove {
+                side: Side::Left,
+                index: 0,
+            }),
+        );
+        send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
+        assert!(shell.panel_visible(&shell::conversations_id()));
+        assert!(shell.panel_visible(&shell::agent_id()));
+        assert!(!shell.agent_keys_blocked());
+        focus_search(&mut shell, 1, true);
+        assert!(shell.agent_keys_blocked());
+        let _ = update_host(
+            &mut shell,
+            HostMessage::Product(Msg::Shell(ShellMsg::TogglePane(shell::conversations_id()))),
+        );
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        assert!(!shell.agent_keys_blocked());
+    }
+
+    #[test]
+    fn conversations_state_changed_alone_does_not_refresh() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, rt, fake) = conversations_shell("conv-state-event");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        shell.agent.push_host_event_for_test(
+            1,
+            dozer_panel_agent::adapter::AgentHostEvent::StateChanged {
+                tab_id: 0,
+                agent: dozer_model::AgentKind::Claude,
+                state: dozer_model::AgentState::Running,
+                transcript_path: None,
+            },
+        );
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert!(fake.calls.lock().unwrap().is_empty());
+        assert!(shell.conversations.dirty.is_empty());
+    }
+
+    #[test]
+    fn conversations_host_turn_events_respect_readiness_visibility_and_current_project() {
+        use crate::adapters::agent::Status;
+        use crate::adapters::conversations::tests::{project, receive};
+        use dozer_panel_agent::adapter::AgentHostEvent;
+        let (mut shell, rt, fake) = conversations_shell("conv-turn-events");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        // Hidden event defers work.
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        assert!(shell.conversations.dirty.contains(&1));
+        press(&mut shell, &shell::conversations_id());
+        let _ = receive(&mut shell.conversations, &rt);
+        assert_eq!(fake.calls.lock().unwrap().len(), 1);
+        assert!(!shell.conversations.dirty.contains(&1));
+        // Visible current ready event refreshes immediately.
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        let _ = receive(&mut shell.conversations, &rt);
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        shell.agent.shell.status = Status::Unavailable("offline".into());
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        shell.agent.shell.status = Status::Ready;
+        shell.projects.seed_for_test(project(2, "/b"));
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        shell
+            .agent
+            .push_host_event_for_test(2, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        assert!(shell.conversations.state(2).is_none());
+    }
+
+    #[test]
+    fn conversations_search_focus_blocks_keys_and_late_hidden_focus_is_ignored() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, _rt, _) = conversations_shell("conv-focus-routing");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        press(&mut shell, &shell::conversations_id());
+        focus_search(&mut shell, 1, true);
+        assert!(shell.conversations.state(1).unwrap().search_focused());
+        assert!(shell.agent_keys_blocked());
+        focus_search(&mut shell, 1, false);
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        press(&mut shell, &shell::agent_id());
+        focus_search(&mut shell, 1, true);
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        assert!(!shell.agent_keys_blocked());
+        press(&mut shell, &shell::conversations_id());
+        focus_search(&mut shell, 2, true);
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        shell.conversations.close_project(1);
+        focus_search(&mut shell, 1, true);
+        assert!(shell.conversations.state(1).is_none());
+    }
+
+    #[test]
+    fn conversations_selected_with_agent_hidden_blocks_uncaptured_terminal_keys() {
+        let mut shell = fresh("conv-hidden-keys");
+        assert!(!shell.agent_keys_blocked());
+        press(&mut shell, &shell::conversations_id());
+        assert!(!shell.panel_visible(&shell::agent_id()));
         assert!(shell.agent_keys_blocked());
     }
 

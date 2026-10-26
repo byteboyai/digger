@@ -66,6 +66,31 @@ pub fn tab_overflow_items<Msg: Clone>(
         .collect()
 }
 
+/// Conversations retain their library filter state; a cancelled native menu emits nothing.
+pub fn conversation_filter_items(
+    pid: i64,
+    current: Option<dozer_model::AgentKind>,
+    present: &[dozer_model::AgentKind],
+) -> Vec<Item<crate::product::Msg>> {
+    use crate::product::Msg;
+    use dozer_panel_conversations::Message;
+    let colors = byteui::theme::color::current();
+    std::iter::once(None)
+        .chain(present.iter().copied().map(Some))
+        .map(|agent| {
+            let selected = agent == current;
+            Item::Entry {
+                icon: agent.map(dozer_panel_agent::style::agent_icon),
+                icon_color: agent.map(dozer_panel_agent::style::agent_dot_color),
+                label: agent.map_or_else(|| "全部".into(), |a| a.label().into()),
+                color: if selected { colors.gold } else { colors.body },
+                enabled: !selected,
+                msg: Msg::Conversations(pid, Message::AgentFilterSelect(agent)),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +189,56 @@ mod tests {
             })
             .collect();
         assert_eq!(msgs, vec![30, 70]);
+    }
+}
+
+#[cfg(test)]
+mod conversation_tests {
+    use super::*;
+    use crate::product::Msg;
+    use dozer_model::AgentKind;
+    use dozer_panel_conversations::Message;
+
+    #[test]
+    fn filter_menu_lists_all_plus_present_agents_and_locks_the_current_one() {
+        let items = conversation_filter_items(
+            17,
+            Some(AgentKind::Claude),
+            &[AgentKind::Claude, AgentKind::Codex],
+        );
+        assert_eq!(items.len(), 3);
+        let colors = byteui::theme::color::current();
+        for (i, item) in items.iter().enumerate() {
+            let Item::Entry {
+                icon,
+                icon_color,
+                label,
+                color,
+                enabled,
+                msg,
+            } = item
+            else {
+                panic!("entry")
+            };
+            let expected = [None, Some(AgentKind::Claude), Some(AgentKind::Codex)][i];
+            assert_eq!(*enabled, i != 1);
+            assert_eq!(*color, if i == 1 { colors.gold } else { colors.body });
+            assert!(
+                matches!(msg, Msg::Conversations(17, Message::AgentFilterSelect(agent)) if *agent == expected)
+            );
+            if let Some(agent) = expected {
+                assert_eq!(label, agent.label());
+                assert_eq!(*icon, Some(dozer_panel_agent::style::agent_icon(agent)));
+                assert_eq!(
+                    *icon_color,
+                    Some(dozer_panel_agent::style::agent_dot_color(agent))
+                );
+            } else {
+                assert_eq!(label, "全部");
+                assert!(icon.is_none());
+            }
+        }
+        let all = conversation_filter_items(17, None, &[]);
+        assert!(matches!(&all[0], Item::Entry { enabled: false, .. }));
     }
 }
