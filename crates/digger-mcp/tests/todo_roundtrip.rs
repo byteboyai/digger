@@ -1,4 +1,4 @@
-//! 四个待办 MCP 工具对真实 `diggerd` 的往返,以及三条现状钉住测试。
+//! 四个待办 MCP 工具对真实 `diggerd` 的往返,以及拒绝空白文字、拒绝跨项目 id 的测试。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -188,25 +188,28 @@ async fn add_then_list_then_toggle_then_edit() {
 }
 
 #[tokio::test]
-async fn blank_todo_text_is_accepted_today_like_dozer() {
-    // 现状:dozer-mcp 的 add_todo 直接转给 Client,dozerd 的 TodoStore::add
-    // 不校验空白文本,Dozer 的 agent 也能建出空任务。本期只钉住现状;
-    // 收紧要改 dozer-mcp / dozerd 并走 Dozer 发新 libs tag。
+async fn blank_todo_text_is_rejected_and_creates_no_task() {
+    // dozer-mcp(libs-2026-10-26a 起)在转给 Client 之前拒绝空白文字。
     let daemon = start_daemon().await;
     let project = project(daemon, "blank").await;
     let s = server(&daemon.socket, session(&daemon.socket, project.id).await).await;
-    let added = s
-        .add_todo(Parameters(AddTodoParams { text: "".into() }))
-        .await
-        .expect("empty text is accepted today");
-    assert_eq!(added.structured_content.expect("structured")["text"], "");
-    assert!(list(&s).await.iter().any(|t| t["text"] == ""));
+    for text in ["", "   ", "\n\t"] {
+        let err = s
+            .add_todo(Parameters(AddTodoParams { text: text.into() }))
+            .await
+            .expect_err("blank text must be rejected");
+        assert!(
+            err.message.contains("不能为空"),
+            "{text:?}: {}",
+            err.message
+        );
+    }
+    assert!(list(&s).await.is_empty());
 }
 
 #[tokio::test]
-async fn todo_ids_are_not_scoped_to_the_session_project() {
-    // 与 Dozer 现状一致:toggle/edit 只按 id 操作,不检查 id 是否属于
-    // 当前会话项目。以后收紧时这条测试会提醒同步改。
+async fn a_session_cannot_toggle_or_edit_another_projects_todo() {
+    // toggle/edit 只允许本会话所在项目里的任务 id。
     let daemon = start_daemon().await;
     let a = project(daemon, "scope-a").await;
     let b = project(daemon, "scope-b").await;
@@ -216,20 +219,29 @@ async fn todo_ids_are_not_scoped_to_the_session_project() {
         .add_todo(b.id, "B 的任务")
         .await
         .expect("add to B directly");
-    s.toggle_todo(Parameters(ToggleTodoParams {
+    let err = s
+        .toggle_todo(Parameters(ToggleTodoParams {
+            id: foreign.id,
+            done: true,
+        }))
+        .await
+        .expect_err("toggling B's task from A must fail");
+    assert!(err.message.contains("不属于当前项目"), "{}", err.message);
+    s.edit_todo_text(Parameters(EditTodoTextParams {
         id: foreign.id,
-        done: true,
+        text: "改写".into(),
     }))
     .await
-    .expect("session A can toggle B's task today");
-    let foreign = client
+    .expect_err("editing B's task from A must fail");
+    let after = client
         .list_todos(b.id)
         .await
         .expect("read B")
         .into_iter()
         .find(|t| t.id == foreign.id)
         .expect("B task");
-    assert!(foreign.done);
+    assert!(!after.done);
+    assert_eq!(after.text, "B 的任务");
 }
 
 /// Review Focus 2:会话没有归属项目时,工具返回可读错误而不是 panic / 误写。
