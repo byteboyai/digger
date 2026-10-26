@@ -336,6 +336,7 @@ impl TodoPanel {
             memory: unavailable("Todo 面板不用记忆服务"),
             group_chat: unavailable("Todo 面板不用群聊服务"),
             conversation: unavailable("Todo 面板不用会话服务"),
+            summary: unavailable("Todo 面板不用总结服务"),
             codehealth: unavailable("Todo 面板不用健康服务"),
             context: unavailable("Todo 面板不用上下文服务"),
             edit_history: unavailable("Todo 面板不用编辑历史服务"),

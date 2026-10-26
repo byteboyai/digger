@@ -349,6 +349,14 @@ impl dozer_services::GroupChatService for UnavailableService {
 }
 
 impl dozer_services::ConversationService for UnavailableService {
+    fn get_conversation_turns(
+        &self,
+        _conversation_id: String,
+        _after_turn_index: i64,
+        _limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<dozer_model::TurnRecord>, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
     fn list_conversations_with_summaries(
         &self,
         _cwd: String,
@@ -356,6 +364,22 @@ impl dozer_services::ConversationService for UnavailableService {
         _limit: u32,
         _offset: u32,
     ) -> BoxFuture<'_, Result<dozer_services::ConversationRows, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+}
+
+impl dozer_services::SummaryService for UnavailableService {
+    fn submit_summary_job(
+        &self,
+        _conversation_id: String,
+        _force: bool,
+    ) -> BoxFuture<'_, Result<i64, ServiceError>> {
+        Box::pin(async { Err(self.error()) })
+    }
+    fn get_summary_job(
+        &self,
+        _job_id: i64,
+    ) -> BoxFuture<'_, Result<Option<dozer_model::SummaryJobInfo>, ServiceError>> {
         Box::pin(async { Err(self.error()) })
     }
 }
@@ -530,6 +554,7 @@ impl ProjectPanel {
             },
             group_chat: Arc::new(UnavailableService::new("Project 面板不用群聊服务")),
             conversation: Arc::new(UnavailableService::new("Project 面板不用会话服务")),
+            summary: Arc::new(UnavailableService::new("Project 面板不用总结服务")),
             codehealth: Arc::new(UnavailableService::new("Project 面板不用健康服务")),
             context: Arc::new(UnavailableService::new("Project 面板不用上下文服务")),
             edit_history: Arc::new(UnavailableService::new("Project 面板不用编辑历史服务")),
