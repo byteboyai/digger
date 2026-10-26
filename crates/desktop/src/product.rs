@@ -4281,6 +4281,176 @@ mod tests {
         );
     }
 
+    type PendingUnavailableConversations = (
+        ProductShell,
+        tokio::runtime::Runtime,
+        Arc<crate::adapters::conversations::tests::FakeConversation>,
+        dozer_model::ProjectInfo,
+        (i64, dozer_panel_conversations::Message),
+    );
+    fn pending_unavailable_conversations(tag: &str) -> PendingUnavailableConversations {
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell(tag);
+        let project = project(1, "/a");
+        shell.projects.seed_for_test(project.clone());
+        *fake.error.lock().unwrap() = Some(dozer_services::ServiceError::new(
+            dozer_services::ServiceErrorKind::Unavailable,
+            "socket disconnected",
+        ));
+        press(&mut shell, &shell::conversations_id());
+        let pending = receive(&mut shell.conversations, &rt);
+        (shell, rt, fake, project, pending)
+    }
+
+    fn deliver_conversations_task(
+        shell: &mut ProductShell,
+        rt: &tokio::runtime::Runtime,
+        pid: i64,
+        message: dozer_panel_conversations::Message,
+    ) {
+        use iced::futures::StreamExt;
+        let task = Product::update(
+            shell,
+            HostMessage::Product(Msg::Conversations(pid, message)),
+        );
+        if let Some(mut stream) = iced_runtime::task::into_stream(task) {
+            let messages = rt.block_on(async {
+                let mut messages = vec![];
+                while let Some(action) = stream.next().await {
+                    if let iced_runtime::Action::Output(message) = action {
+                        messages.push(message);
+                    }
+                }
+                messages
+            });
+            for message in messages {
+                send(shell, message);
+            }
+        }
+    }
+
+    #[test]
+    fn conversations_accepted_unavailable_changes_shared_status_and_retry_refetches() {
+        use crate::adapters::agent::{AgentShellMsg, Status};
+        use crate::adapters::conversations::tests::{receive, view_texts};
+        let (mut shell, rt, fake, project, (pid, message)) =
+            pending_unavailable_conversations("conv-accepted-unavailable");
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert!(
+            matches!(&shell.agent.shell.status, Status::Unavailable(reason) if reason.contains("socket disconnected"))
+        );
+        assert!(
+            shell
+                .conversations
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("socket disconnected")
+        );
+        let texts = view_texts(
+            &shell.conversations,
+            Some(&project),
+            &shell.agent.shell,
+            700.,
+            false,
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("socket disconnected")),
+            "{texts:?}"
+        );
+        assert!(texts.iter().any(|text| text == "重试"), "{texts:?}");
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("没有会话") || text.contains("No conversations")),
+            "{texts:?}"
+        );
+        let empty = dozer_panel_conversations::i18n::t(
+            "empty.no_sessions",
+            "No conversations yet",
+            "zh-CN",
+        );
+        assert!(!texts.contains(&empty), "{texts:?}");
+        *fake.error.lock().unwrap() = None;
+        let retry = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::AgentShell(AgentShellMsg::Retry)),
+        );
+        assert_eq!(shell.agent.shell.status, Status::Checking);
+        // Retry queues exactly the existing daemon ensure task; do not launch a daemon in this test.
+        assert!(iced_runtime::task::into_stream(retry).is_some());
+        send(&mut shell, Msg::AgentShell(AgentShellMsg::Ensured(Ok(()))));
+        let (pid, message) = receive(&mut shell.conversations, &rt);
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        assert_eq!(
+            shell
+                .conversations
+                .state(project.id)
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn conversations_stale_unavailable_does_not_change_shared_daemon_status() {
+        use crate::adapters::agent::Status;
+        let (mut shell, rt, _, project, (pid, message)) =
+            pending_unavailable_conversations("conv-stale-unavailable");
+        let _ = shell.conversations.activate(&project);
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert!(shell.conversations.notice.is_none());
+    }
+
+    #[test]
+    fn conversations_closed_project_unavailable_does_not_change_shared_daemon_status() {
+        use crate::adapters::agent::Status;
+        let (mut shell, rt, _, project, (pid, message)) =
+            pending_unavailable_conversations("conv-closed-unavailable");
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Close(project.id)),
+        );
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert!(shell.conversations.notice.is_none());
+        assert!(shell.conversations.state(project.id).is_none());
+    }
+
+    #[test]
+    fn conversations_reopened_owner_unavailable_does_not_change_shared_daemon_status() {
+        use crate::adapters::agent::Status;
+        let (mut shell, rt, _, project, (pid, message)) =
+            pending_unavailable_conversations("conv-reopened-unavailable");
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Close(project.id)),
+        );
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Opened(Ok(Some(project.clone())))),
+        );
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert!(shell.conversations.notice.is_none());
+        assert!(
+            shell
+                .conversations
+                .state(project.id)
+                .unwrap()
+                .sessions()
+                .is_none()
+        );
+    }
+
     #[test]
     fn registers_product_panels() {
         let shell = ProductShell::new();

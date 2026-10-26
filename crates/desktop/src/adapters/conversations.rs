@@ -13,7 +13,7 @@ use dozer_services::{ConversationService, SummaryService, TranscriptService};
 use iced::widget::{button, column, container, row, text};
 use iced::{Element, Length, Task};
 
-use super::agent::{AgentShell, Status};
+use super::agent::{AgentShell, AgentShellMsg, Status};
 use super::conversations_display::{ConversationsDisplay, relative_time};
 use crate::product::Msg;
 
@@ -143,9 +143,15 @@ impl ConversationsPanel {
             eprintln!("digger: conversations {:?}: {message}", notice.level);
             self.notice = Some(message);
         }
-        if let Some(error) = failure {
+        if let Some((error, daemon_unavailable)) = failure {
             eprintln!("digger: conversations: {error}");
-            self.notice = Some(error);
+            self.notice = Some(error.clone());
+            if daemon_unavailable {
+                // Reuse the shared status/retry lifecycle. Only a library-accepted
+                // result reaches here; stale or closed-project errors cannot mark
+                // the daemon down. No additional ensure task is started.
+                return Task::done(Msg::AgentShell(AgentShellMsg::Ensured(Err(error))));
+            }
         }
         Task::none()
     }
@@ -242,7 +248,7 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-fn accepted_service_failure(state: &WorkspaceState, msg: &Message) -> Option<String> {
+fn accepted_service_failure(state: &WorkspaceState, msg: &Message) -> Option<(String, bool)> {
     let mut msg = msg;
     while let Message::AsyncResult(token, inner) = msg {
         if !state.requests.accepts(token) {
@@ -254,14 +260,14 @@ fn accepted_service_failure(state: &WorkspaceState, msg: &Message) -> Option<Str
         Message::SessionsRefreshed(_, Err(error))
             if error.kind == dozer_services::ServiceErrorKind::Unavailable =>
         {
-            Some(format!("会话加载失败: {}", error.message))
+            Some((format!("会话加载失败: {}", error.message), true))
         }
         Message::ReviewLoaded {
             result: Err(error),
             source,
             ..
         } if state.review.as_ref().is_some_and(|rv| &rv.source == source) => {
-            Some(format!("会话加载失败: {error}"))
+            Some((format!("会话加载失败: {error}"), false))
         }
         _ => None,
     }

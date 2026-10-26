@@ -546,7 +546,7 @@ fn layout(
     );
     (tree, node, renderer, texts)
 }
-fn view_texts(
+pub(crate) fn view_texts(
     panel: &ConversationsPanel,
     project: Option<&ProjectInfo>,
     shell: &AgentShell,
