@@ -19,6 +19,8 @@ pub(super) struct Desired {
     pub rect: LogicalRect,
     pub scale: f64,
     pub visible: bool,
+    /// Readiness belongs to `url`, not to the previously displayed document.
+    /// Keep false after URL changes until a matching DocumentLoaded is validated.
     pub loaded: bool,
 }
 /// Trusted document origin plus the first desired state of its child.
@@ -60,7 +62,7 @@ pub(super) fn plan(current: Option<&Desired>, desired: Option<&Desired>) -> Vec<
     let navigating = c.url != d.url;
     let showing = d.visible && d.loaded;
     let was_showing = c.visible && c.loaded;
-    if (!showing && was_showing) || navigating {
+    if (!showing && (was_showing || c.visible != d.visible)) || navigating {
         actions.push(Action::Park);
     }
     if navigating {
@@ -182,6 +184,10 @@ impl Host {
             built(generation, result)
         })
     }
+    /// Update the current identity. A changed URL starts a parked document even
+    /// if the previous document was loaded. Subsequent `loaded=true` explicitly
+    /// asserts that the caller validated DocumentLoaded for this exact URL;
+    /// callers must keep it false until that event arrives.
     pub fn sync<E: Send + 'static>(
         &mut self,
         id: window::Id,

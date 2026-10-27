@@ -134,3 +134,37 @@ fn not_loaded_creation_parks_and_loaded_transition_restores_bounds() {
         vec![Action::SetBounds, Action::Show]
     );
 }
+#[test]
+fn showing_a_hidden_loading_document_keeps_it_parked_but_resumes_native_visibility() {
+    let mut hidden = desired();
+    hidden.visible = false;
+    hidden.loaded = false;
+    let mut pending_visible = hidden.clone();
+    pending_visible.visible = true;
+    assert_eq!(
+        plan(Some(&hidden), Some(&pending_visible)),
+        vec![Action::Park],
+        "Park must apply offscreen bounds and native visibility so document bootstrap can resume"
+    );
+}
+#[test]
+fn hiding_a_loading_document_hides_its_parked_native_view() {
+    let mut pending_visible = desired();
+    pending_visible.loaded = false;
+    let mut hidden = pending_visible.clone();
+    hidden.visible = false;
+    assert_eq!(
+        plan(Some(&pending_visible), Some(&hidden)),
+        vec![Action::Park]
+    );
+}
+#[test]
+fn changing_url_never_shows_content_from_the_previous_loaded_document() {
+    let current = desired();
+    let mut next_document = current.clone();
+    next_document.url.push_str("&nonce=next");
+    assert_eq!(
+        plan(Some(&current), Some(&next_document)),
+        vec![Action::Park, Action::Navigate]
+    );
+}
