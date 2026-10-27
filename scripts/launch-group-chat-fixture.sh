@@ -38,10 +38,11 @@ env = {
     'PATH': f'{fakes}:{target}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     'TMPDIR': str(tmp),
 }
-prefix = ['env', '-i'] + [f'{k}={v}' for k, v in env.items()]
+# Keep the rest of the environment (GUI needs it) but never an inherited product root.
+prefix = ['env', '-u', 'DOZER_DATA_DIR'] + [f'{k}={v}' for k, v in env.items()]
 print(f'Isolated root: {root}\nSynthetic project: {project}\nFake agent log: {log}', flush=True)
 print('Digger command: ' + shlex.join(prefix + [str(digger)]), flush=True)
 print(f'After the run: scripts/check-fake-agent-log.sh {log}', flush=True)
 if args.mode == 'digger':
-    os.execve('/usr/bin/env', prefix + [str(digger)], {})
+    os.execv('/usr/bin/env', prefix + [str(digger)])
 PY
