@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bytehost_chrome::{BodyArea, Divider, ShellMsg, pair_view};
-use dozer_model::ProjectInfo;
+use dozer_model::{BackfillReport, ProjectInfo};
 use dozer_panel_conversations::adapter::{
     ConversationsCapabilities, ConversationsRequest, LinkedTodos, PanelDisplay,
 };
@@ -50,6 +50,31 @@ pub struct ConversationsPanel {
     marker_path: std::path::PathBuf,
     import_tx: tokio::sync::mpsc::UnboundedSender<(i64, ImportEvent)>,
     import_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(i64, ImportEvent)>>,
+    /// 导入任务在发 `Finished` 之前存下失败明细(库的 `ImportEvent` 只带导入数),
+    /// 收到 `Finished` 时取走并写进提示条。
+    import_failures: Arc<std::sync::Mutex<HashMap<i64, BackfillReport>>>,
+}
+
+/// 提示条里最多列出的失败文件数(完整数量写在开头);其余在日志里。
+const SHOWN_IMPORT_FAILURES: usize = 5;
+
+/// 导入有失败文件时的提示;全部成功返回 `None`。
+fn import_failure_notice(report: &BackfillReport) -> Option<String> {
+    if report.failed_total == 0 {
+        return None;
+    }
+    let mut lines = vec![format!(
+        "有 {} 个会话文件导入失败(已导入 {} 个):",
+        report.failed_total, report.imported_files
+    )];
+    for failure in report.failures.iter().take(SHOWN_IMPORT_FAILURES) {
+        lines.push(format!("{} — {}", failure.path, failure.reason));
+    }
+    let hidden = report.failed_total as usize - report.failures.len().min(SHOWN_IMPORT_FAILURES);
+    if hidden > 0 {
+        lines.push(format!("…另有 {hidden} 个"));
+    }
+    Some(lines.join("\n"))
 }
 impl ConversationsPanel {
     pub fn new(
@@ -81,6 +106,7 @@ impl ConversationsPanel {
             marker_path,
             import_tx,
             import_rx: Some(import_rx),
+            import_failures: Arc::default(),
             states: HashMap::new(),
             displays: HashMap::new(),
             conversation,
@@ -151,12 +177,20 @@ impl ConversationsPanel {
                 let service = self.transcript.clone();
                 let cwd = project.path.clone();
                 let tx = self.import_tx.clone();
+                let failures = self.import_failures.clone();
                 // Construct the service future inside the spawned task, too:
                 // an implementation can block before returning its BoxFuture.
                 handle.spawn(async move {
                     let result = service
-                        .backfill_project_transcripts(cwd)
+                        .backfill_project_transcripts_report(cwd)
                         .await
+                        .map(|report| {
+                            let imported = report.imported_files;
+                            if report.failed_total > 0 {
+                                failures.lock().unwrap().insert(pid, report);
+                            }
+                            imported
+                        })
                         .map_err(|e| e.to_string());
                     let _ = tx.send((pid, ImportEvent::Finished(token, result)));
                 });
@@ -169,6 +203,11 @@ impl ConversationsPanel {
                 }
                 match result {
                     Ok(count) => {
+                        let report = self.import_failures.lock().unwrap().remove(&pid);
+                        if let Some(text) = report.as_ref().and_then(import_failure_notice) {
+                            eprintln!("digger: conversations import: {text}");
+                            self.notice.push_quiet(text);
+                        }
                         self.imports.insert(pid, ImportState::Done(count));
                         self.import_marker.mark(pid, count, now_ms());
                         if let Err(error) = self.import_marker.save(&self.marker_path) {
