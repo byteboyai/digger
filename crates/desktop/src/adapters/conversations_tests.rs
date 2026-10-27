@@ -1745,72 +1745,105 @@ fn two_quick_clicks_show_only_the_second_rows_detail_even_if_the_first_loaded_ev
 }
 #[test]
 fn load_more_appends_and_renavigates_with_a_new_nonce() {
-    let rt = runtime();
-    let (mut panel, fake, _) = panel(&rt);
-    let a = project(1, "/a");
-    start_review(&mut panel, &fake, &rt, &a, "one");
-    sync_review(&mut panel, Some(1));
-    load_native(&mut panel, &a);
-    let old = panel.native.document_identity().unwrap();
-    fake.turn_responses
-        .lock()
-        .unwrap()
-        .push_back(Ok(vec![turn(1, "second")]));
-    // This verifies the iced button's real hit target/message. Native coverage
-    // and actual click-through behavior still require desktop GUI verification.
-    let shared = ready();
-    let mut view = panel.view(Some(&a), &area(600., true), &shared);
-    let at = layout(&mut view, 600.)
-        .3
-        .0
-        .into_iter()
-        .find(|(label, _)| label == "加载更多…")
-        .unwrap()
-        .1
-        .center();
-    let messages = click(&mut view, at, 600.);
-    drop(view);
-    assert!(messages.iter().any(|message| matches!(message,
+    for initial_nonce in [0, u64::MAX - 1] {
+        let rt = runtime();
+        let (mut panel, fake, _) = panel(&rt);
+        let a = project(1, "/a");
+        panel.ensure_state(&a).review_nonce = initial_nonce;
+        start_review(&mut panel, &fake, &rt, &a, "one");
+        sync_review(&mut panel, Some(1));
+        load_native(&mut panel, &a);
+        let old = panel.native.document_identity().unwrap();
+        assert_eq!(old.1, initial_nonce.wrapping_add(1));
+        fake.turn_responses
+            .lock()
+            .unwrap()
+            .push_back(Ok(vec![turn(1, "second")]));
+        // This verifies the iced button's real hit target/message. Native coverage
+        // and actual click-through behavior still require desktop GUI verification.
+        let shared = ready();
+        let mut view = panel.view(Some(&a), &area(600., true), &shared);
+        let at = layout(&mut view, 600.)
+            .3
+            .0
+            .into_iter()
+            .find(|(label, _)| label == "加载更多…")
+            .unwrap()
+            .1
+            .center();
+        let messages = click(&mut view, at, 600.);
+        drop(view);
+        assert!(messages.iter().any(|message| matches!(message,
         Msg::Conversations(1, Message::DetailLoadMore(cid, 1)) if cid == "one")));
-    for message in messages {
-        if let Msg::Conversations(pid, message) = message {
-            let _ = panel.update(pid, message, Some(&a));
+        for message in messages {
+            if let Msg::Conversations(pid, message) = message {
+                let _ = panel.update(pid, message, Some(&a));
+            }
         }
+        apply(&mut panel, &rt, &a);
+        sync_review(&mut panel, Some(1));
+        let next = panel.native.document_identity().unwrap();
+        assert_eq!(old.0, next.0);
+        assert_ne!(old.1, next.1);
+        assert_eq!(next.1, initial_nonce.wrapping_add(2));
+        assert_ne!(old.2, next.2);
+        assert_eq!(
+            panel
+                .state(1)
+                .unwrap()
+                .review
+                .as_ref()
+                .unwrap()
+                .entries
+                .len(),
+            2
+        );
+        assert_eq!(fake.turns.lock().unwrap()[1], ("one".into(), 1, 200));
+        assert!(
+            panel
+                .desired_for_review(
+                    true,
+                    bytehost_core::LogicalRect {
+                        x: 0.,
+                        y: 0.,
+                        width: 400.,
+                        height: 400.
+                    },
+                    Some(1)
+                )
+                .spec
+                .unwrap()
+                .park_offscreen
+        );
+        // An old MAX (or ordinary previous nonce) must not reveal the new page.
+        let _ = panel.update_native(
+            super::super::review_native::Event::Loaded {
+                generation: old.0,
+                nonce: old.1,
+                page_url: old.2,
+            },
+            Some(&a),
+        );
+        assert!(!panel.native.is_ready());
+        assert_ne!(
+            panel
+                .state(1)
+                .unwrap()
+                .review
+                .as_ref()
+                .unwrap()
+                .loaded_nonce,
+            Some(next.1)
+        );
+        load_native(&mut panel, &a);
+        assert!(panel.native.is_ready());
+        let review = panel.state(1).unwrap().review.as_ref().unwrap();
+        assert_eq!(review.loaded_nonce, Some(next.1));
+        assert_eq!(
+            dozer_panel_conversations::snapshot::review_pane_state(Some(review)),
+            dozer_panel_conversations::snapshot::ReviewPaneState::Ready
+        );
     }
-    apply(&mut panel, &rt, &a);
-    sync_review(&mut panel, Some(1));
-    let next = panel.native.document_identity().unwrap();
-    assert_eq!(old.0, next.0);
-    assert_ne!(old.1, next.1);
-    assert_ne!(old.2, next.2);
-    assert_eq!(
-        panel
-            .state(1)
-            .unwrap()
-            .review
-            .as_ref()
-            .unwrap()
-            .entries
-            .len(),
-        2
-    );
-    assert_eq!(fake.turns.lock().unwrap()[1], ("one".into(), 1, 200));
-    assert!(
-        panel
-            .desired_for_review(
-                true,
-                bytehost_core::LogicalRect {
-                    x: 0.,
-                    y: 0.,
-                    width: 400.,
-                    height: 400.
-                },
-                Some(1)
-            )
-            .spec
-            .unwrap()
-            .park_offscreen
-    );
 }
 #[test]
 fn load_more_button_is_visible_when_entries_exist() {

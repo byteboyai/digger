@@ -35,6 +35,8 @@ struct Gallery {
     native_selftest: bool,
     probe_step: usize,
     probe_pending: bool,
+    resize_target: Option<(window::Id, iced::Size)>,
+    resize_acknowledged: bool,
     hidden: bool,
     probe_started: std::time::Instant,
 }
@@ -146,9 +148,18 @@ impl Gallery {
             native_selftest: false,
             probe_step: 0,
             probe_pending: false,
+            resize_target: None,
+            resize_acknowledged: false,
             hidden: false,
             probe_started: std::time::Instant::now(),
         }
+    }
+    fn request_selftest_resize(&mut self) -> Task<Msg> {
+        let id = self.window.expect("selftest window");
+        let size = iced::Size::new(1000., 760.);
+        self.resize_target = Some((id, size));
+        self.resize_acknowledged = false;
+        window::resize(id, size)
     }
     fn area(&self) -> BodyArea {
         let side = self.layout.side_of(&shell::conversations_id()).unwrap();
@@ -221,6 +232,9 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
     let mut tasks = vec![];
     match message {
         Msg::WindowReady(id, size) => {
+            if gallery.probe_step == 1 {
+                gallery.resize_acknowledged = gallery.resize_target == Some((id, size));
+            }
             gallery.window = Some(id);
             let _ = shell::update(
                 &mut gallery.layout,
@@ -252,21 +266,22 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
                 let expected_zero = matches!(gallery.probe_step, 2 | 4);
                 let expected = gallery.area().pair.unwrap().second;
                 let rect = review_bounds(expected, byteui::theme::icon_size::scale());
-                let ok = probe.is_some_and(|p| {
-                    if expected_zero {
-                        !p.exists && p.handles == 0
-                    } else {
-                        p.exists
-                            && p.visible
-                            && p.handles == 1
-                            && p.bounds.is_some_and(|b| {
-                                (b.0 - f64::from(rect.x)).abs() < 0.51
-                                    && (b.1 - f64::from(rect.y)).abs() < 0.51
-                                    && (b.2 - f64::from(rect.w)).abs() < 0.51
-                                    && (b.3 - f64::from(rect.h)).abs() < 0.51
-                            })
-                    }
-                });
+                let ok = (gallery.probe_step != 1 || gallery.resize_acknowledged)
+                    && probe.is_some_and(|p| {
+                        if expected_zero {
+                            !p.exists && p.handles == 0
+                        } else {
+                            p.exists
+                                && p.visible
+                                && p.handles == 1
+                                && p.bounds.is_some_and(|b| {
+                                    (b.0 - f64::from(rect.x)).abs() < 0.51
+                                        && (b.1 - f64::from(rect.y)).abs() < 0.51
+                                        && (b.2 - f64::from(rect.w)).abs() < 0.51
+                                        && (b.3 - f64::from(rect.h)).abs() < 0.51
+                                })
+                        }
+                    });
                 println!(
                     "{} native review step {}: {:?}",
                     if ok { "PASS" } else { "FAIL" },
@@ -282,10 +297,7 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
                 }
                 gallery.hidden = matches!(gallery.probe_step, 2 | 4);
                 if gallery.probe_step == 1 {
-                    tasks.push(window::resize(
-                        gallery.window.unwrap(),
-                        iced::Size::new(1000., 760.),
-                    ));
+                    tasks.push(gallery.request_selftest_resize());
                 }
             }
         }
@@ -296,6 +308,7 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
             }
             let ready = gallery.hidden || gallery.panel.native.is_ready();
             if ready
+                && (gallery.probe_step != 1 || gallery.resize_acknowledged)
                 && !gallery.probe_pending
                 && let Some(id) = gallery.window
             {
@@ -523,6 +536,73 @@ mod stress_tests {
                 .unwrap()
         });
         let _ = gallery.panel.update(pid, message, Some(&gallery.project));
+    }
+    fn window_actions(task: Task<Msg>) -> usize {
+        use iced::futures::StreamExt;
+        let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+            return 0;
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let mut count = 0;
+                while let Ok(Some(action)) =
+                    tokio::time::timeout(std::time::Duration::from_millis(100), stream.next()).await
+                {
+                    if matches!(action, iced_runtime::Action::Window(_)) {
+                        count += 1;
+                    }
+                }
+                count
+            })
+    }
+    #[test]
+    fn resize_stage_emits_no_probe_until_actual_matching_window_acknowledgement() {
+        let mut gallery = Gallery::new("list-and-detail");
+        gallery.native_selftest = true;
+        gallery.probe_step = 1;
+        // Make readiness true without claiming a real loaded NSView. This isolates
+        // the runner's resize gate while exercising its actual update/task path.
+        gallery.hidden = true;
+        let id = window::Id::unique();
+        gallery.window = Some(id);
+        assert_eq!(window_actions(gallery.request_selftest_resize()), 1);
+        let tick = || Msg::Lifecycle(digger_desktop::lifecycle_selftest::Phase::Act);
+        let _ = update(
+            &mut gallery,
+            Msg::WindowReady(id, iced::Size::new(1200., 800.)),
+        );
+        assert_eq!(window_actions(update(&mut gallery, tick())), 0);
+        assert!(!gallery.probe_pending);
+        let _ = update(
+            &mut gallery,
+            Msg::WindowReady(id, iced::Size::new(1000., 800.)),
+        );
+        assert_eq!(window_actions(update(&mut gallery, tick())), 0);
+        assert!(!gallery.probe_pending);
+        let _ = update(
+            &mut gallery,
+            Msg::WindowReady(window::Id::unique(), iced::Size::new(1000., 760.)),
+        );
+        assert_eq!(
+            window_actions(update(&mut gallery, tick())),
+            0,
+            "another window cannot acknowledge this request"
+        );
+        assert!(!gallery.probe_pending);
+        let _ = update(
+            &mut gallery,
+            Msg::WindowReady(id, iced::Size::new(1000., 760.)),
+        );
+        assert_eq!(window_actions(update(&mut gallery, tick())), 1);
+        assert!(gallery.probe_pending);
+        assert_eq!(
+            window_actions(update(&mut gallery, tick())),
+            0,
+            "only one outstanding probe"
+        );
     }
     #[test]
     fn huge_load_more_reaches_all_5000_rounds_without_duplicates() {

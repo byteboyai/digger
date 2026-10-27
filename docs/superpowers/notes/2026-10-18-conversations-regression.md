@@ -46,8 +46,9 @@ unsafe data roots before opening a window. The flag requires `list-and-detail` a
 cannot be combined with headless `--check`.
 
 This uses synthetic services only. It waits for genuine current-document IPC, reads
-actual native bounds/visibility/handles, resizes the window, hides review and checks
-zero handles, restores and waits for the new document, then destroys review and
+actual native bounds/visibility/handles, requests a 1000×760 window resize,
+waits for a matching acknowledgement from that same window before probing resized
+bounds, hides review and checks zero handles, restores and waits for the new document, then destroys review and
 checks zero handles before exiting. Exit 0 means all five native observations
 matched; failure or a 30-second readiness/probe timeout exits 1. It does not claim
 full product interaction or page-security coverage. `last_probe` survives a destroy
@@ -118,7 +119,8 @@ test-setup failures corrected before the final run, is in
 | `/usr/bin/time -l` on the compiled huge example test | test itself 0; time wrapper 1 because sandbox denies `sysctl kern.clockrate`; no RSS result | `/private/tmp/s7c-task5-headless-resources.log` |
 
 Default workspace test inventory gains **3** tests (785 → 788); desktop unit count
-598 → 601. Gallery adds 2 tests (1 → 3), explicit example target only. Task 5 did
+598 → 601. After the review correction below, Gallery adds 3 tests (1 → 4),
+explicit example target only. Task 5 did
 not rerun the full workspace. The existing `block v0.1.6` future-compatibility
 warning remains; no dependency was modified.
 
@@ -133,3 +135,39 @@ Log: `/private/tmp/s7c-task5-headless-resource-python.log`. This measures only
 parser/fold/snapshot/pagination work with synthetic services; it excludes native
 webview rendering, GUI interaction and GUI CPU/memory. It supplies no evidence of
 UI responsiveness, layout safety or network behavior.
+
+
+## Task 5 review correction: resize acknowledgement and nonce wrap
+
+The initial native selftest could advance its resize stage using the old layout
+if the resize event was delayed or missing. The corrected runner records the
+requested window ID and 1000×760 size, clears any previous acknowledgement and
+withholds the stage-1 probe until a matching `WindowReady` resize event arrives.
+A different size or window cannot acknowledge it; a subsequently invalidated
+acknowledgement cannot pass the observation. The existing 30-second deadline exits
+1 if readiness or acknowledgement never arrives. **Actual native GUI execution
+remains UNVERIFIED; screenshots: none.**
+
+The new headless runner test dispatches real Gallery update messages and counts
+scheduled iced window actions. Its initial runtime RED was an emitted probe
+(1) where old-size state required no probe (0), exit 101. After correction it
+checks old size, wrong height and a different window emit zero probes, the matching
+acknowledgement emits one, and an outstanding probe is not duplicated. These
+scheduled actions do not execute a live NSView.
+
+The existing Load More widget test now runs both the ordinary nonce case and
+`review_nonce = u64::MAX - 1`: the real initial service response/library update
+increments to MAX, the real headless Load More button sends the normal request,
+and its response/library update wraps to 0. An old MAX Loaded event leaves the
+0 document pending; the current 0 Loaded event transitions to Ready. No shared
+library message handling, page, protocol or dependency was changed.
+
+Latest validation is recorded in `/private/tmp/s7c-task5-resize-wrap-final.log`:
+`cargo test -p digger-desktop -- --test-threads=1` (601 unit + 7 integration),
+`cargo test -p digger-desktop --example conversations_gallery -- --test-threads=1`
+(4 example tests), example build, clippy all-targets with `-D warnings`, and fmt
+check. The earlier command table records the original Task 5 run; these corrected
+counts supersede its Gallery total. Default workspace inventory remains 788;
+this adds one explicit example test only. All six correction command steps exited
+0 (the shell chain exited 0): desktop tests, example tests, example build, clippy,
+fmt application and fmt check. No full workspace rerun was performed here.
