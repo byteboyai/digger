@@ -63,7 +63,8 @@ impl ConversationsPanel {
             digger_paths::config_dir().join("conversations-imported.json"),
         )
     }
-    pub(crate) fn new_with_marker_path(
+    /// Construct with a caller-owned marker (for isolated hosts and galleries).
+    pub fn new_with_marker_path(
         conversation: Arc<dyn ConversationService>,
         summary: Arc<dyn SummaryService>,
         transcript: Arc<dyn TranscriptService>,
