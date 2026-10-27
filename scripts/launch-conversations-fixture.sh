@@ -12,8 +12,11 @@ import tempfile
 parser = argparse.ArgumentParser(description='Seed a fresh isolated HOME/DIGGER_DATA_DIR under actual TMPDIR, then prepare or launch synthetic conversations.')
 parser.add_argument('mode', choices=['prepare', 'gallery', 'digger', 'dozer'])
 parser.add_argument('--state', default='list-and-detail', choices=['empty', 'list-only', 'list-and-detail-loading', 'list-and-detail', 'detail-error', 'detail-empty-entries', 'long-detail', 'import-prompt', 'daemon-unavailable', 'agent-filter-open'])
+parser.add_argument('--selftest-native', action='store_true', help='Gallery only: actual native view lifecycle assertions, exits 0/1')
 parser.add_argument('--dozer-bin', help='Explicit user-built Dozer binary; never an installed .app')
 args = parser.parse_args(__import__('sys').argv[2:])
+if args.selftest_native and (args.mode != 'gallery' or args.state != 'list-and-detail'):
+    parser.error('--selftest-native requires gallery --state list-and-detail')
 repo = Path(__import__('sys').argv[1]).resolve().parents[1]
 # Honor the repository's native target location; no compile/install is performed.
 target = repo / 'target/aarch64-apple-darwin/debug'
@@ -49,5 +52,7 @@ if args.mode == 'prepare':
     print('Dozer: provide your own built binary with mode dozer --dozer-bin <path>; operate and compare it yourself.', flush=True)
 else:
     command = [str(binary)] + (['--state', args.state] if args.mode == 'gallery' else [])
+    if args.selftest_native:
+        command.append('--selftest-native')
     os.execve(str(binary), command, env)
 PY

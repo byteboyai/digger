@@ -2164,3 +2164,142 @@ fn review_widgets_preserve_header_and_notice_clearance_at_supported_scales() {
         );
     }
 }
+
+#[test]
+fn twenty_distinct_rows_with_project_filter_resize_collapse_and_close_reject_stale_documents() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/synthetic-a");
+    let b = project(2, "/synthetic-b");
+    let mut stale = Vec::new();
+    for index in 0..20 {
+        let p = if index % 2 == 0 { &a } else { &b };
+        start_review(&mut panel, &fake, &rt, p, &format!("row-{index}"));
+        sync_review(&mut panel, Some(p.id));
+        stale.push(panel.native.document_identity().unwrap());
+        let _ = panel.update(
+            p.id,
+            Message::AgentFilterSelect(Some(AgentKind::Claude)),
+            Some(p),
+        );
+        // These construct and lay out the actual shared widget at both pane widths.
+        let _ = view_texts(
+            &panel,
+            Some(p),
+            &ready(),
+            400. + index as f32 * 10.,
+            index % 3 == 0,
+        );
+        if index % 4 == 0 {
+            let _ = panel.sync_native(
+                iced::window::Id::unique(),
+                false,
+                bytehost_core::LogicalRect {
+                    x: 0.,
+                    y: 0.,
+                    width: 0.,
+                    height: 0.,
+                },
+                Some(p.id),
+            );
+            assert!(panel.native.document_identity().is_none());
+        }
+        panel.close_project(p.id);
+        sync_review(&mut panel, Some(p.id));
+        assert!(panel.native.document_identity().is_none());
+    }
+    start_review(&mut panel, &fake, &rt, &a, "current");
+    sync_review(&mut panel, Some(a.id));
+    for (generation, nonce, page_url) in stale {
+        let _ = panel.update_native(
+            super::super::review_native::Event::Loaded {
+                generation,
+                nonce,
+                page_url,
+            },
+            Some(&a),
+        );
+    }
+    assert!(!panel.native.is_ready());
+    load_native(&mut panel, &a);
+    assert!(panel.native.is_ready());
+}
+
+#[test]
+fn daemon_fault_keeps_cached_snapshot_reports_next_detail_failure_and_recovers() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/synthetic-a");
+    start_review(&mut panel, &fake, &rt, &a, "cached");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    let cached = panel
+        .state(1)
+        .unwrap()
+        .review_snapshot()
+        .lock()
+        .unwrap()
+        .clone();
+    let unavailable = AgentShell {
+        status: Status::Unavailable("synthetic daemon death".into()),
+    };
+    assert!(
+        view_texts(&panel, Some(&a), &unavailable, 600., false)
+            .iter()
+            .any(|s| s.contains("synthetic daemon death"))
+    );
+    assert_eq!(
+        panel
+            .state(1)
+            .unwrap()
+            .review_snapshot()
+            .lock()
+            .unwrap()
+            .clone(),
+        cached
+    );
+    let _ = panel.update(
+        1,
+        Message::SessionsRefreshed(1, Ok(vec![row("cached"), row("next")])),
+        Some(&a),
+    );
+    fake.turn_responses
+        .lock()
+        .unwrap()
+        .push_back(Err(ServiceError::new(
+            ServiceErrorKind::Unavailable,
+            "synthetic connection refused",
+        )));
+    let _ = panel.update(
+        1,
+        Message::SessionOpen("next".into(), AgentKind::Claude),
+        Some(&a),
+    );
+    apply(&mut panel, &rt, &a);
+    assert!(
+        panel
+            .state(1)
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("synthetic connection refused")
+    );
+    start_review(&mut panel, &fake, &rt, &a, "next");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    assert!(
+        panel
+            .state(1)
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .error
+            .is_none()
+    );
+    assert!(panel.native.is_ready());
+}

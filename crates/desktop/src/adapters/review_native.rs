@@ -1,4 +1,5 @@
 //! Review's single trusted native child. The shared executor alone owns wry handles.
+pub use super::native_host::Probe;
 use super::native_host::{self, Action, Host};
 use bytehost_core::LogicalRect;
 use dozer_panel_conversations::{
@@ -32,6 +33,7 @@ pub enum Event {
         page_url: String,
         error: String,
     },
+    Probed(u64, Probe),
     Done,
 }
 pub struct Live {
@@ -137,6 +139,7 @@ pub struct ReviewNative {
     pub(crate) scheduled_actions: Vec<String>,
     #[cfg(test)]
     pub(crate) scheduled_target: Option<(LogicalRect, bool)>,
+    last_probe: Option<Probe>,
     host: Host,
     epoch: Arc<AtomicU64>,
     live: Option<Live>,
@@ -159,6 +162,7 @@ impl ReviewNative {
             scheduled_actions: vec![],
             #[cfg(test)]
             scheduled_target: None,
+            last_probe: None,
             host: Host::new(epoch.clone()),
             epoch,
             live: None,
@@ -182,6 +186,7 @@ impl ReviewNative {
     }
     pub fn invalidate(&mut self) {
         self.serving.set(None);
+        self.last_probe = None;
         self.epoch.fetch_add(1, Ordering::SeqCst);
     }
     #[cfg(test)]
@@ -193,7 +198,28 @@ impl ReviewNative {
     pub fn failed(&self) -> Option<&str> {
         self.error.as_deref()
     }
+    /// Read actual native state on the window thread, including after destruction.
+    pub fn probe(&self, id: window::Id) -> Task<Event> {
+        let generation = self.epoch.load(Ordering::SeqCst);
+        self.host.probe(id, generation, move |probe| {
+            Event::Probed(generation, probe)
+        })
+    }
+    pub fn is_ready(&self) -> bool {
+        self.live
+            .as_ref()
+            .is_some_and(|live| live.loaded && live.generation == self.epoch.load(Ordering::SeqCst))
+    }
+    pub fn last_probe(&self) -> Option<Probe> {
+        self.last_probe
+    }
     pub fn update(&mut self, event: Event) -> Option<i64> {
+        if let Event::Probed(generation, probe) = event {
+            if generation == self.epoch.load(Ordering::SeqCst) {
+                self.last_probe = Some(probe);
+            }
+            return None;
+        }
         let live = self.live.as_mut()?;
         if live.generation != self.epoch.load(Ordering::SeqCst) {
             return None;
@@ -273,6 +299,7 @@ impl ReviewNative {
         if replace {
             self.serving.set(None);
             let old = self.live.take().unwrap();
+            self.last_probe = None;
             self.epoch.fetch_add(1, Ordering::SeqCst);
             self.error = None;
             tasks.push(self.host.destroy(id, old.generation, Event::Done));
@@ -285,7 +312,8 @@ impl ReviewNative {
             self.serving.set(snapshot);
             let serving = self.serving.clone();
             let tx = self.tx.clone();
-            let generation = self.epoch.load(Ordering::SeqCst);
+            self.last_probe = None;
+            let generation = self.epoch.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
             let Some(document_nonce) = nonce(&target.url) else {
                 self.error = Some("审阅页面地址无效".into());
                 eprintln!("digger: review: invalid document URL");

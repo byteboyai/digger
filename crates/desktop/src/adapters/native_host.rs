@@ -286,7 +286,7 @@ impl Host {
         &self,
         id: window::Id,
         generation: u64,
-        map: fn(Probe) -> E,
+        map: impl FnOnce(Probe) -> E + Send + 'static,
     ) -> Task<E> {
         let slot = self.slot;
         window::run(id, move |_| {

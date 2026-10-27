@@ -32,6 +32,11 @@ struct Gallery {
     receiver: Option<tokio::sync::mpsc::UnboundedReceiver<(i64, Message)>>,
     _isolated: tempfile::TempDir,
     state_name: String,
+    native_selftest: bool,
+    probe_step: usize,
+    probe_pending: bool,
+    hidden: bool,
+    probe_started: std::time::Instant,
 }
 impl Gallery {
     fn new(name: &str) -> Self {
@@ -138,6 +143,11 @@ impl Gallery {
             _isolated: isolated,
             window: None,
             state_name: name.into(),
+            native_selftest: false,
+            probe_step: 0,
+            probe_pending: false,
+            hidden: false,
+            probe_started: std::time::Instant::now(),
         }
     }
     fn area(&self) -> BodyArea {
@@ -168,7 +178,7 @@ impl Gallery {
         self.panel
             .sync_native(
                 id,
-                true,
+                !self.hidden,
                 bytehost_core::LogicalRect {
                     x: rect.x.into(),
                     y: rect.y.into(),
@@ -185,8 +195,9 @@ impl Gallery {
     }
 }
 
-fn boot(name: &str) -> (Gallery, Task<Msg>) {
+fn boot(name: &str, native_selftest: bool) -> (Gallery, Task<Msg>) {
     let mut gallery = Gallery::new(name);
+    gallery.native_selftest = native_selftest;
     let receiver = gallery.receiver.take().unwrap();
     let messages = Task::stream(iced::futures::stream::unfold(
         receiver,
@@ -230,7 +241,70 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
             tasks.push(gallery.panel.update(pid, message, Some(&gallery.project)))
         }
         Msg::ReviewNative(event) => {
-            tasks.push(gallery.panel.update_native(event, Some(&gallery.project)))
+            let probed = matches!(
+                event,
+                digger_desktop::adapters::review_native::Event::Probed(..)
+            );
+            tasks.push(gallery.panel.update_native(event, Some(&gallery.project)));
+            if gallery.native_selftest && probed && gallery.probe_pending {
+                gallery.probe_pending = false;
+                let probe = gallery.panel.native.last_probe();
+                let expected_zero = matches!(gallery.probe_step, 2 | 4);
+                let expected = gallery.area().pair.unwrap().second;
+                let rect = review_bounds(expected, byteui::theme::icon_size::scale());
+                let ok = probe.is_some_and(|p| {
+                    if expected_zero {
+                        !p.exists && p.handles == 0
+                    } else {
+                        p.exists
+                            && p.visible
+                            && p.handles == 1
+                            && p.bounds.is_some_and(|b| {
+                                (b.0 - f64::from(rect.x)).abs() < 0.51
+                                    && (b.1 - f64::from(rect.y)).abs() < 0.51
+                                    && (b.2 - f64::from(rect.w)).abs() < 0.51
+                                    && (b.3 - f64::from(rect.h)).abs() < 0.51
+                            })
+                    }
+                });
+                println!(
+                    "{} native review step {}: {:?}",
+                    if ok { "PASS" } else { "FAIL" },
+                    gallery.probe_step,
+                    probe
+                );
+                if !ok {
+                    std::process::exit(1);
+                }
+                gallery.probe_step += 1;
+                if gallery.probe_step == 5 {
+                    std::process::exit(0);
+                }
+                gallery.hidden = matches!(gallery.probe_step, 2 | 4);
+                if gallery.probe_step == 1 {
+                    tasks.push(window::resize(
+                        gallery.window.unwrap(),
+                        iced::Size::new(1000., 760.),
+                    ));
+                }
+            }
+        }
+        Msg::Lifecycle(_) if gallery.native_selftest => {
+            if gallery.probe_started.elapsed() > std::time::Duration::from_secs(30) {
+                eprintln!("FAIL native review selftest: readiness/probe timeout");
+                std::process::exit(1);
+            }
+            let ready = gallery.hidden || gallery.panel.native.is_ready();
+            if ready
+                && !gallery.probe_pending
+                && let Some(id) = gallery.window
+            {
+                gallery.probe_pending = true;
+                // Chain observation after the real main-thread sync/destroy task.
+                return gallery
+                    .sync()
+                    .chain(gallery.panel.native.probe(id).map(Msg::ReviewNative));
+            }
         }
         Msg::ConversationsNoticeDismiss => gallery.panel.dismiss_notice(),
         Msg::Shell(ShellMsg::DividerPress(_)) => {}
@@ -309,18 +383,20 @@ fn main() -> iced::Result {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "--list") {
         println!(
-            "conversations_gallery --state <name> [--check]\n{}\nNo daemon/backend/model. Native agent menu: click shared filter control.",
+            "conversations_gallery --state <name> [--check] [--selftest-native]\n{}\nNo daemon/backend/model. Native agent menu: click shared filter control.",
             support::STATES.join("\n")
         );
         return Ok(());
     }
     let mut name = "empty".to_owned();
     let mut check = false;
+    let mut native_selftest = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--state" => name = args.next().cloned().unwrap_or_default(),
             "--check" => check = true,
+            "--selftest-native" => native_selftest = true,
             a if a.starts_with("--state=") => name = a[8..].into(),
             _ => {
                 eprintln!("Unknown argument {arg}");
@@ -330,6 +406,10 @@ fn main() -> iced::Result {
     }
     if !support::STATES.contains(&name.as_str()) {
         eprintln!("Unknown gallery state: {name}; use --list");
+        std::process::exit(2);
+    }
+    if native_selftest && (check || name != "list-and-detail") {
+        eprintln!("--selftest-native requires --state list-and-detail and a GUI");
         std::process::exit(2);
     }
     byteui::theme::color::set_theme(byteui::theme::color::ColorTokens::byteboy2077());
@@ -343,13 +423,21 @@ fn main() -> iced::Result {
         std::process::exit(2);
     }
     let title = format!("Conversations gallery · {name}");
-    iced::application(move || boot(&name), update, view)
+    iced::application(move || boot(&name, native_selftest), update, view)
         .title(move |_: &Gallery| title.clone())
         .font(fonts::JETBRAINS_MONO)
         .font(dozer_panel_term::symbols::SYMBOLS_FONT_DATA)
         .window_size(iced::Size::new(1200., 800.))
-        .subscription(|_: &Gallery| {
-            window::resize_events().map(|(id, size)| Msg::WindowReady(id, size))
+        .subscription(move |_: &Gallery| {
+            iced::Subscription::batch([
+                window::resize_events().map(|(id, size)| Msg::WindowReady(id, size)),
+                if native_selftest {
+                    iced::time::every(std::time::Duration::from_millis(700))
+                        .map(|_| Msg::Lifecycle(digger_desktop::lifecycle_selftest::Phase::Act))
+                } else {
+                    iced::Subscription::none()
+                },
+            ])
         })
         .run()
 }
@@ -418,5 +506,102 @@ mod tests {
             }
             let _shared_widget = view(&gallery);
         }
+    }
+}
+
+#[cfg(test)]
+mod stress_tests {
+    use super::*;
+    fn receive(
+        gallery: &mut Gallery,
+        receiver: &mut tokio::sync::mpsc::UnboundedReceiver<(i64, Message)>,
+    ) {
+        let (pid, message) = gallery._runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let _ = gallery.panel.update(pid, message, Some(&gallery.project));
+    }
+    #[test]
+    fn huge_load_more_reaches_all_5000_rounds_without_duplicates() {
+        let mut gallery = Gallery::new("list-only");
+        let mut receiver = gallery.receiver.take().unwrap();
+        let start = std::time::Instant::now();
+        let _ = gallery.panel.update(
+            PID,
+            Message::SessionOpen("huge".into(), AgentKind::Claude),
+            Some(&gallery.project),
+        );
+        receive(&mut gallery, &mut receiver);
+        for page in 1..=50 {
+            let count = gallery
+                .panel
+                .state(PID)
+                .unwrap()
+                .review
+                .as_ref()
+                .unwrap()
+                .entries
+                .len();
+            assert_eq!(count, page * 200);
+            let _ = gallery.panel.update(
+                PID,
+                Message::DetailLoadMore("huge".into(), count as i64 - 1),
+                Some(&gallery.project),
+            );
+            receive(&mut gallery, &mut receiver);
+        }
+        let review = gallery.panel.state(PID).unwrap().review.as_ref().unwrap();
+        assert_eq!(review.entries.len(), 10000);
+        assert_eq!(
+            review.entries,
+            dozer_panel_conversations::review::review_entries_from_turns(&support::turns(
+                "huge",
+                &support::fixture("huge")
+            ))
+        );
+        assert!(review.error.is_none());
+        eprintln!(
+            "headless huge parse/fold/pagination: {:?}; no webview/layout or GUI CPU/memory observation",
+            start.elapsed()
+        );
+    }
+    #[test]
+    fn hostile_mixed_broken_and_bad_only_preserve_real_parser_semantics() {
+        let mut gallery = Gallery::new("list-only");
+        let mut receiver = gallery.receiver.take().unwrap();
+        for (name, expected) in [("hostile", 2), ("broken", 2), ("empty", 0)] {
+            let _ = gallery.panel.update(
+                PID,
+                Message::SessionOpen(name.into(), AgentKind::Claude),
+                Some(&gallery.project),
+            );
+            receive(&mut gallery, &mut receiver);
+            let review = gallery.panel.state(PID).unwrap().review.as_ref().unwrap();
+            assert_eq!(review.entries.len(), expected);
+            assert!(review.error.is_none());
+            if name == "hostile" {
+                let turns = support::turns(name, &support::fixture(name));
+                let snapshot = gallery.panel.state(PID).unwrap().review_snapshot();
+                let json: serde_json::Value =
+                    serde_json::from_str(snapshot.lock().unwrap().as_ref().unwrap()).unwrap();
+                assert_eq!(json["entries"][0]["Human"]["text"], turns[0].content);
+                assert_eq!(json["entries"][1]["AiTurn"]["text"], turns[1].content);
+            }
+            assert!(
+                gallery
+                    .panel
+                    .state(PID)
+                    .unwrap()
+                    .review_snapshot()
+                    .lock()
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        assert!(support::turns("bad-only", "{bad json\nnot json\n").is_empty());
+        // This checks serialization and parser behavior only; it cannot prove nonexecution or network isolation.
     }
 }

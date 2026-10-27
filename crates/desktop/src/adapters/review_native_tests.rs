@@ -435,3 +435,33 @@ fn shown_document_failure_schedules_park_preserves_error_and_allows_valid_loaded
         "recovered document must be shown again"
     );
 }
+
+#[test]
+fn actual_probe_is_scheduled_after_destroy_and_stale_results_are_rejected() {
+    let mut native = ReviewNative::new();
+    let id = window::Id::unique();
+    let d = desired(1);
+    let _ = native.sync(id, d.clone(), None);
+    let old = native.epoch.load(Ordering::SeqCst);
+    assert_eq!(window_actions(native.probe(id)), 1);
+    let mut hidden = d.clone();
+    hidden.visible = false;
+    let _ = native.sync(id, hidden, None);
+    assert!(native.live.is_none());
+    let generation = native.epoch.load(Ordering::SeqCst);
+    assert_eq!(window_actions(native.probe(id)), 1);
+    let zero = Probe {
+        exists: false,
+        visible: false,
+        bounds: None,
+        handles: 0,
+    };
+    native.update(Event::Probed(generation, zero));
+    assert_eq!(native.last_probe(), Some(zero));
+    let _ = native.sync(id, d, None);
+    // Recreate advances the generation, so a delayed post-destroy zero cannot overwrite it.
+    assert_eq!(native.last_probe(), None);
+    native.update(Event::Probed(old, zero));
+    native.update(Event::Probed(generation, zero));
+    assert_eq!(native.last_probe(), None);
+}
