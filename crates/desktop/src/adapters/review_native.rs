@@ -175,6 +175,12 @@ impl ReviewNative {
         self.serving.set(None);
         self.epoch.fetch_add(1, Ordering::SeqCst);
     }
+    #[cfg(test)]
+    pub(crate) fn document_identity(&self) -> Option<(u64, u64, String)> {
+        self.live
+            .as_ref()
+            .map(|live| (live.generation, live.nonce, live.desired.url.clone()))
+    }
     pub fn failed(&self) -> Option<&str> {
         self.error.as_deref()
     }

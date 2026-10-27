@@ -229,21 +229,29 @@ impl ConversationsPanel {
         project_id: Option<i64>,
     ) -> Task<super::review_native::Event> {
         let state = project_id.and_then(|pid| self.states.get(&pid));
-        let spec = dozer_panel_conversations::snapshot::review_webview_spec(
-            state.and_then(|s| s.review.as_ref()),
-            "zh-CN",
-            "digger-review",
-        );
-        self.native.sync(
-            id,
-            super::review_native::Desired {
-                visible,
-                rect,
-                spec,
-                project_id,
-            },
-            state.map(WorkspaceState::review_snapshot),
-        )
+        let desired = self.desired_for_review(visible, rect, project_id);
+        self.native
+            .sync(id, desired, state.map(WorkspaceState::review_snapshot))
+    }
+    pub(crate) fn desired_for_review(
+        &self,
+        visible: bool,
+        rect: bytehost_core::LogicalRect,
+        project_id: Option<i64>,
+    ) -> super::review_native::Desired {
+        let state = project_id.and_then(|pid| self.states.get(&pid));
+        super::review_native::Desired {
+            // Geometry clamps unusable/tiny blocks to a semantic 1px sentinel.
+            // Never create a visible child for that otherwise empty area.
+            visible: visible && rect.width > 1. && rect.height > 1.,
+            rect,
+            spec: dozer_panel_conversations::snapshot::review_webview_spec(
+                state.and_then(|s| s.review.as_ref()),
+                "zh-CN",
+                "digger-review",
+            ),
+            project_id,
+        }
     }
     pub fn update_native(
         &mut self,
@@ -255,7 +263,7 @@ impl ConversationsPanel {
             self.notice = Some(error.to_owned());
         }
         if let Some(pid) = loaded {
-            return self.update(pid, Message::ReviewTraceLoaded, project);
+            return self.update_library(pid, Message::ReviewTraceLoaded, project);
         }
         Task::none()
     }
@@ -338,6 +346,21 @@ impl ConversationsPanel {
         }
     }
     pub fn update(&mut self, pid: i64, msg: Message, project: Option<&ProjectInfo>) -> Task<Msg> {
+        let mut inner = &msg;
+        while let Message::AsyncResult(_, message) = inner {
+            inner = message;
+        }
+        if matches!(inner, Message::ReviewTraceLoaded) {
+            return Task::none();
+        }
+        self.update_library(pid, msg, project)
+    }
+    fn update_library(
+        &mut self,
+        pid: i64,
+        msg: Message,
+        project: Option<&ProjectInfo>,
+    ) -> Task<Msg> {
         // A result's scope is authoritative, even when a host envelope names another project.
         let pid = msg.result_project().unwrap_or(pid);
         let Some(project) = project.filter(|p| p.id == pid) else {
@@ -402,6 +425,58 @@ impl ConversationsPanel {
     pub fn dismiss_notice(&mut self) {
         self.notice = None;
     }
+    pub(crate) fn review_notice_height(&self, collapsed: bool) -> f32 {
+        if collapsed && self.notice.is_some() {
+            byteui::theme::geometry::preview_chrome_top_px()
+        } else {
+            0.
+        }
+    }
+    fn notice_view(&self) -> Option<Element<'_, Msg>> {
+        let tokens = byteui::theme::color::current();
+        self.notice.as_ref().map(|notice| {
+            row![
+                text(notice.clone())
+                    .size(byteui::theme::font::caption())
+                    .color(tokens.red)
+                    .width(Length::Fill),
+                button(text("×").color(tokens.dim)).on_press(Msg::ConversationsNoticeDismiss)
+            ]
+            .spacing(8)
+            .padding([6, 12])
+            .align_y(iced::Alignment::Center)
+            .into()
+        })
+    }
+    fn review_view<'a>(
+        &'a self,
+        state: &'a WorkspaceState,
+        display: &'a ConversationsDisplay,
+    ) -> Element<'a, Msg> {
+        if let Some(error) = self.native.failed() {
+            // A failed native document cannot emit Loaded. Preserve the cached
+            // model and offer a readable error instead of a permanent spinner.
+            let style =
+                display.pane_style(dozer_panel_conversations::adapter::ConversationsPane::Detail);
+            let header = display.panel_head(
+                byteui::interaction::icons::IconKind::BotMessageSquare,
+                "对话".into(),
+                Some(display.list_collapse_button("收起会话列表".into(), "展开会话列表".into())),
+            );
+            return container(column![header, text(format!("⚠ {error}"))].spacing(style.gap))
+                .padding(style.padding)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+        }
+        dozer_panel_conversations::view::review_pane(
+            state,
+            display,
+            self.caps,
+            Length::Fill,
+            Default::default(),
+        )
+    }
     pub fn view<'a>(
         &'a self,
         project: Option<&ProjectInfo>,
@@ -409,76 +484,69 @@ impl ConversationsPanel {
         shell: &'a AgentShell,
     ) -> Element<'a, Msg> {
         let tokens = byteui::theme::color::current();
-        let body = if let Some(project) = project {
-            if shell.status != Status::Ready {
-                shell.view(true).map(Msg::AgentShell)
-            } else if let Some(state) = self.states.get(&project.id) {
-                let display = &self.displays[&project.id];
-                display.configure(area);
-                let width = area.pair.map(|p| p.first.w).unwrap_or(area.rect.w).max(0.);
-                let list = dozer_panel_conversations::view::conversations_list(
-                    display,
-                    state,
-                    &NoTodos,
-                    self.caps,
-                    Length::Fixed(width),
-                    Default::default(),
-                );
-                let list: Element<'_, Msg> = if let Some(import) = self.import_view(project.id) {
-                    column![import, list].height(Length::Fill).into()
-                } else {
-                    list
-                };
-                pair_view(
-                    area,
-                    list,
-                    placeholder(Some(display)),
-                    Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
-                    tokens.bg,
-                    tokens.panel,
-                )
-            } else {
-                placeholder(None)
-            }
-        } else {
-            // Same unopened-project treatment as ProjectPanel.
-            container(iced::widget::Space::new())
+        let Some(project) = project else {
+            return container(iced::widget::Space::new())
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .into()
-        };
-        match &self.notice {
-            Some(notice) => {
-                let line: Element<'_, Msg> = row![
-                    text(notice.clone())
-                        .size(byteui::theme::font::caption())
-                        .color(tokens.red)
-                        .width(Length::Fill),
-                    button(text("×").color(tokens.dim)).on_press(Msg::ConversationsNoticeDismiss)
-                ]
-                .spacing(8)
-                .padding([6, 12])
-                .align_y(iced::Alignment::Center)
                 .into();
-                column![line, body].height(Length::Fill).into()
+        };
+        let Some(state) = self.states.get(&project.id) else {
+            return shell.view(true).map(Msg::AgentShell);
+        };
+        let display = &self.displays[&project.id];
+        display.configure(area);
+        let list: Element<'_, Msg> = if shell.status != Status::Ready {
+            shell.view(true).map(Msg::AgentShell)
+        } else {
+            let width = area.pair.map(|p| p.first.w).unwrap_or(area.rect.w).max(0.);
+            let list = dozer_panel_conversations::view::conversations_list(
+                display,
+                state,
+                &NoTodos,
+                self.caps,
+                Length::Fixed(width),
+                Default::default(),
+            );
+            if let Some(import) = self.import_view(project.id) {
+                column![import, list].height(Length::Fill).into()
+            } else {
+                list
             }
-            None => body,
-        }
+        };
+        // Expanded notices stay at the top of the iced list. With the list
+        // collapsed, reserve a scrollable top line above review; native geometry
+        // uses the same exported height, including for arbitrarily long errors.
+        let list = if let Some(notice) = self.notice_view().filter(|_| !area.collapsed) {
+            column![notice, list].height(Length::Fill).into()
+        } else {
+            list
+        };
+        let review = self.review_view(state, display);
+        let review = if area.collapsed {
+            if let Some(notice) = self.notice_view() {
+                column![
+                    container(iced::widget::scrollable(notice))
+                        .height(Length::Fixed(self.review_notice_height(true)))
+                        .clip(true),
+                    review
+                ]
+                .height(Length::Fill)
+                .into()
+            } else {
+                review
+            }
+        } else {
+            review
+        };
+        pair_view(
+            area,
+            list,
+            review,
+            Msg::Shell(ShellMsg::DividerPress(Divider::Pair(area.side))),
+            tokens.bg,
+            tokens.panel,
+        )
     }
-}
-fn placeholder<'a>(display: Option<&ConversationsDisplay>) -> Element<'a, Msg> {
-    let mut header = row![text("审阅详情即将可用").width(Length::Fill)]
-        .spacing(8)
-        .align_y(iced::Alignment::Center);
-    if let Some(display) = display {
-        header =
-            header.push(display.list_collapse_button("收起会话列表".into(), "展开会话列表".into()));
-    }
-    container(header)
-        .padding(8)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
 }
 
 fn now_ms() -> u64 {

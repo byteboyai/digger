@@ -319,6 +319,27 @@ fn preview_webview_rect(slot: Rect) -> Rect {
     )
 }
 
+fn review_native_rect(
+    shell: &ShellModel,
+    content: Rect,
+    collapsed: bool,
+    notice_height: f32,
+) -> Rect {
+    let mut block = if collapsed {
+        content
+    } else {
+        shell
+            .side_of(&shell::conversations_id())
+            .and_then(|side| shell::pair_rects(shell, side))
+            .map(|pair| pair.second)
+            .unwrap_or(content)
+    };
+    let notice_height = notice_height.min(block.h.max(0.));
+    block.y += notice_height;
+    block.h = (block.h - notice_height).max(0.);
+    crate::adapters::review_geometry::review_bounds(block, byteui::theme::icon_size::scale())
+}
+
 /// 向下缩 `top` 像素(面板自己的头部占掉的高度)。
 fn below_header(r: Rect, top: f32) -> Rect {
     Rect::new(r.x, r.y + top, r.w, (r.h - top).max(1.0))
@@ -959,9 +980,15 @@ impl ProductShell {
             };
             todo_native_rect(content, pair, add_h)
         });
-        // Task2 supplies the library review pane's final header/notice geometry.
-        // This Task1 host wiring intentionally uses the content block for now.
-        let review_rect = content_of(&shell::conversations_id());
+        let review_rect = content_of(&shell::conversations_id()).map(|content| {
+            let collapsed = self.pane_collapsed(&shell::conversations_id());
+            review_native_rect(
+                &self.shell,
+                content,
+                collapsed,
+                self.conversations.review_notice_height(collapsed),
+            )
+        });
         let markdown_rect = content_of(&shell::markdown_id());
         let hidden = LogicalRect {
             x: 0.0,
@@ -3862,6 +3889,73 @@ mod tests {
             preview_project(Some(&project), true).is_none(),
             "退出时清单必须为空"
         );
+    }
+
+    #[test]
+    fn default_conversations_shell_matches_actual_dozer_native_geometry() {
+        let d = shell::defaults();
+        let mut model = ShellModel::new(d.rails, d.selected, d.left_width, (1200., 800.)).unwrap();
+        let _ = shell::update(
+            &mut model,
+            ShellMsg::PanelPress {
+                panel: shell::conversations_id(),
+            },
+        );
+        let side = model.side_of(&shell::conversations_id()).unwrap();
+        let content = model.rects(&metrics_from_theme()).content(side).unwrap();
+        let actual = review_native_rect(&model, content, false, 0.);
+        eprintln!("S7C_DIGGER_DEFAULT_REVIEW={actual:?} CONTENT={content:?}");
+        for (a, b) in [
+            (actual.x, 700.),
+            (actual.y, 84.),
+            (actual.w, 274.4),
+            (actual.h, 690.),
+        ] {
+            assert!(
+                (a - b).abs() <= 1.,
+                "Digger {actual:?} differs from actual Dozer (700,84,274.4,690)"
+            );
+        }
+        let collapsed = review_native_rect(&model, content, true, 0.);
+        assert!(collapsed.w > actual.w);
+        let notice = review_native_rect(
+            &model,
+            content,
+            true,
+            byteui::theme::geometry::preview_chrome_top_px(),
+        );
+        assert_eq!(
+            notice.y,
+            collapsed.y + byteui::theme::geometry::preview_chrome_top_px()
+        );
+        assert_eq!(
+            notice.h,
+            collapsed.h - byteui::theme::geometry::preview_chrome_top_px()
+        );
+        let _ = shell::update(&mut model, ShellMsg::Maximize(side));
+        let content = model.rects(&metrics_from_theme()).content(side).unwrap();
+        for collapsed in [false, true] {
+            let actual = review_native_rect(&model, content, collapsed, 0.);
+            let block = if collapsed {
+                content
+            } else {
+                shell::pair_rects(&model, side).unwrap().second
+            };
+            assert!(actual.x >= block.x && actual.y >= block.y);
+            assert!(actual.x + actual.w <= block.x + block.w);
+            assert!(actual.y + actual.h <= block.y + block.h);
+            assert_eq!(
+                actual.y,
+                block.y + byteui::theme::geometry::preview_chrome_top_px()
+            );
+            assert!(
+                (actual.y + actual.h
+                    - (block.y + block.h
+                        - crate::adapters::conversations_display::review_bottom_inset(1.)))
+                .abs()
+                    < 0.01
+            );
+        }
     }
 
     /// G-C3:页签条可用宽度必须每帧取自 `PreviewHub` 的真实几何,不能是常量 0。
