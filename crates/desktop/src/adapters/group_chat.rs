@@ -17,6 +17,10 @@ use super::group_chat_display::GroupChatDisplay;
 use super::notice::NoticeBar;
 use crate::product::Msg;
 
+/// 新建群对话框里常驻的提示:群聊里 agent 的发言在执行层只读,且目前只有这两家能发言。
+pub(crate) const MENTION_READ_ONLY_NOTE: &str =
+    "被 @ 的成员只读地读取项目文件,目前仅 Claude、Codex 可以发言";
+
 pub struct GroupChatPanel {
     states: HashMap<i64, WorkspaceState>,
     displays: HashMap<i64, GroupChatDisplay>,
@@ -152,8 +156,16 @@ impl GroupChatPanel {
         let display = self.displays.get(&project.id)?;
         let card =
             dozer_panel_group_chat::dialog::new_group_dialog_card(state, display, project.id)?;
-        Some(super::group_chat_overlay::dialog_overlay(
+        let tokens = byteui::theme::color::current();
+        let card = column![
             card.map(Msg::GroupChat),
+            text(MENTION_READ_ONLY_NOTE)
+                .size(byteui::theme::font::body())
+                .color(tokens.dim),
+        ]
+        .spacing(8);
+        Some(super::group_chat_overlay::dialog_overlay(
+            card.into(),
             Msg::GroupChat(dozer_panel_group_chat::Message::NewGroupDialogCancel(
                 project.id,
             )),
@@ -479,6 +491,26 @@ mod tests {
         panel.close_project(1);
         let _ = panel.update(GcMessage::GroupsLoaded(1, Ok(vec![])), |_| true);
         assert!(panel.state(1).is_none());
+    }
+
+    #[test]
+    fn the_new_group_dialog_always_carries_the_read_only_note() {
+        assert_eq!(
+            MENTION_READ_ONLY_NOTE,
+            "被 @ 的成员只读地读取项目文件,目前仅 Claude、Codex 可以发言"
+        );
+        let fake = Arc::new(Fake::default());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut panel = GroupChatPanel::new(services(fake));
+        panel.attach_handle(rt.handle().clone());
+        let p = project(1);
+        panel.ensure_state(&p);
+        assert!(panel.group_create_overlay(Some(&p)).is_none());
+        let _ = panel.update(GcMessage::NewGroupDialogToggle(1), |_| true);
+        assert!(panel.group_create_overlay(Some(&p)).is_some());
     }
 
     #[test]
