@@ -12,16 +12,13 @@ use dozer_panel_todo::{
     parse_todo_event,
 };
 use iced::{Task, window};
-use std::cell::RefCell;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
 use std::time::Instant;
 
-thread_local! {
-    static VIEW: RefCell<Option<(u64, wry::WebView)>> = const { RefCell::new(None) };
-}
+use super::native_host::{self, Host};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -33,6 +30,7 @@ pub enum Event {
 
 pub struct Native {
     push: WebviewPushState,
+    host: Host,
     epoch: Arc<AtomicU64>,
     live: bool,
     ready: bool,
@@ -52,9 +50,11 @@ impl Default for Native {
 impl Native {
     pub fn new() -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let epoch = Arc::new(AtomicU64::new(0));
         Self {
+            host: Host::new(epoch.clone()),
             push: WebviewPushState::default(),
-            epoch: Arc::new(AtomicU64::new(0)),
+            epoch,
             live: false,
             ready: false,
             bounds: None,
@@ -94,6 +94,17 @@ impl Native {
         }
     }
 
+    fn desired(&self, rect: LogicalRect) -> native_host::Desired {
+        native_host::Desired {
+            identity: "todo".into(),
+            url: "digger-todo://localhost/host.html?theme=dark".into(),
+            rect,
+            scale: f64::from(byteui::theme::icon_size::scale()),
+            visible: true,
+            loaded: true,
+        }
+    }
+
     pub fn sync(
         &mut self,
         id: window::Id,
@@ -112,15 +123,7 @@ impl Native {
             self.bounds = None;
             self.push.set_ready(false);
             self.push.observe_availability(false, Instant::now());
-            return window::run(id, move |_| {
-                VIEW.with(|v| {
-                    let mut v = v.borrow_mut();
-                    if v.as_ref().is_some_and(|(g, _)| *g == generation) {
-                        v.take();
-                    }
-                });
-                Event::Done
-            });
+            return self.host.destroy(id, generation, Event::Done);
         }
 
         let payload = current_view_payload(
@@ -145,79 +148,59 @@ impl Native {
             self.error = None;
             self.push.set_ready(false);
             let generation = self.epoch.load(Ordering::SeqCst);
-            let current = Arc::clone(&self.epoch);
             let tx = self.tx.clone();
-            return window::run(id, move |w| {
-                if current.load(Ordering::SeqCst) != generation {
-                    return Event::Done;
-                }
-                let result = wry::WebViewBuilder::new()
-                    .with_url("digger-todo://localhost/host.html?theme=dark")
-                    .with_bounds(bounds(rect))
-                    .with_devtools(false)
-                    .with_download_started_handler(|_, _| false)
-                    .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-                    .with_navigation_handler(|url| allows_navigation(&url))
-                    .with_custom_protocol("digger-todo".into(), |_, request| {
-                        match super::todo_assets::serve(request.uri().path()) {
-                            Some((mime, body)) => wry::http::Response::builder()
-                                .header("Content-Type", mime)
-                                .body(body.to_vec().into())
-                                .unwrap(),
-                            None => wry::http::Response::builder()
-                                .status(404)
-                                .body(Vec::new().into())
-                                .unwrap(),
-                        }
-                    })
-                    .with_ipc_handler(move |request| match parse_todo_event(request.body()) {
-                        Ok(TodoWebviewEvent::Ready) => {
-                            let _ = tx.send(Event::Ready(generation));
-                        }
-                        Ok(event) => {
-                            let _ = tx.send(Event::Todo(generation, event));
-                        }
-                        Err(error) => {
-                            eprintln!("digger: 待办页面事件解析失败: {error}"); // cli-output
-                        }
-                    })
-                    .build_as_child(&w)
-                    .map(|view| VIEW.with(|v| *v.borrow_mut() = Some((generation, view))))
-                    .map_err(|e| e.to_string());
-                Event::Built(generation, result)
-            });
+            return self.host.create(
+                id,
+                generation,
+                native_host::Document {
+                    scheme: "digger-todo",
+                    host: "localhost",
+                    desired: self.desired(rect),
+                },
+                move |builder| {
+                    builder
+                        .with_custom_protocol("digger-todo".into(), |_, request| {
+                            match super::todo_assets::serve(request.uri().path()) {
+                                Some((mime, body)) => wry::http::Response::builder()
+                                    .header("Content-Type", mime)
+                                    .body(body.to_vec().into())
+                                    .unwrap(),
+                                None => wry::http::Response::builder()
+                                    .status(404)
+                                    .body(Vec::new().into())
+                                    .unwrap(),
+                            }
+                        })
+                        .with_ipc_handler(move |request| match parse_todo_event(request.body()) {
+                            Ok(TodoWebviewEvent::Ready) => {
+                                let _ = tx.send(Event::Ready(generation));
+                            }
+                            Ok(event) => {
+                                let _ = tx.send(Event::Todo(generation, event));
+                            }
+                            Err(error) => {
+                                eprintln!("digger: 待办页面事件解析失败: {error}"); // cli-output
+                            }
+                        })
+                },
+                Event::Built,
+                Event::Done,
+            );
         }
 
         if self.error.is_some() {
             return Task::none();
         }
 
-        let changed = self.bounds != Some(rect);
         self.bounds = Some(rect);
         let script = self.push.pending_push(&desired).map(|stamped| {
             let revision = self.push.mark_sent(stamped.clone());
             let (locale, payload) = stamped.into_parts();
             dispatch(&encode_todo_push(revision, Some(locale), payload))
         });
-        if !changed && script.is_none() {
-            return Task::none();
-        }
         let generation = self.epoch.load(Ordering::SeqCst);
-        window::run(id, move |_| {
-            VIEW.with(|v| {
-                if let Some((g, view)) = v.borrow().as_ref()
-                    && *g == generation
-                {
-                    if changed {
-                        let _ = view.set_bounds(bounds(rect));
-                    }
-                    if let Some(script) = script {
-                        let _ = view.evaluate_script(&script);
-                    }
-                }
-            });
-            Event::Done
-        })
+        self.host
+            .sync(id, generation, self.desired(rect), script, Event::Done)
     }
 
     pub fn failed(&self) -> Option<String> {
@@ -261,14 +244,7 @@ impl Native {
 
 /// 导航只放行本协议入口(严格 CSP 的一部分)。
 pub fn allows_navigation(url: &str) -> bool {
-    url.starts_with("digger-todo://localhost/")
-}
-
-fn bounds(rect: LogicalRect) -> wry::Rect {
-    wry::Rect {
-        position: wry::dpi::LogicalPosition::new(rect.x, rect.y).into(),
-        size: wry::dpi::LogicalSize::new(rect.width, rect.height).into(),
-    }
+    native_host::allows_navigation("digger-todo", "localhost", url)
 }
 
 /// 双重 JSON 编码:外层 `to_string` 生成 JS 字符串字面量,内层由页面
