@@ -68,6 +68,20 @@ geometry oracle (the latter remains covered by existing pure geometry tests).
 - Run the native selftest above and retain its exact log/exit. Then perform 20 row
   selections while switching projects/closing a loading project, native filter
   open/close, collapse/expand, divider drag, resize, minimize/restore and fullscreen.
+- Keyboard focus and Chinese IME: **GUI_UNVERIFIED; screenshots: none.** Launch
+  the user-built Digger with `scripts/launch-conversations-fixture.sh digger`;
+  use only its printed fresh HOME/DIGGER_DATA_DIR and synthetic project. Explicitly
+  import fixture history before opening a native Review. Close Review or switch
+  away from it, focus the Agent terminal, and verify ordinary typing reaches the
+  terminal again without a native child retaining focus. Focus Conversations
+  search and verify its key events are Captured: search text appears only there
+  and no characters reach the Agent terminal. With Chinese Pinyin IME, compose
+  text in search, check the candidate window follows the insertion position,
+  select a candidate, commit it, then delete committed text; also test cancelling
+  composition. Return to Agent input and repeat Pinyin composition/candidate
+  selection/commit/delete to verify input and focus restore after leaving Review
+  and search. Record each result and screenshot path only after actual observation;
+  the Gallery probe runner does not perform or prove these keyboard/IME checks.
 - With an isolated own daemon, kill only that owned daemon after loading detail;
   verify cached text, list reason, next-row error, restart and explicit retry.
 - Launch each product with its own fresh root and same synthetic project path;
