@@ -47,6 +47,8 @@ pub mod conversations;
 pub mod conversations_display;
 pub mod group_chat;
 pub mod group_chat_display;
+pub mod group_chat_geometry;
+pub mod group_chat_native;
 pub mod group_chat_overlay;
 pub mod notice;
 

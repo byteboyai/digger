@@ -1,12 +1,12 @@
-//! Group-chat list panel host: per-project library state, routing, polling and
-//! the temporary native content placeholder (S8c owns the chat webview).
+//! Group-chat panel host: per-project library state, routing, polling, the list
+//! column and the single native chat page (`group_chat_native`).
 use std::collections::HashMap;
 use std::time::Instant;
 
 use bytehost_chrome::{BodyArea, Divider, ShellMsg, pair_view};
-use dozer_model::ProjectInfo;
+use dozer_model::{Locale, LocaleStamp, LocalizedText, ProjectInfo};
 use dozer_panel_group_chat::{
-    Message, WorkspaceState, host, on_activate, poll_if_due, run_effect, update,
+    Message, WebviewPushState, WorkspaceState, host, on_activate, poll_if_due, run_effect, update,
 };
 use dozer_panel_host::PanelIo;
 use dozer_services::Services;
@@ -14,6 +14,7 @@ use iced::widget::{column, container, text};
 use iced::{Element, Length, Task};
 
 use super::group_chat_display::GroupChatDisplay;
+use super::group_chat_native::{self, GroupChatNative};
 use super::notice::NoticeBar;
 use crate::product::Msg;
 
@@ -30,6 +31,9 @@ pub struct GroupChatPanel {
     tx: tokio::sync::mpsc::UnboundedSender<Message>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<Message>>,
     pub notice: NoticeBar,
+    pub native: GroupChatNative,
+    /// Declarative push + readiness for the one chat page (fixed single slot).
+    push: WebviewPushState,
 }
 
 impl GroupChatPanel {
@@ -44,6 +48,8 @@ impl GroupChatPanel {
             tx,
             rx: Some(rx),
             notice: NoticeBar::default(),
+            native: GroupChatNative::new(),
+            push: WebviewPushState::default(),
         }
     }
     pub fn attach_handle(&mut self, handle: tokio::runtime::Handle) {
@@ -100,6 +106,100 @@ impl GroupChatPanel {
             self.notice.push(text);
         }
         Task::none()
+    }
+    /// Why the chat page is replaced by the failure shell, if it is.
+    pub fn page_failure(&self) -> Option<String> {
+        self.push
+            .failed()
+            .map(|reason| dozer_panel_group_chat::i18n::render(reason, "zh-CN"))
+    }
+    /// Retry after a load failure: forget it; the next sync recreates the page.
+    pub fn retry_page(&mut self) {
+        self.push.clear_failed();
+        self.native.take_error();
+    }
+    pub(crate) fn chat_desired(
+        &self,
+        shown: bool,
+        overlay_open: bool,
+        rect: bytehost_core::LogicalRect,
+        project_id: Option<i64>,
+    ) -> group_chat_native::Desired {
+        group_chat_native::Desired {
+            shown: shown
+                && self.push.failed().is_none()
+                && project_id.is_some_and(|pid| self.states.contains_key(&pid)),
+            overlay_open,
+            rect,
+            project_id,
+        }
+    }
+    /// Reconcile the chat page with the shell: create/park/show/destroy it and inject
+    /// whatever the library says is pending. Scripts are only produced for a live,
+    /// built child of the same project, so nothing is marked sent that cannot arrive.
+    pub fn sync_native(
+        &mut self,
+        id: iced::window::Id,
+        shown: bool,
+        overlay_open: bool,
+        rect: bytehost_core::LogicalRect,
+        project_id: Option<i64>,
+        now: Instant,
+    ) -> Task<group_chat_native::Event> {
+        if let Some(error) = self.native.take_error() {
+            self.notice.push(error.clone());
+            self.push.set_failed(LocalizedText::literal(
+                dozer_panel_group_chat::i18n::HOST_OWNER,
+                error,
+            ));
+        }
+        let desired = self.chat_desired(shown, overlay_open, rect, project_id);
+        let available = self.native.is_available_for(&desired);
+        let scripts = match project_id.and_then(|pid| self.states.get(&pid).map(|s| (pid, s))) {
+            Some((pid, state)) if desired.shown => host::take_content_script(
+                state,
+                &mut self.push,
+                pid,
+                available,
+                now,
+                LocaleStamp {
+                    ui_locale: Locale::default_locale(),
+                    locale_revision: 0,
+                },
+                "zh-CN",
+            ),
+            _ => {
+                self.push.observe_availability(false, now);
+                Vec::new()
+            }
+        };
+        let script = (!scripts.is_empty()).then(|| scripts.join("\n"));
+        // A load timeout is decided while taking the scripts: re-derive the target so
+        // the failed page is destroyed in this very pass, not one sync later.
+        let desired = self.chat_desired(shown, overlay_open, rect, project_id);
+        self.native.sync(id, desired, script)
+    }
+    /// Returns `true` when the page asked to show the Todo panel.
+    pub fn update_native(&mut self, event: group_chat_native::Event) -> (Task<Msg>, bool) {
+        let project = self.native.project_id();
+        let Some(page) = self.native.update(event) else {
+            return (Task::none(), false);
+        };
+        let (Some(pid), Some(io)) = (project, self.io()) else {
+            return (Task::none(), false);
+        };
+        let Some(state) = self.states.get_mut(&pid) else {
+            return (Task::none(), false);
+        };
+        let action = host::handle_webview_event(state, &mut self.push, pid, page, &io);
+        for notice in state.take_outbox() {
+            let text = dozer_panel_group_chat::i18n::render(&notice.text, "zh-CN");
+            self.notice.push(text);
+        }
+        (
+            Task::none(),
+            action == dozer_panel_group_chat::host::HostAction::ShowTodoPanel,
+        )
     }
     pub fn close_project(&mut self, pid: i64) {
         self.states.remove(&pid);
@@ -171,46 +271,42 @@ impl GroupChatPanel {
             )),
         ))
     }
-    fn content_placeholder(&self, pid: i64, collapsed: bool) -> Element<'_, Msg> {
-        let Some(state) = self.states.get(&pid) else {
-            return placeholder("选择一个群聊,或点击＋新建", "聊天内容即将可用", collapsed);
-        };
-        let Some(group) = state
-            .selected()
-            .and_then(|id| state.groups().iter().find(|g| g.id == id))
-        else {
-            return placeholder("选择一个群聊,或点击＋新建", "聊天内容即将可用", collapsed);
-        };
+    /// The chat page itself is a native child above this area. What iced draws here
+    /// is only what is visible without it: the failure shell, the collapsed list's
+    /// expand strip, or the "no project / no state yet" text.
+    fn content_view(&self, collapsed: bool) -> Element<'_, Msg> {
         let tokens = byteui::theme::color::current();
-        let mut body = column![
-            text(group.topic.clone())
-                .size(byteui::theme::font::subtitle())
-                .color(tokens.cream),
-        ]
-        .spacing(6);
-        for member in &group.members {
-            body = body.push(
-                text(format!(
-                    "@{} · {}",
-                    member.handle,
-                    member.agent.display_label()
-                ))
-                .size(byteui::theme::font::body())
-                .color(tokens.body),
-            );
+        if let Some(reason) = self.page_failure() {
+            let body = column![
+                text("群聊内容页加载失败")
+                    .size(byteui::theme::font::subtitle())
+                    .color(tokens.cream),
+                text(reason)
+                    .size(byteui::theme::font::body())
+                    .color(tokens.dim),
+                iced::widget::button(text("重试").size(byteui::theme::font::body()))
+                    .on_press(Msg::GroupChatRetry),
+            ]
+            .spacing(8);
+            let body = if collapsed {
+                column![expand_group_list(), body].spacing(8)
+            } else {
+                body
+            };
+            return container(body)
+                .padding(16)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
         }
-        body = body.push(
-            text("聊天内容即将可用")
-                .size(byteui::theme::font::body())
-                .color(tokens.dim),
-        );
-        let body = if collapsed {
-            column![expand_group_list(), body].spacing(8)
-        } else {
-            body
-        };
-        container(body)
-            .padding(16)
+        if collapsed {
+            return container(expand_group_list())
+                .padding([4, 8])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+        }
+        container(column![])
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -218,14 +314,10 @@ impl GroupChatPanel {
     pub fn view<'a>(&'a self, project: Option<&ProjectInfo>, area: &BodyArea) -> Element<'a, Msg> {
         let tokens = byteui::theme::color::current();
         let Some(project) = project else {
-            return placeholder("请先打开一个 Project", "聊天内容即将可用", area.collapsed);
+            return placeholder("请先打开一个 Project", "", area.collapsed);
         };
         let Some(state) = self.states.get(&project.id) else {
-            return placeholder(
-                "选择一个群聊,或点击＋新建",
-                "聊天内容即将可用",
-                area.collapsed,
-            );
+            return placeholder("选择一个群聊,或点击＋新建", "", area.collapsed);
         };
         let display = &self.displays[&project.id];
         display.configure(area);
@@ -264,7 +356,7 @@ impl GroupChatPanel {
         } else {
             list
         };
-        let content = self.content_placeholder(project.id, area.collapsed);
+        let content = self.content_view(area.collapsed);
         pair_view(
             area,
             list,
@@ -323,7 +415,7 @@ fn placeholder(first: &str, second: &str, collapsed: bool) -> Element<'static, M
         .into()
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use dozer_model::GroupInfo;
     use dozer_panel_group_chat::Message as GcMessage;
@@ -331,9 +423,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
-    struct Fake {
-        calls: Mutex<Vec<String>>,
-        groups: Mutex<Vec<GroupInfo>>,
+    pub(crate) struct Fake {
+        pub(crate) calls: Mutex<Vec<String>>,
+        pub(crate) groups: Mutex<Vec<GroupInfo>>,
     }
     impl GroupChatService for Fake {
         fn list_groups(
@@ -376,8 +468,9 @@ mod tests {
         }
         fn delete_group(
             &self,
-            _gid: i64,
+            gid: i64,
         ) -> dozer_services::BoxFuture<'_, Result<(), ServiceError>> {
+            self.calls.lock().unwrap().push(format!("delete:{gid}"));
             Box::pin(async { Ok(()) })
         }
         fn add_group_member(
@@ -415,9 +508,10 @@ mod tests {
         }
         fn cancel_group(
             &self,
-            _g: i64,
+            g: i64,
             _s: dozer_model::GroupCancelScope,
         ) -> dozer_services::BoxFuture<'_, Result<(), ServiceError>> {
+            self.calls.lock().unwrap().push(format!("cancel:{g}"));
             Box::pin(async { Ok(()) })
         }
         fn retry_group_message(
@@ -430,14 +524,15 @@ mod tests {
         }
         fn push_group_message_to_todo(
             &self,
-            _m: i64,
+            m: i64,
             _t: String,
         ) -> dozer_services::BoxFuture<'_, Result<dozer_model::TodoInfo, ServiceError>> {
+            self.calls.lock().unwrap().push(format!("push_todo:{m}"));
             Box::pin(async { Err(ServiceError::new(ServiceErrorKind::Unavailable, "no")) })
         }
     }
 
-    fn services(fake: Arc<dyn GroupChatService>) -> Services {
+    pub(crate) fn services(fake: Arc<dyn GroupChatService>) -> Services {
         use crate::adapters::project::UnavailableService;
         let un = |r: &str| Arc::new(UnavailableService::new(r));
         Services {
@@ -459,7 +554,7 @@ mod tests {
         }
     }
 
-    fn project(id: i64) -> ProjectInfo {
+    pub(crate) fn project(id: i64) -> ProjectInfo {
         ProjectInfo {
             id,
             path: format!("/tmp/p{id}"),
@@ -514,14 +609,22 @@ mod tests {
     }
 
     #[test]
-    fn no_todo_text_anywhere_in_the_view() {
-        // S8b content is a placeholder; no todo entry exists until S8c.
+    fn the_failure_shell_names_the_reason_has_no_todo_text_and_retry_clears_it() {
         let fake = Arc::new(Fake::default());
         let mut panel = GroupChatPanel::new(services(fake));
-        let p = project(1);
-        panel.ensure_state(&p);
-        let _ = panel.update(GcMessage::GroupsLoaded(1, Ok(vec![])), |_| true);
-        let _ = panel.content_placeholder(1, false);
+        assert!(panel.page_failure().is_none());
+        panel.push.set_failed(LocalizedText::literal(
+            dozer_panel_group_chat::i18n::HOST_OWNER,
+            "页面加载超时",
+        ));
+        let reason = panel.page_failure().expect("failed");
+        assert!(reason.contains("页面加载超时"));
+        assert!(!reason.contains("待办"));
+        let _ = panel.content_view(false);
+        let _ = panel.content_view(true);
+        panel.retry_page();
+        assert!(panel.page_failure().is_none());
+        let _ = panel.content_view(false);
     }
 
     #[test]
