@@ -16,6 +16,7 @@ pub(crate) struct FakeConversation {
     pub calls: Mutex<Vec<ListCall>>,
     pub turns: Mutex<Vec<(String, i64, u32)>>,
     pub error: Mutex<Option<ServiceError>>,
+    pub turn_responses: Mutex<std::collections::VecDeque<Result<Vec<TurnRecord>, ServiceError>>>,
     pub responses:
         Mutex<std::collections::VecDeque<tokio::sync::oneshot::Receiver<ConversationRows>>>,
 }
@@ -49,7 +50,13 @@ impl ConversationService for FakeConversation {
         limit: u32,
     ) -> BoxFuture<'_, Result<Vec<TurnRecord>, ServiceError>> {
         self.turns.lock().unwrap().push((cid, after, limit));
-        Box::pin(async { Ok(vec![]) })
+        let result = self
+            .turn_responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Ok(vec![]));
+        Box::pin(async { result })
     }
 }
 #[derive(Default)]
@@ -421,7 +428,10 @@ fn no_summary_button_and_no_linked_todo_text_in_the_view() {
     assert!(!panel.caps.summaries && !panel.caps.linked_todos);
     assert_eq!(NoTodos.linked_text("one"), None);
     let texts = view_texts(&panel, Some(&a), &ready(), 500., false);
-    assert!(texts.iter().any(|s| s == "审阅详情即将可用"));
+    assert!(
+        texts.iter().any(|s| s.contains("暂无审阅内容")),
+        "{texts:?}"
+    );
     assert!(
         !texts.iter().any(|s| s.contains("生成总结")
             || s.contains("Generate summary")
@@ -491,7 +501,7 @@ fn session_open_uses_the_librarys_normal_two_hundred_turn_fetch() {
     assert_eq!(*fake.turns.lock().unwrap(), vec![("one".into(), -1, 200)]);
     assert!(panel.state(1).unwrap().review.is_some());
     let texts = view_texts(&panel, Some(&a), &ready(), 500., false);
-    assert!(texts.iter().any(|s| s == "审阅详情即将可用"));
+    assert!(texts.iter().any(|s| s.contains("暂无对话")), "{texts:?}");
 }
 
 /// Exercise the actual iced layout and Operation::text tree without a desktop window.
@@ -644,7 +654,7 @@ fn conversations_unavailable_retry_button_dispatches_the_shared_agent_shell_mess
 }
 
 #[test]
-fn conversations_pair_uses_the_real_list_width_and_collapse_leaves_only_the_placeholder() {
+fn conversations_pair_uses_the_real_list_width_and_collapse_leaves_only_the_review() {
     let rt = runtime();
     let (mut panel, _, _) = panel(&rt);
     let a = project(1, "/a");
@@ -685,10 +695,13 @@ fn conversations_pair_uses_the_real_list_width_and_collapse_leaves_only_the_plac
     area.collapsed = true;
     let mut view = panel.view(Some(&a), &area, &shared);
     let texts = layout(&mut view, 1000.).3.0;
-    assert_eq!(
-        texts.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
-        vec!["审阅详情即将可用"]
+    assert!(
+        texts
+            .iter()
+            .any(|(s, _)| s.contains("点击") || s.contains("审阅")),
+        "{texts:?}"
     );
+    assert!(!texts.iter().any(|(s, _)| s == "one"));
     drop(view);
     assert!(view_texts(&panel, None, &shared, 1000., false).is_empty());
 }
@@ -708,7 +721,16 @@ fn conversations_pane_styles_match_the_agent_list_and_review_regions() {
         }
     );
     let detail = display.pane_style(ConversationsPane::Detail);
-    assert_eq!(detail.padding, iced_core::Padding::from(8.));
+    assert_eq!(
+        detail.padding,
+        iced_core::Padding {
+            top: 8.,
+            right: 8.,
+            bottom: 3.,
+            left: 8.
+        }
+    );
+    assert_eq!(detail.header_padding, iced_core::Padding::ZERO);
     assert_eq!(detail.gap, 4.);
     assert_eq!(list.line_height, 1.2);
 }
@@ -1555,4 +1577,762 @@ fn import_completion_cannot_cross_projects_or_apply_twice() {
     assert_eq!(std::fs::read(&path).unwrap(), saved);
     assert!(panel.import_prompt(2, true).is_some());
     assert_eq!(panel.imports.get(&1), Some(&ImportState::Done(7)));
+}
+
+#[test]
+fn no_summary_button_in_the_review_header() {
+    let rt = runtime();
+    let (mut panel, fake, summary) = panel(&rt);
+    let a = project(1, "/a");
+    start_review(&mut panel, &fake, &rt, &a, "one");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    assert_eq!(*summary.0.lock().unwrap(), 0);
+    let texts = view_texts(&panel, Some(&a), &ready(), 600., true);
+    assert!(texts.iter().any(|s| s == "对话"), "{texts:?}");
+    assert!(
+        !texts
+            .iter()
+            .any(|s| s.contains("生成总结") || s.contains("Generate Summary"))
+    );
+}
+
+fn turn(index: i64, content: &str) -> TurnRecord {
+    serde_json::from_value(serde_json::json!({"turn_index":index,"role":"human","content":content,"thinking":false,"ts":null,"tokens_in":0,"tokens_out":0,"tokens_cache_read":0,"tokens_cache_write":0})).unwrap()
+}
+fn start_review(
+    panel: &mut ConversationsPanel,
+    fake: &FakeConversation,
+    rt: &tokio::runtime::Runtime,
+    project: &ProjectInfo,
+    cid: &str,
+) {
+    panel.ensure_state(project);
+    let _ = panel.update(
+        project.id,
+        Message::SessionsRefreshed(project.id, Ok(vec![row(cid)])),
+        Some(project),
+    );
+    fake.turn_responses
+        .lock()
+        .unwrap()
+        .push_back(Ok(vec![turn(0, cid)]));
+    let _ = panel.update(
+        project.id,
+        Message::SessionOpen(cid.into(), AgentKind::Claude),
+        Some(project),
+    );
+    apply(panel, rt, project);
+}
+fn sync_review(panel: &mut ConversationsPanel, pid: Option<i64>) {
+    let _ = panel.sync_native(
+        iced::window::Id::unique(),
+        true,
+        bytehost_core::LogicalRect {
+            x: 0.,
+            y: 38.,
+            width: 400.,
+            height: 400.,
+        },
+        pid,
+    );
+}
+fn load_native(panel: &mut ConversationsPanel, project: &ProjectInfo) {
+    let (generation, nonce, page_url) = panel.native.document_identity().unwrap();
+    let _ = panel.update_native(
+        super::super::review_native::Event::Loaded {
+            generation,
+            nonce,
+            page_url,
+        },
+        Some(project),
+    );
+}
+#[test]
+fn clicking_a_row_opens_the_detail_and_shows_loading_until_loaded() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let _ = panel.update(
+        1,
+        Message::SessionsRefreshed(1, Ok(vec![row("one")])),
+        Some(&a),
+    );
+    fake.turn_responses
+        .lock()
+        .unwrap()
+        .push_back(Ok(vec![turn(0, "hello")]));
+    let shared = ready();
+    let mut view = panel.view(Some(&a), &area(600., false), &shared);
+    let at = layout(&mut view, 600.)
+        .3
+        .0
+        .into_iter()
+        .find(|(s, _)| s == "one")
+        .unwrap()
+        .1
+        .center();
+    let messages = click(&mut view, at, 600.);
+    drop(view);
+    for message in messages {
+        if let Msg::Conversations(pid, msg) = message {
+            let _ = panel.update(pid, msg, Some(&a));
+        }
+    }
+    apply(&mut panel, &rt, &a);
+    assert_eq!(*fake.turns.lock().unwrap(), vec![("one".into(), -1, 200)]);
+    assert!(
+        view_texts(&panel, Some(&a), &ready(), 600., false)
+            .iter()
+            .any(|s| s == "加载中…")
+    );
+    let _ = panel.update(1, Message::ReviewTraceLoaded, Some(&a));
+    assert_eq!(
+        panel
+            .state(1)
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .loaded_nonce,
+        None
+    );
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    assert!(
+        !view_texts(&panel, Some(&a), &ready(), 600., false)
+            .iter()
+            .any(|s| s == "加载中…")
+    );
+}
+#[test]
+fn two_quick_clicks_show_only_the_second_rows_detail_even_if_the_first_loaded_event_arrives_last() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    start_review(&mut panel, &fake, &rt, &a, "one");
+    sync_review(&mut panel, Some(1));
+    let old = panel.native.document_identity().unwrap();
+    start_review(&mut panel, &fake, &rt, &a, "two");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    let _ = panel.update_native(
+        super::super::review_native::Event::Loaded {
+            generation: old.0,
+            nonce: old.1,
+            page_url: old.2,
+        },
+        Some(&a),
+    );
+    let review = panel.state(1).unwrap().review.as_ref().unwrap();
+    assert_eq!(
+        review.source,
+        dozer_panel_conversations::snapshot::ReviewSource::Conversation("two".into())
+    );
+    assert_eq!(review.loaded_nonce, Some(review.nonce));
+    assert!(
+        panel
+            .state(1)
+            .unwrap()
+            .review_snapshot()
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .contains("two")
+    );
+}
+#[test]
+fn load_more_appends_and_renavigates_with_a_new_nonce() {
+    for initial_nonce in [0, u64::MAX - 1] {
+        let rt = runtime();
+        let (mut panel, fake, _) = panel(&rt);
+        let a = project(1, "/a");
+        panel.ensure_state(&a).review_nonce = initial_nonce;
+        start_review(&mut panel, &fake, &rt, &a, "one");
+        sync_review(&mut panel, Some(1));
+        load_native(&mut panel, &a);
+        let old = panel.native.document_identity().unwrap();
+        assert_eq!(old.1, initial_nonce.wrapping_add(1));
+        fake.turn_responses
+            .lock()
+            .unwrap()
+            .push_back(Ok(vec![turn(1, "second")]));
+        // This verifies the iced button's real hit target/message. Native coverage
+        // and actual click-through behavior still require desktop GUI verification.
+        let shared = ready();
+        let mut view = panel.view(Some(&a), &area(600., true), &shared);
+        let at = layout(&mut view, 600.)
+            .3
+            .0
+            .into_iter()
+            .find(|(label, _)| label == "加载更多…")
+            .unwrap()
+            .1
+            .center();
+        let messages = click(&mut view, at, 600.);
+        drop(view);
+        assert!(messages.iter().any(|message| matches!(message,
+        Msg::Conversations(1, Message::DetailLoadMore(cid, 1)) if cid == "one")));
+        for message in messages {
+            if let Msg::Conversations(pid, message) = message {
+                let _ = panel.update(pid, message, Some(&a));
+            }
+        }
+        apply(&mut panel, &rt, &a);
+        sync_review(&mut panel, Some(1));
+        let next = panel.native.document_identity().unwrap();
+        assert_eq!(old.0, next.0);
+        assert_ne!(old.1, next.1);
+        assert_eq!(next.1, initial_nonce.wrapping_add(2));
+        assert_ne!(old.2, next.2);
+        assert_eq!(
+            panel
+                .state(1)
+                .unwrap()
+                .review
+                .as_ref()
+                .unwrap()
+                .entries
+                .len(),
+            2
+        );
+        assert_eq!(fake.turns.lock().unwrap()[1], ("one".into(), 1, 200));
+        assert!(
+            panel
+                .desired_for_review(
+                    true,
+                    bytehost_core::LogicalRect {
+                        x: 0.,
+                        y: 0.,
+                        width: 400.,
+                        height: 400.
+                    },
+                    Some(1)
+                )
+                .spec
+                .unwrap()
+                .park_offscreen
+        );
+        // An old MAX (or ordinary previous nonce) must not reveal the new page.
+        let _ = panel.update_native(
+            super::super::review_native::Event::Loaded {
+                generation: old.0,
+                nonce: old.1,
+                page_url: old.2,
+            },
+            Some(&a),
+        );
+        assert!(!panel.native.is_ready());
+        assert_ne!(
+            panel
+                .state(1)
+                .unwrap()
+                .review
+                .as_ref()
+                .unwrap()
+                .loaded_nonce,
+            Some(next.1)
+        );
+        load_native(&mut panel, &a);
+        assert!(panel.native.is_ready());
+        let review = panel.state(1).unwrap().review.as_ref().unwrap();
+        assert_eq!(review.loaded_nonce, Some(next.1));
+        assert_eq!(
+            dozer_panel_conversations::snapshot::review_pane_state(Some(review)),
+            dozer_panel_conversations::snapshot::ReviewPaneState::Ready
+        );
+    }
+}
+#[test]
+fn load_more_button_is_visible_when_entries_exist() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    start_review(&mut panel, &fake, &rt, &a, "one");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    assert!(
+        !panel
+            .desired_for_review(
+                true,
+                bytehost_core::LogicalRect {
+                    x: 0.,
+                    y: 0.,
+                    width: 1.,
+                    height: 1.
+                },
+                Some(1)
+            )
+            .visible
+    );
+    assert!(
+        view_texts(&panel, Some(&a), &ready(), 600., true)
+            .iter()
+            .any(|s| s == "加载更多…")
+    );
+}
+#[test]
+fn empty_entries_or_error_show_the_fallback_text_and_no_webview() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let _ = panel.update(
+        1,
+        Message::SessionsRefreshed(1, Ok(vec![row("one")])),
+        Some(&a),
+    );
+    let _ = panel.update(
+        1,
+        Message::SessionOpen("one".into(), AgentKind::Claude),
+        Some(&a),
+    );
+    apply(&mut panel, &rt, &a);
+    assert!(
+        view_texts(&panel, Some(&a), &ready(), 600., true)
+            .iter()
+            .any(|s| s == "暂无对话")
+    );
+    let _ = panel.update(
+        1,
+        Message::ReviewLoaded {
+            source: dozer_panel_conversations::snapshot::ReviewSource::Conversation("one".into()),
+            append: false,
+            result: Err("broken details".into()),
+        },
+        Some(&a),
+    );
+    assert!(
+        view_texts(&panel, Some(&a), &ready(), 600., true)
+            .iter()
+            .any(|s| s.contains("broken details"))
+    );
+    assert!(
+        panel
+            .desired_for_review(
+                true,
+                bytehost_core::LogicalRect {
+                    x: 0.,
+                    y: 0.,
+                    width: 400.,
+                    height: 400.
+                },
+                Some(1)
+            )
+            .spec
+            .is_none()
+    );
+}
+#[test]
+fn closing_the_project_that_owns_the_detail_destroys_the_webview() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    start_review(&mut panel, &fake, &rt, &a, "one");
+    sync_review(&mut panel, Some(1));
+    panel.close_project(1);
+    sync_review(&mut panel, Some(1));
+    assert!(panel.native.document_identity().is_none());
+    assert!(panel.state(1).is_none());
+}
+#[test]
+fn switching_to_a_project_without_a_detail_destroys_and_shows_the_empty_state() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    let b = project(2, "/b");
+    start_review(&mut panel, &fake, &rt, &a, "one");
+    sync_review(&mut panel, Some(1));
+    panel.ensure_state(&b);
+    sync_review(&mut panel, Some(2));
+    assert!(panel.native.document_identity().is_none());
+    assert!(
+        view_texts(&panel, Some(&b), &ready(), 600., true)
+            .iter()
+            .any(|s| s.contains("暂无审阅内容"))
+    );
+}
+#[test]
+fn switching_back_shows_the_previous_projects_detail_again() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    let b = project(2, "/b");
+    start_review(&mut panel, &fake, &rt, &a, "one");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    let first = panel.native.document_identity().unwrap();
+    panel.ensure_state(&b);
+    sync_review(&mut panel, Some(2));
+    sync_review(&mut panel, Some(1));
+    let next = panel.native.document_identity().unwrap();
+    assert_ne!(first.0, next.0);
+    assert_eq!(first.2, next.2);
+    load_native(&mut panel, &a);
+    assert!(
+        view_texts(&panel, Some(&a), &ready(), 600., true)
+            .iter()
+            .any(|s| s == "加载更多…")
+    );
+    let unavailable = AgentShell {
+        status: Status::Unavailable("daemon down".into()),
+    };
+    assert!(
+        view_texts(&panel, Some(&a), &unavailable, 600., false)
+            .iter()
+            .any(|s| s == "加载更多…")
+    );
+    assert!(
+        view_texts(&panel, Some(&a), &unavailable, 600., false)
+            .iter()
+            .any(|s| s.contains("daemon down"))
+    );
+}
+#[test]
+fn collapsed_notice_is_dismissible_and_outside_the_native_review() {
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let error = format!(
+        "无法读取会话文件 /private/tmp/history/{}: connection lost",
+        "nested-path/".repeat(50)
+    );
+    panel.notice = Some(error.clone());
+    let shared = ready();
+    let mut view = panel.view(Some(&a), &area(600., true), &shared);
+    let (_, node, _, texts) = layout(&mut view, 600.);
+    let texts = texts.0;
+    let close = texts.iter().find(|(s, _)| s == "×").unwrap().1;
+    assert!(texts.iter().any(|(s, _)| s == &error));
+    assert!(
+        close.y >= 0. && close.y + close.height <= panel.review_notice_height(true),
+        "dismiss control {close:?} must be in the initial notice viewport"
+    );
+    let bounds = super::super::review_geometry::review_bounds(
+        bytehost_chrome::Rect {
+            x: 0.,
+            y: panel.review_notice_height(true),
+            w: 600.,
+            h: 600. - panel.review_notice_height(true),
+        },
+        byteui::theme::icon_size::scale(),
+    );
+    assert!(close.y + close.height <= bounds.y, "{close:?} {bounds:?}");
+    let header = texts.iter().find(|(s, _)| s == "对话").unwrap().1;
+    assert!(
+        header.y + header.height <= bounds.y,
+        "header {header:?} covered by native {bounds:?}"
+    );
+    fn rectangles(layout: iced_core::Layout<'_>, out: &mut Vec<iced_core::Rectangle>) {
+        out.push(layout.bounds());
+        for child in layout.children() {
+            rectangles(child, out);
+        }
+    }
+    let mut rects = vec![];
+    rectangles(iced_core::Layout::new(&node), &mut rects);
+    let mut found = false;
+    for rect in rects {
+        if click(&mut view, rect.center(), 600.)
+            .iter()
+            .any(|msg| matches!(msg, Msg::ConversationsNoticeDismiss))
+        {
+            found = true;
+            assert!(
+                rect.y >= 0. && rect.y + rect.height <= panel.review_notice_height(true),
+                "entire dismiss hit bounds {rect:?} must be inside initial notice viewport at scale {}",
+                byteui::theme::icon_size::scale()
+            );
+        }
+    }
+    assert!(found, "notice dismiss button must be hittable");
+    assert!(
+        click(&mut view, close.center(), 600.)
+            .iter()
+            .any(|m| matches!(m, Msg::ConversationsNoticeDismiss))
+    );
+}
+
+#[test]
+fn actual_widget_header_and_collapse_control_are_above_native_review() {
+    let display = ConversationsDisplay::new(1);
+    let mut head = display.panel_head(
+        byteui::interaction::icons::IconKind::BotMessageSquare,
+        "对话".into(),
+        None,
+    );
+    let (_, head_node, _, _) = layout(&mut head, 600.);
+    let divider = head_node.children().last().unwrap().bounds();
+    let style = super::super::conversations_display::review_pane_style();
+    assert!(divider.height > 0.);
+    assert!(
+        style.padding.top + divider.y + divider.height
+            <= byteui::theme::geometry::preview_chrome_top_px(),
+        "actual divider {divider:?} plus pane top {} exceeds native chrome {} at scale {}",
+        style.padding.top,
+        byteui::theme::geometry::preview_chrome_top_px(),
+        byteui::theme::icon_size::scale()
+    );
+    assert!(
+        head_node.size().height > byteui::theme::geometry::tab_button_size(),
+        "header must contain its existing divider"
+    );
+    let rt = runtime();
+    let (mut panel, _, _) = panel(&rt);
+    let a = project(1, "/a");
+    panel.ensure_state(&a);
+    let shared = ready();
+    for collapsed in [false, true] {
+        let mut view = panel.view(Some(&a), &area(600., collapsed), &shared);
+        let (_, node, _, texts) = layout(&mut view, 600.);
+        let bounds = super::super::review_geometry::review_bounds(
+            if collapsed {
+                bytehost_chrome::Rect::new(0., 0., 600., 600.)
+            } else {
+                let block = node.children().last().unwrap().bounds();
+                bytehost_chrome::Rect::new(block.x, block.y, block.width, block.height)
+            },
+            byteui::theme::icon_size::scale(),
+        );
+        let header = texts.0.iter().find(|(s, _)| s == "对话").unwrap().1;
+        assert!(
+            header.y + header.height <= bounds.y,
+            "{header:?} {bounds:?}"
+        );
+        fn rectangles(layout: iced_core::Layout<'_>, out: &mut Vec<iced_core::Rectangle>) {
+            out.push(layout.bounds());
+            for child in layout.children() {
+                rectangles(child, out);
+            }
+        }
+        let mut all = vec![];
+        rectangles(iced_core::Layout::new(&node), &mut all);
+        let mut found_divider = false;
+        for rect in &all {
+            if rect.height == 1.
+                && rect.width > bounds.w / 2.
+                && rect.x < bounds.x + bounds.w
+                && rect.x + rect.width > bounds.x
+            {
+                found_divider = true;
+                assert!(
+                    rect.y + rect.height <= bounds.y,
+                    "actual pane divider {rect:?} covered by native {bounds:?} at scale {}",
+                    byteui::theme::icon_size::scale()
+                );
+            }
+        }
+        assert!(found_divider, "actual review pane divider must be laid out");
+        let mut found = false;
+        for rect in all {
+            if click(&mut view, rect.center(), 600.)
+                .iter()
+                .any(|msg| matches!(msg, Msg::Shell(bytehost_chrome::ShellMsg::TogglePane(_))))
+            {
+                found = true;
+                assert!(
+                    rect.y + rect.height <= bounds.y,
+                    "collapse button {rect:?} covered by native {bounds:?}"
+                );
+            }
+        }
+        assert!(found, "real collapse button must be hittable");
+    }
+}
+
+#[test]
+fn native_failure_keeps_a_readable_fallback_and_existing_collapsed_notice() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/a");
+    start_review(&mut panel, &fake, &rt, &a, "one");
+    sync_review(&mut panel, Some(1));
+    let (generation, _, _) = panel.native.document_identity().unwrap();
+    let _ = panel.update_native(
+        super::super::review_native::Event::Built(generation, Err("child creation failed".into())),
+        Some(&a),
+    );
+    let texts = view_texts(&panel, Some(&a), &ready(), 600., true);
+    assert!(
+        texts.iter().any(|s| s.contains("child creation failed")),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|s| s == "×"));
+    assert!(!texts.iter().any(|s| s == "加载中…"));
+    assert!(
+        panel
+            .state(1)
+            .unwrap()
+            .review_snapshot()
+            .lock()
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn review_widgets_preserve_header_and_notice_clearance_at_supported_scales() {
+    const CHILD: &str = "S7C_REVIEW_SCALE_WIDGET_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let expected: f32 = std::env::var(CHILD).unwrap().parse().unwrap();
+        assert_eq!(byteui::theme::icon_size::scale(), expected);
+        actual_widget_header_and_collapse_control_are_above_native_review();
+        collapsed_notice_is_dismissible_and_outside_the_native_review();
+        return;
+    }
+    // The production widgets read byteui globals. Isolate each scale in a child
+    // running only this test, without mutating globals in the shared test runner.
+    for scale in ["0.5", "1", "2"] {
+        let output=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","adapters::conversations::tests::review_widgets_preserve_header_and_notice_clearance_at_supported_scales","--test-threads=1","--nocapture"])
+            .env(CHILD,scale).env("BYTEUI_ICON_SCALE",scale).output().unwrap();
+        assert!(
+            output.status.success(),
+            "scale {scale}: stdout {} stderr {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn twenty_distinct_rows_with_project_filter_resize_collapse_and_close_reject_stale_documents() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/synthetic-a");
+    let b = project(2, "/synthetic-b");
+    let mut stale = Vec::new();
+    for index in 0..20 {
+        let p = if index % 2 == 0 { &a } else { &b };
+        start_review(&mut panel, &fake, &rt, p, &format!("row-{index}"));
+        sync_review(&mut panel, Some(p.id));
+        stale.push(panel.native.document_identity().unwrap());
+        let _ = panel.update(
+            p.id,
+            Message::AgentFilterSelect(Some(AgentKind::Claude)),
+            Some(p),
+        );
+        // These construct and lay out the actual shared widget at both pane widths.
+        let _ = view_texts(
+            &panel,
+            Some(p),
+            &ready(),
+            400. + index as f32 * 10.,
+            index % 3 == 0,
+        );
+        if index % 4 == 0 {
+            let _ = panel.sync_native(
+                iced::window::Id::unique(),
+                false,
+                bytehost_core::LogicalRect {
+                    x: 0.,
+                    y: 0.,
+                    width: 0.,
+                    height: 0.,
+                },
+                Some(p.id),
+            );
+            assert!(panel.native.document_identity().is_none());
+        }
+        panel.close_project(p.id);
+        sync_review(&mut panel, Some(p.id));
+        assert!(panel.native.document_identity().is_none());
+    }
+    start_review(&mut panel, &fake, &rt, &a, "current");
+    sync_review(&mut panel, Some(a.id));
+    for (generation, nonce, page_url) in stale {
+        let _ = panel.update_native(
+            super::super::review_native::Event::Loaded {
+                generation,
+                nonce,
+                page_url,
+            },
+            Some(&a),
+        );
+    }
+    assert!(!panel.native.is_ready());
+    load_native(&mut panel, &a);
+    assert!(panel.native.is_ready());
+}
+
+#[test]
+fn daemon_fault_keeps_cached_snapshot_reports_next_detail_failure_and_recovers() {
+    let rt = runtime();
+    let (mut panel, fake, _) = panel(&rt);
+    let a = project(1, "/synthetic-a");
+    start_review(&mut panel, &fake, &rt, &a, "cached");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    let cached = panel
+        .state(1)
+        .unwrap()
+        .review_snapshot()
+        .lock()
+        .unwrap()
+        .clone();
+    let unavailable = AgentShell {
+        status: Status::Unavailable("synthetic daemon death".into()),
+    };
+    assert!(
+        view_texts(&panel, Some(&a), &unavailable, 600., false)
+            .iter()
+            .any(|s| s.contains("synthetic daemon death"))
+    );
+    assert_eq!(
+        panel
+            .state(1)
+            .unwrap()
+            .review_snapshot()
+            .lock()
+            .unwrap()
+            .clone(),
+        cached
+    );
+    let _ = panel.update(
+        1,
+        Message::SessionsRefreshed(1, Ok(vec![row("cached"), row("next")])),
+        Some(&a),
+    );
+    fake.turn_responses
+        .lock()
+        .unwrap()
+        .push_back(Err(ServiceError::new(
+            ServiceErrorKind::Unavailable,
+            "synthetic connection refused",
+        )));
+    let _ = panel.update(
+        1,
+        Message::SessionOpen("next".into(), AgentKind::Claude),
+        Some(&a),
+    );
+    apply(&mut panel, &rt, &a);
+    assert!(
+        panel
+            .state(1)
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("synthetic connection refused")
+    );
+    start_review(&mut panel, &fake, &rt, &a, "next");
+    sync_review(&mut panel, Some(1));
+    load_native(&mut panel, &a);
+    assert!(
+        panel
+            .state(1)
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .error
+            .is_none()
+    );
+    assert!(panel.native.is_ready());
 }

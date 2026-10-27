@@ -67,13 +67,15 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
                 .size(byteui::theme::font::title())
                 .color(tokens.tab_active_border)
         ]
-        .spacing(8)
+        .spacing(review_pane_style().padding.left)
         .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
         .align_y(iced::Alignment::Center);
         if let Some(actions) = actions {
             head = head.push(iced::widget::space::horizontal()).push(actions);
         }
-        column![head].spacing(4).into()
+        column![head, self.tab_divider()]
+            .spacing(review_pane_style().gap)
+            .into()
     }
     fn list_collapse_button<'a>(&self, collapse: String, expand: String) -> Element<'a, Msg> {
         let (icon, tip) = match (self.collapsed.get(), self.list_on_left.get()) {
@@ -89,6 +91,7 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim,
             ))
+            .padding(review_button_padding())
             .on_press(toggle_pane_message()),
             container(text(tip).size(byteui::theme::font::body()))
                 .padding(6)
@@ -116,13 +119,7 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
                 header_padding: iced_core::Padding::from(8.),
                 line_height: 1.2,
             },
-            ConversationsPane::Detail => PaneStyle {
-                padding: iced_core::Padding::from(8.),
-                gap: 4.,
-                background: Some(tokens.panel),
-                header_padding: iced_core::Padding::from(8.),
-                line_height: 1.2,
-            },
+            ConversationsPane::Detail => review_pane_style(),
         }
     }
     fn agent_icon(&self, agent: AgentKind, color: iced::Color) -> Element<'static, Msg> {
@@ -196,4 +193,39 @@ pub fn relative_time(last: u64, now: u64, locale: &str) -> String {
             }
         }
     }
+}
+
+/// The library already pads the entire pane. Padding its header a second time
+/// would put the collapse button beneath the native child. Keep the header in
+/// the exported preview chrome, with the same horizontal inset as other panes.
+pub fn review_pane_style() -> PaneStyle {
+    let inset = super::preview_display::PreviewDisplay::content_padding()
+        * byteui::theme::icon_size::scale();
+    PaneStyle {
+        padding: iced_core::Padding {
+            top: inset,
+            right: inset,
+            bottom: review_bottom_inset(byteui::theme::icon_size::scale()),
+            left: inset,
+        },
+        gap: inset / 2.,
+        background: Some(byteui::theme::color::current().panel),
+        header_padding: iced_core::Padding::ZERO,
+        line_height: 1.2,
+    }
+}
+
+/// Shared chrome excludes the footbar and its zone padding. Dozer review uses
+/// the status-bar edge instead. Reserve the remaining exported difference
+/// inside this product pane, without moving the shared shell or its footer.
+pub fn review_bottom_inset(scale: f32) -> f32 {
+    let geometry = byteui::theme::geometry::current();
+    let zone = bytehost_chrome::metrics_from_theme().right_zone;
+    ((geometry.status_bar_height - geometry.footbar_height) * scale.max(0.) - zone.padding.bottom)
+        .max(0.)
+}
+
+/// Keep chrome button hit areas aligned with the exported scaled header row.
+pub fn review_button_padding() -> f32 {
+    ((byteui::theme::geometry::tab_button_size() - byteui::theme::icon_size::row()) / 2.).max(0.)
 }

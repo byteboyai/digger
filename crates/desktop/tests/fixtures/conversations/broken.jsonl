@@ -1,0 +1,4 @@
+{synthetic malformed JSON
+{"type":"user","uuid":"synthetic-broken-000000","sessionId":"synthetic-broken","timestamp":"2026-10-18T12:00:00.000Z","cwd":"__SYNTHETIC_PROJECT__","message":{"role":"user","content":"Synthetic request 1: inspect fixture broken."}}
+{"type":"assistant","uuid":"synthetic-broken-000001","sessionId":"synthetic-broken","timestamp":"2026-10-18T12:00:00.000Z","cwd":"__SYNTHETIC_PROJECT__","message":{"role":"assistant","content":[{"type":"text","text":"## Round 1\nSynthetic answer.\n\n- Checked the sample\n- No real user data"}],"usage":{"input_tokens":17,"output_tokens":11,"cache_read_input_tokens":5,"cache_creation_input_tokens":3}}}
+{"unfinished":

@@ -1,7 +1,7 @@
 # S7 会话(Conversations)面板:抽成共享库,Digger 接入
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅。**2026-10-25:S6 与 S3b 之后的修订见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md`,冲突处以它为准**
+- 状态:**代码已实现(S7a/S7b/S7c Task 0–5),GUI 目测验收待用户完成**;原为设计稿。**2026-10-25:S6 与 S3b 之后的修订见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md`,冲突处以它为准**
 - 路径:架构级,**分三期交付,每期单独写实施计划**(S7a Dozer 抽库、S7b Digger 接列表、S7c Digger 接审阅详情与发布)
 - 相关:`2026-10-18-agent-panel-s6-design.md`(`diggerd` 与 `digger.db`)、`2026-10-18-agent-panel-s6c-design.md`(S6c-2 里 Agent 卡片的 transcript 尾部解析留在 Agent 库)、`2026-10-18-preview-engine-s5b2-design.md`(webview 宿主的分层做法)、`2026-10-18-project-panel-s5a-design.md`(Q2:Digger 不做静默补录)、Dozer `2026-09-15-conversations-extension-pilot-design.md`
 
@@ -101,3 +101,14 @@ Digger 要有与 Dozer 一模一样的会话面板:当前项目的全部历史�
 ## 9. 留给实现者决定
 
 库内 `Message` 的精确清单(尤其是现在被内核拦截的 `SessionOpen` / `DetailLoadMore` / `SummaryGenerate*` 如何落进库)、`ConversationsCapabilities` 与 `LinkedTodos` 的最终形状、`cwd` 过滤的边界规则(父子目录、符号链接、大小写)与相应测试、导入标记在 `digger.db` 里的表结构、审阅 webview 的摆位度量、`ReviewWebviewSpec` 的字段。
+
+## 10. 实现结果(2026-10-27,S7c Task 6 补)
+
+- **范围**:S7a(Dozer 抽库)、S7b(Digger 会话列表与显式历史导入)、S7c(审阅详情原生 webview 与 `native_host` 抽取)代码均已完成;Digger 依赖 `libs-2026-10-26b`。S7c 报告:`docs/superpowers/reviews/2026-10-27-conversations-s7c-report.md`。
+- **D1/D6/D7 落实**:审阅用库内同一份 review-trace 页面,经 Digger 自己的 `digger-review://review-trace/` 协议;原生子视图由共享的 `adapters/native_host.rs` 承载(Usage、Todo 同用),不并入预览引擎。
+- **D9 标记文件取舍**:历史导入的「已导入」提示标记存于 `<config_dir>/conversations-imported.json`(schema_version 1,原子写,新版本只读),只决定是否提示,不代表所有文件都成功;部分失败拿不到明细(现有接口返回 `Result<u32, _>`),界面披露日志位置。详见 `notes/2026-10-26-conversations-s7b.md`。
+- **Q1/Q2/Q3**:Q1 按钮触发导入,已落实;Q2 生成总结 v1 不开(能力关闭);Q3 右栏 `[agent, conversations, apps, usage]`,默认选中仍为 Agent。
+- **对照结论**:静态几何与 Dozer 真实函数在 1 像素内(1200×800 默认分割:Dozer `700,84,274.4,690`;Digger `701,85,275.2,689`)。逐状态截图与视觉差异裁决**尚未完成**,已接受差异为零,不替用户接受任何差异。清单见 `notes/2026-10-18-conversations-parity.md`。
+- **验证**:干净快照全量 788 个测试,786 通过;2 个 `agent_hooks` 既有偶发失败,与本期无关(隔离重跑也偶发)。clippy、fmt、host/shared 依赖门禁退出码均为 0。
+- **未验**:全部 GUI、原生菜单、焦点归还、中文输入法、最小化/全屏/跨显示器、真实网络与 CSP 行为。见回归记录。
+- **遗留**:三条待用户裁决,见 `notes/2026-10-18-conversations-open-items.md`。

@@ -78,6 +78,14 @@ const PREVIEW_CHROME_RESERVE_PX: f32 = 32.0 * 3.0 + 4.0 * 3.0;
 #[derive(Clone)]
 pub enum Msg {
     WindowReady(window::Id, Size),
+    /// Iced has no minimized event. Query the owning OS window, never infer it from focus.
+    WindowStateRefresh(window::Id),
+    WindowStateSample {
+        id: window::Id,
+        request: u64,
+        minimized: Option<bool>,
+        size: Option<Size>,
+    },
     /// 窗口骨架的消息(点图标、拖分隔线、窗口缩放……),由 `bytehost-chrome` 的 `ShellModel` 处理。
     Shell(ShellMsg),
     /// Agent 面板壳(守护进程可用性)的消息。
@@ -130,6 +138,7 @@ pub enum Msg {
     Conversations(i64, dozer_panel_conversations::Message),
     ConversationsImport(i64, crate::adapters::conversations_import::ImportEvent),
     ConversationsNoticeDismiss,
+    ReviewNative(crate::adapters::review_native::Event),
     /// 待办原生 webview 的回传。
     NativeTodo(crate::adapters::todo_native::Event),
     /// 待办面板可见时的 1 秒轮询。
@@ -198,6 +207,8 @@ type PreviewCommands = (i64, Vec<dozer_model::PreviewCommand>);
 
 pub struct ProductShell {
     window: Option<window::Id>,
+    window_minimized: bool,
+    window_state_request: u64,
     catalog: PanelCatalog,
     /// 窗口骨架状态(布局、选中、收起、放大、尺寸……)。
     shell: ShellModel,
@@ -316,6 +327,27 @@ fn preview_webview_rect(slot: Rect) -> Rect {
         (slot.w - inset * 2.0).max(1.0),
         (slot.h - top).max(1.0),
     )
+}
+
+fn review_native_rect(
+    shell: &ShellModel,
+    content: Rect,
+    collapsed: bool,
+    notice_height: f32,
+) -> Rect {
+    let mut block = if collapsed {
+        content
+    } else {
+        shell
+            .side_of(&shell::conversations_id())
+            .and_then(|side| shell::pair_rects(shell, side))
+            .map(|pair| pair.second)
+            .unwrap_or(content)
+    };
+    let notice_height = notice_height.min(block.h.max(0.));
+    block.y += notice_height;
+    block.h = (block.h - notice_height).max(0.);
+    crate::adapters::review_geometry::review_bounds(block, byteui::theme::icon_size::scale())
 }
 
 /// 向下缩 `top` 像素(面板自己的头部占掉的高度)。
@@ -516,6 +548,8 @@ impl ProductShell {
 
         let mut shell = Self {
             window: None,
+            window_minimized: false,
+            window_state_request: 0,
             catalog,
             shell: model,
             shell_path,
@@ -850,6 +884,16 @@ impl ProductShell {
         if self.closing {
             return Task::none();
         }
+        // Keep normal geometry during minimize animation, and reject unusable
+        // dimensions even before the OS confirms minimization. All size sources
+        // (mapped events, WindowReady, samples) pass this boundary before the shared
+        // model or persistence. Msg::Shell still queries the OS after rejection;
+        // a restore sample clears minimized state before applying its dimensions.
+        if let ShellMsg::Resized { w, h } = &msg
+            && (self.window_minimized || !w.is_finite() || !h.is_finite() || *w <= 0. || *h <= 0.)
+        {
+            return Task::none();
+        }
         let resized = matches!(msg, ShellMsg::Resized { .. });
         if let ShellMsg::CursorMoved { x, y } = msg {
             // 文件树的拖拽幽灵胶囊要跟着光标走(展示语义读这两个值)。
@@ -919,6 +963,24 @@ impl ProductShell {
         Task::none()
     }
 
+    /// Sample both values on the runtime's window thread. A newer request, replacement
+    /// window, or closing owner makes an asynchronous response obsolete.
+    fn query_window_state(&mut self) -> Task<Msg> {
+        let Some(id) = self.window.filter(|_| !self.closing) else {
+            return Task::none();
+        };
+        self.window_state_request = self.window_state_request.wrapping_add(1);
+        let request = self.window_state_request;
+        window::is_minimized(id).then(move |minimized| {
+            window::size(id).map(move |size| Msg::WindowStateSample {
+                id,
+                request,
+                minimized,
+                size: Some(size),
+            })
+        })
+    }
+
     /// 原生 webview 的位置与可见性:矩形取自骨架的面板内容矩形(外框 − 外边距 − 内边距;放大态是放大盒子),
     /// 再各自减掉面板自己头部占的高度。**骨架负责"在哪、看不看得见",面板只负责自己头部多高。**
     fn sync_native(&mut self) -> Task<Msg> {
@@ -957,6 +1019,15 @@ impl ProductShell {
                 pair
             };
             todo_native_rect(content, pair, add_h)
+        });
+        let review_rect = content_of(&shell::conversations_id()).map(|content| {
+            let collapsed = self.pane_collapsed(&shell::conversations_id());
+            review_native_rect(
+                &self.shell,
+                content,
+                collapsed,
+                self.conversations.review_notice_height(collapsed),
+            )
         });
         let markdown_rect = content_of(&shell::markdown_id());
         let hidden = LogicalRect {
@@ -1004,16 +1075,44 @@ impl ProductShell {
                 todo_rect.map(logical).unwrap_or(hidden),
             )
             .map(Msg::NativeTodo);
+        let review_task = self
+            .conversations
+            .sync_native(
+                window,
+                review_rect.is_some()
+                    && !closing
+                    && !self.window_minimized
+                    && !self.review_overlay_open(),
+                review_rect.map(logical).unwrap_or(hidden),
+                self.projects.current_project_id(),
+            )
+            .map(Msg::ReviewNative);
         let preview_tasks = self.sync_preview_native(&rects, closing);
         Task::batch([
             apps_task,
             usage_task,
             markdown_task,
             todo_task,
+            review_task,
             Task::batch(preview_tasks),
         ])
     }
 
+    /// Review also yields to Agent and Conversations overlays.
+    fn review_overlay_open(&self) -> bool {
+        self.preview_overlay_open()
+            || self.agent.overlay_is_open()
+            || self.projects.current_project().is_some_and(|p| {
+                self.conversations
+                    .state(p.id)
+                    .is_some_and(|s| s.agent_picker_open())
+                    || self
+                        .agent
+                        .states
+                        .get(&p.id)
+                        .is_some_and(|s| s.pending_close_tab.is_some())
+            })
+    }
     /// 此刻有没有 iced 浮层会被原生预览 webview 盖住:任一预览面板的页签溢出菜单、Files 的右键菜单 /
     /// 对话框、Project 的删除确认卡。
     fn preview_overlay_open(&self) -> bool {
@@ -2034,6 +2133,7 @@ impl Product<Msg> for ProductShell {
         match m {
             Msg::WindowReady(id, size) => {
                 self.window = Some(id);
+                self.window_minimized = false;
                 let resized = self.on_shell(ShellMsg::Resized {
                     w: size.width,
                     h: size.height,
@@ -2051,9 +2151,46 @@ impl Product<Msg> for ProductShell {
                 .discard();
                 #[cfg(not(target_os = "macos"))]
                 let guard = Task::none();
-                Task::batch([resized, guard])
+                let query = self.query_window_state();
+                Task::batch([resized, guard, query])
             }
-            Msg::Shell(m) => self.on_shell(m),
+            Msg::WindowStateRefresh(id) => {
+                if self.window == Some(id) && !self.closing {
+                    Task::batch([self.restyle_window(), self.query_window_state()])
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::WindowStateSample {
+                id,
+                request,
+                minimized,
+                size,
+            } => {
+                if self.closing || self.window != Some(id) || request != self.window_state_request {
+                    return Task::none();
+                }
+                if let Some(minimized) = minimized {
+                    self.window_minimized = minimized;
+                }
+                if let Some(size) = size.filter(|s| (s.width, s.height) != self.shell.window()) {
+                    self.on_shell(ShellMsg::Resized {
+                        w: size.width,
+                        h: size.height,
+                    })
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::Shell(m) => {
+                let resized = matches!(m, ShellMsg::Resized { .. });
+                let task = self.on_shell(m);
+                if resized {
+                    Task::batch([task, self.query_window_state()])
+                } else {
+                    task
+                }
+            }
             Msg::AgentShell(m) => {
                 let was_ready = self.agent.shell.status == crate::adapters::agent::Status::Ready;
                 let task = self
@@ -2241,7 +2378,8 @@ impl Product<Msg> for ProductShell {
                     .agent
                     .tooltip_deadline()
                     .is_some_and(|deadline| std::time::Instant::now() >= deadline);
-                self.apps.update(crate::apps::Message::Tick).map(Msg::Apps)
+                let apps = self.apps.update(crate::apps::Message::Tick).map(Msg::Apps);
+                Task::batch([apps, self.query_window_state()])
             }
             Msg::NativeUsage(event) => {
                 self.usage.native.update(event);
@@ -2280,6 +2418,10 @@ impl Product<Msg> for ProductShell {
                     self.agent.shell.status == crate::adapters::agent::Status::Ready,
                     self.closing,
                 )
+            }
+            Msg::ReviewNative(event) => {
+                let project = self.projects.current_project();
+                self.conversations.update_native(event, project)
             }
             Msg::ConversationsNoticeDismiss => {
                 self.conversations.dismiss_notice();
@@ -2799,6 +2941,8 @@ impl Product<Msg> for ProductShell {
 /// (复盘发现 6),产品消息则走 `Product::update`。`Product::update` 的 Surface 分支只消费、不再重投,
 /// 二者分工使路由不成环。
 pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg> {
+    #[cfg(test)]
+    shell.conversations.native.scheduled_actions.clear();
     let task = match msg {
         HostMessage::Surface(event) => route_lifecycle(shell, event),
         HostMessage::Product(m) => Product::update(shell, HostMessage::Product(m)),
@@ -2915,6 +3059,18 @@ fn agent_event(
     }
 }
 
+/// A native menu can unfocus the window without minimizing it. Events only ask
+/// for an OS sample; the guarded response changes review visibility.
+fn window_state_event(event: iced::Event, _: iced::event::Status, id: window::Id) -> Option<Msg> {
+    matches!(
+        event,
+        iced::Event::Window(
+            window::Event::Focused | window::Event::Unfocused | window::Event::Rescaled(_)
+        )
+    )
+    .then_some(Msg::WindowStateRefresh(id))
+}
+
 /// 订阅:窗口关闭请求、骨架需要的鼠标 / 缩放事件,以及仅在有动画时才开的 ~60fps 动画拍。
 pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     let events = iced::event::listen_with(|evt, _status, _id| {
@@ -2947,6 +3103,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         events,
         pointer,
         agent_input,
+        iced::event::listen_with(window_state_event),
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
     ];
     // 页签拖拽中:在页签行外松手也要结束拖拽(行内松手由页签行自己的 `on_release` 管),
@@ -3266,6 +3423,12 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let review_native_task = match shell.conversations.native.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::ReviewNative(event), rx))
+        })),
+        None => Task::none(),
+    };
     let conversations_import_task = match shell.conversations.take_import_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv()
@@ -3305,6 +3468,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             agent_task,
             conversations_task,
             conversations_import_task,
+            review_native_task,
             preview_cmds_task,
             Task::batch(initial),
         ]),
@@ -3822,6 +3986,73 @@ mod tests {
             preview_project(Some(&project), true).is_none(),
             "退出时清单必须为空"
         );
+    }
+
+    #[test]
+    fn default_conversations_shell_matches_actual_dozer_native_geometry() {
+        let d = shell::defaults();
+        let mut model = ShellModel::new(d.rails, d.selected, d.left_width, (1200., 800.)).unwrap();
+        let _ = shell::update(
+            &mut model,
+            ShellMsg::PanelPress {
+                panel: shell::conversations_id(),
+            },
+        );
+        let side = model.side_of(&shell::conversations_id()).unwrap();
+        let content = model.rects(&metrics_from_theme()).content(side).unwrap();
+        let actual = review_native_rect(&model, content, false, 0.);
+        eprintln!("S7C_DIGGER_DEFAULT_REVIEW={actual:?} CONTENT={content:?}");
+        for (a, b) in [
+            (actual.x, 700.),
+            (actual.y, 84.),
+            (actual.w, 274.4),
+            (actual.h, 690.),
+        ] {
+            assert!(
+                (a - b).abs() <= 1.,
+                "Digger {actual:?} differs from actual Dozer (700,84,274.4,690)"
+            );
+        }
+        let collapsed = review_native_rect(&model, content, true, 0.);
+        assert!(collapsed.w > actual.w);
+        let notice = review_native_rect(
+            &model,
+            content,
+            true,
+            byteui::theme::geometry::preview_chrome_top_px(),
+        );
+        assert_eq!(
+            notice.y,
+            collapsed.y + byteui::theme::geometry::preview_chrome_top_px()
+        );
+        assert_eq!(
+            notice.h,
+            collapsed.h - byteui::theme::geometry::preview_chrome_top_px()
+        );
+        let _ = shell::update(&mut model, ShellMsg::Maximize(side));
+        let content = model.rects(&metrics_from_theme()).content(side).unwrap();
+        for collapsed in [false, true] {
+            let actual = review_native_rect(&model, content, collapsed, 0.);
+            let block = if collapsed {
+                content
+            } else {
+                shell::pair_rects(&model, side).unwrap().second
+            };
+            assert!(actual.x >= block.x && actual.y >= block.y);
+            assert!(actual.x + actual.w <= block.x + block.w);
+            assert!(actual.y + actual.h <= block.y + block.h);
+            assert_eq!(
+                actual.y,
+                block.y + byteui::theme::geometry::preview_chrome_top_px()
+            );
+            assert!(
+                (actual.y + actual.h
+                    - (block.y + block.h
+                        - crate::adapters::conversations_display::review_bottom_inset(1.)))
+                .abs()
+                    < 0.01
+            );
+        }
     }
 
     /// G-C3:页签条可用宽度必须每帧取自 `PreviewHub` 的真实几何,不能是常量 0。
@@ -5439,6 +5670,11 @@ mod tests {
                     |tab| matches!(&tab.kind, dozer_panel_preview::TabKind::File(p) if p == path),
                 )
             })
+    }
+
+    mod review_lifecycle {
+        use super::*;
+        include!("product_review_tests.rs");
     }
 
     fn send(shell: &mut ProductShell, m: Msg) {

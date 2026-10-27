@@ -978,7 +978,7 @@ pub fn term_event_message(event: dozer_panel_term::view::TermEvent) -> crate::pr
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use dozer_model::{AgentKind, AgentState, SessionEvent, SessionInfo};
     use dozer_panel_agent::adapter::HookInstaller;
@@ -1162,7 +1162,7 @@ mod tests {
         }
     }
 
-    fn insert_tab(state: &mut AgentPanelState, id: &str, agent: AgentKind) {
+    pub(crate) fn insert_tab(state: &mut AgentPanelState, id: &str, agent: AgentKind) {
         let runtime = tokio::runtime::Handle::current();
         let tab_id = state.next_tab_id;
         state.next_tab_id += 1;
