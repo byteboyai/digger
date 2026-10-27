@@ -404,3 +404,32 @@ fn state_is_pushed_only_to_a_built_page_of_the_same_project() {
     drop(task);
     assert!(!shell.group_chat.native.is_ready());
 }
+
+#[test]
+fn window_closing_waits_for_the_page_destruction_before_shutdown_finishes() {
+    use iced::futures::StreamExt;
+    let (mut shell, rt, _) = chat_shell("chat-close-await");
+    ready(&mut shell);
+    shell.group_chat.native.scheduled_actions.clear();
+    let task = host(&mut shell, Msg::CloseRequested);
+    assert!(actions(&shell).contains(&"Destroy".into()));
+    let mut stream = iced_runtime::task::into_stream(task).unwrap();
+    let mut pending_callbacks = vec![];
+    rt.block_on(async {
+        while let Ok(Some(action)) =
+            tokio::time::timeout(std::time::Duration::from_millis(30), stream.next()).await
+        {
+            assert!(
+                !matches!(&action, iced_runtime::Action::Output(Msg::ShutdownFinished(_))),
+                "shutdown must await the native window callbacks"
+            );
+            if matches!(
+                &action,
+                iced_runtime::Action::Window(iced_runtime::window::Action::Run(_, _))
+            ) {
+                pending_callbacks.push(action); // keep the response channels unresolved
+            }
+        }
+    });
+    assert!(!pending_callbacks.is_empty(), "destroy reaches the runtime before shutdown");
+}
