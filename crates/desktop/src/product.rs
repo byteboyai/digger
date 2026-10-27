@@ -534,6 +534,7 @@ impl ProductShell {
             crate::adapters::todo::TodoPanel::new(Arc::new(todo_client.clone()), todo_client);
         let (conversation, summary, transcript) =
             crate::daemon::Daemon::new().conversation_services();
+        let copy_cleanup = transcript.clone();
         let conversations = crate::adapters::conversations::ConversationsPanel::new(
             conversation,
             summary,
@@ -558,7 +559,8 @@ impl ProductShell {
         } else {
             crate::projects::ProjectsState::open_in(&data_dir)
         };
-        let project = crate::adapters::project::ProjectPanel::new(projects.project_host());
+        let mut project = crate::adapters::project::ProjectPanel::new(projects.project_host());
+        project.attach_copy_cleanup(copy_cleanup);
         let files = crate::adapters::files::FilesPanel::new(
             data_dir.join(dozer_panel_files::external_apps::CONFIG_FILE),
         );

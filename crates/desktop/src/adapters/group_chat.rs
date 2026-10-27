@@ -20,7 +20,7 @@ use crate::product::Msg;
 
 /// 新建群对话框里常驻的提示:群聊里 agent 的发言在执行层只读,且目前只有这两家能发言。
 pub(crate) const MENTION_READ_ONLY_NOTE: &str =
-    "被 @ 的成员只读地读取项目文件,目前仅 Claude、Codex 可以发言";
+    "被 @ 的成员只读地读取项目文件,目前仅 Claude、Codex、Qodercn 可以发言";
 
 pub struct GroupChatPanel {
     states: HashMap<i64, WorkspaceState>,
@@ -526,7 +526,7 @@ pub(crate) mod tests {
     fn the_new_group_dialog_always_carries_the_read_only_note() {
         assert_eq!(
             MENTION_READ_ONLY_NOTE,
-            "被 @ 的成员只读地读取项目文件,目前仅 Claude、Codex 可以发言"
+            "被 @ 的成员只读地读取项目文件,目前仅 Claude、Codex、Qodercn 可以发言"
         );
         let fake = Arc::new(Fake::default());
         let rt = tokio::runtime::Builder::new_current_thread()

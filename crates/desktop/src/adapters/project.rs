@@ -33,6 +33,9 @@ pub struct ProjectPanel {
     handle: Option<tokio::runtime::Handle>,
     tx: tokio::sync::mpsc::UnboundedSender<ProjectMessage>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<ProjectMessage>>,
+    /// 删除项目后清 `digger.db` 里这个项目的会话**副本**(D1=A:只清副本,不碰 home 下的原文件)。
+    /// 不经库的 `transcript` 参数——那条路径还会顺带删 agent 缓存目录。
+    copy_cleanup: Option<Arc<dyn TranscriptService>>,
 }
 
 /// 「删除项目」/「修复项目」卡片的产品参数:Digger 没有 agent 转录,隐藏"agent 缓存"档和"总结"行,文案里是 Digger。
@@ -570,7 +573,13 @@ impl ProjectPanel {
             handle: None,
             tx,
             rx: Some(rx),
+            copy_cleanup: None,
         }
+    }
+
+    /// 挂上会话副本清理服务(生产是 `Daemon::conversation_services().2`)。
+    pub fn attach_copy_cleanup(&mut self, service: Arc<dyn TranscriptService>) {
+        self.copy_cleanup = Some(service);
     }
 
     /// 挂上 iced 运行时句柄(仅可在运行时上下文内调用)。
@@ -917,6 +926,9 @@ impl ProjectPanel {
             on_done(project.id, false, vec!["内部错误:未挂运行时句柄".into()]);
             return;
         };
+        let cleanup = self.copy_cleanup.clone();
+        let cwd = project.path.clone();
+        let cleanup_handle = handle.clone();
         dozer_panel_project::delete::spawn_delete_project(
             project.id,
             PathBuf::from(&project.path),
@@ -925,7 +937,18 @@ impl ProjectPanel {
             None,
             agent_cache_dir,
             &handle,
-            on_done,
+            move |project_id, deregistered, errors| {
+                // 项目已从注册表移除,它的会话副本就成了孤儿;清理失败不影响删除结果。
+                if deregistered && let Some(cleanup) = cleanup.clone() {
+                    let cwd = cwd.clone();
+                    cleanup_handle.spawn(async move {
+                        if let Err(e) = cleanup.delete_project_transcripts(cwd).await {
+                            eprintln!("digger: project: 清理会话副本失败: {e}");
+                        }
+                    });
+                }
+                on_done(project_id, deregistered, errors);
+            },
         );
     }
 }
@@ -1229,6 +1252,73 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(p.memory_titles_for_test(7), ["写到库里的"]);
+    }
+
+    /// 记录被清理的 cwd 的转录服务;其余方法不会被删除流程调用。
+    struct RecordingTranscript(std::sync::Mutex<Vec<String>>);
+
+    impl TranscriptService for RecordingTranscript {
+        fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
+            self.0.lock().unwrap().push(cwd);
+            Box::pin(async { Ok(0) })
+        }
+        fn backfill_project_transcripts(&self, _: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
+            Box::pin(async { Err(no_transcript()) })
+        }
+        fn submit_summary_batch(
+            &self,
+            _: String,
+            _: Option<dozer_model::AgentKind>,
+            _: Option<String>,
+        ) -> BoxFuture<'_, Result<(i64, u32), ServiceError>> {
+            Box::pin(async { Err(no_transcript()) })
+        }
+        fn get_summary_batch(
+            &self,
+            _: i64,
+        ) -> BoxFuture<'_, Result<Option<dozer_model::SummaryBatchInfo>, ServiceError>> {
+            Box::pin(async { Err(no_transcript()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn deleting_a_project_clears_its_conversation_copies_but_not_the_files() {
+        let repo = tempfile::tempdir().unwrap();
+        let original = repo.path().join("keep.txt");
+        std::fs::write(&original, "x").unwrap();
+        let recorder = Arc::new(RecordingTranscript(Default::default()));
+        let db = tempfile::tempdir().unwrap();
+        let host = digger_store::ProjectHost::open(&db.path().join("projects.db")).unwrap();
+        let project = host
+            .projects
+            .open_project(repo.path().to_string_lossy().into_owned())
+            .await
+            .unwrap()
+            .expect("registered");
+        let mut p = ProjectPanel::new(Some(&host));
+        p.attach_handle(tokio::runtime::Handle::current());
+        p.attach_copy_cleanup(recorder.clone());
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+        p.delete_project(
+            project.clone(),
+            dozer_panel_project::delete::DeleteScope::DozerOnly,
+            move |id, ok, errors| {
+                let _ = done_tx.send((id, ok, errors));
+            },
+        );
+        let (id, ok, _) = tokio::time::timeout(std::time::Duration::from_secs(5), done_rx.recv())
+            .await
+            .expect("delete finishes")
+            .unwrap();
+        assert_eq!((id, ok), (project.id, true));
+        for _ in 0..100 {
+            if !recorder.0.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(*recorder.0.lock().unwrap(), [project.path.clone()]);
+        assert!(original.exists(), "只清副本,项目文件不动");
     }
 
     #[test]
