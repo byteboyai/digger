@@ -217,14 +217,14 @@ fn the_real_default_shell_matches_dozers_chat_geometry() {
         assert!((a - b).abs() <= 1., "open {open:?}");
     }
     let collapsed = group_chat_native_rect(&model, content, true);
-    // The collapsed strip is a Digger-only addition (the expand button lives there);
-    // the bottom edge and the full-width span still match Dozer.
+    // Dozer has no expand button, so the collapsed chat spans the full width with no strip.
     assert!((collapsed.w - 456.).abs() <= 1., "collapsed {collapsed:?}");
+    assert!((collapsed.y - 54.).abs() <= 1., "collapsed {collapsed:?}");
     assert!((collapsed.y + collapsed.h - 766.).abs() <= 1., "collapsed {collapsed:?}");
 }
 
 #[test]
-fn list_collapse_gives_the_chat_the_full_width_and_keeps_a_strip_for_the_expand_button() {
+fn list_collapse_gives_the_chat_the_full_width() {
     let (mut shell, _rt, _) = chat_shell("chat-list-collapse");
     ready(&mut shell);
     let before = expected_rect(&shell);
@@ -232,7 +232,7 @@ fn list_collapse_gives_the_chat_the_full_width_and_keeps_a_strip_for_the_expand_
     let target = shell.group_chat.native.scheduled_target.as_ref().unwrap().0;
     assert_eq!(target, expected_rect(&shell));
     assert!(target.width > before.width);
-    assert!(target.y > before.y, "strip for the iced expand button");
+    assert_eq!(target.y, before.y, "no strip: the expand button is gone");
 }
 
 #[test]

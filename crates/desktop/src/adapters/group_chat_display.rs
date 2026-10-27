@@ -4,43 +4,21 @@ use byteui::interaction::icons::{self, IconKind};
 use dozer_model::{AgentKind, LocalizedText};
 use dozer_panel_group_chat::Message;
 use dozer_panel_group_chat::adapter::{GroupChatPane, PaneStyle, PanelDisplay};
-use iced::widget::{button, column, container, row, text, tooltip};
+use iced::widget::{column, row, text};
 use iced::{Element, Length};
 use std::cell::Cell;
 
 pub struct GroupChatDisplay {
-    pid: i64,
-    collapsed: Cell<bool>,
     list_on_left: Cell<bool>,
 }
 
 impl GroupChatDisplay {
-    pub fn new(pid: i64) -> Self {
+    pub fn new() -> Self {
         Self {
-            pid,
-            collapsed: Cell::new(false),
             list_on_left: Cell::new(false),
         }
     }
-    pub fn collapse_icon(&self) -> IconKind {
-        match (self.collapsed.get(), self.list_on_left.get()) {
-            (false, true) => IconKind::PanelLeftClose,
-            (true, true) => IconKind::PanelLeftOpen,
-            (false, false) => IconKind::PanelRightClose,
-            (true, false) => IconKind::PanelRightOpen,
-        }
-    }
-
-    pub fn collapse_label(&self) -> &'static str {
-        if self.collapsed.get() {
-            "展开群聊列表"
-        } else {
-            "收起群聊列表"
-        }
-    }
-
     pub fn configure(&self, area: &BodyArea) {
-        self.collapsed.set(area.collapsed);
         self.list_on_left.set(
             area.pair
                 .map(|p| p.first.x <= p.second.x)
@@ -82,29 +60,6 @@ impl PanelDisplay<Message> for GroupChatDisplay {
         column![head, byteui::layout::divider::horizontal()]
             .spacing(4)
             .into()
-    }
-    fn list_collapse_button<'a>(&self, collapse: String, expand: String) -> Element<'a, Message> {
-        let (icon, tip) = match (self.collapsed.get(), self.list_on_left.get()) {
-            (false, true) => (IconKind::PanelLeftClose, collapse),
-            (true, true) => (IconKind::PanelLeftOpen, expand),
-            (false, false) => (IconKind::PanelRightClose, collapse),
-            (true, false) => (IconKind::PanelRightOpen, expand),
-        };
-        tooltip(
-            button(icons::view(
-                icon,
-                byteui::theme::icon_size::row(),
-                byteui::theme::color::current().dim,
-            ))
-            .padding(6)
-            .on_press(Message::Noop(self.pid)),
-            container(text(tip).size(byteui::theme::font::body()))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Bottom,
-        )
-        .delay(super::hover::TOOLTIP_DELAY)
-        .into()
     }
     fn pane_style(&self, pane: GroupChatPane) -> PaneStyle {
         let tokens = byteui::theme::color::current();

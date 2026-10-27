@@ -369,11 +369,7 @@ fn group_chat_native_rect(shell: &ShellModel, content: Rect, collapsed: bool) ->
             .map(|pair| pair.second)
             .unwrap_or(content)
     };
-    crate::adapters::group_chat_geometry::chat_bounds(
-        block,
-        byteui::theme::icon_size::scale(),
-        collapsed,
-    )
+    crate::adapters::group_chat_geometry::chat_bounds(block, byteui::theme::icon_size::scale())
 }
 
 /// 向下缩 `top` 像素(面板自己的头部占掉的高度)。

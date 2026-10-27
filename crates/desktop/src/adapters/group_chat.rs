@@ -68,7 +68,7 @@ impl GroupChatPanel {
     pub fn ensure_state(&mut self, project: &ProjectInfo) -> &mut WorkspaceState {
         self.displays
             .entry(project.id)
-            .or_insert_with(|| GroupChatDisplay::new(project.id));
+            .or_insert_with(|| GroupChatDisplay::new());
         self.states.entry(project.id).or_default()
     }
     pub fn state(&self, pid: i64) -> Option<&WorkspaceState> {
@@ -235,10 +235,6 @@ impl GroupChatPanel {
         self.notice.dismiss();
     }
 
-    pub(crate) fn collapse_message(&self) -> Msg {
-        Msg::Shell(ShellMsg::TogglePane(crate::shell::group_chat_id()))
-    }
-
     pub(crate) fn cancel_dialog(&mut self, pid: i64) {
         if self.states.contains_key(&pid) {
             let _ = self.update(
@@ -272,9 +268,9 @@ impl GroupChatPanel {
         ))
     }
     /// The chat page itself is a native child above this area. What iced draws here
-    /// is only what is visible without it: the failure shell, the collapsed list's
-    /// expand strip, or the "no project / no state yet" text.
-    fn content_view(&self, collapsed: bool) -> Element<'_, Msg> {
+    /// is only what is visible without it: the failure shell or the
+    /// "no project / no state yet" text.
+    fn content_view(&self) -> Element<'_, Msg> {
         let tokens = byteui::theme::color::current();
         if let Some(reason) = self.page_failure() {
             let body = column![
@@ -288,20 +284,8 @@ impl GroupChatPanel {
                     .on_press(Msg::GroupChatRetry),
             ]
             .spacing(8);
-            let body = if collapsed {
-                column![expand_group_list(), body].spacing(8)
-            } else {
-                body
-            };
             return container(body)
                 .padding(16)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into();
-        }
-        if collapsed {
-            return container(expand_group_list())
-                .padding([4, 8])
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into();
@@ -314,10 +298,10 @@ impl GroupChatPanel {
     pub fn view<'a>(&'a self, project: Option<&ProjectInfo>, area: &BodyArea) -> Element<'a, Msg> {
         let tokens = byteui::theme::color::current();
         let Some(project) = project else {
-            return placeholder("请先打开一个 Project", "", area.collapsed);
+            return placeholder("请先打开一个 Project", "");
         };
         let Some(state) = self.states.get(&project.id) else {
-            return placeholder("选择一个群聊,或点击＋新建", "", area.collapsed);
+            return placeholder("选择一个群聊,或点击＋新建", "");
         };
         let display = &self.displays[&project.id];
         display.configure(area);
@@ -330,33 +314,12 @@ impl GroupChatPanel {
             iced_widget::core::Border::default(),
         )
         .map(Msg::GroupChat);
-        let collapse = iced::widget::tooltip(
-            iced::widget::button(byteui::interaction::icons::view(
-                display.collapse_icon(),
-                byteui::theme::icon_size::row(),
-                byteui::theme::color::current().dim,
-            ))
-            .on_press(self.collapse_message()),
-            iced::widget::container(
-                iced::widget::text(display.collapse_label()).size(byteui::theme::font::body()),
-            )
-            .padding(6)
-            .style(iced::widget::container::rounded_box),
-            iced::widget::tooltip::Position::Bottom,
-        )
-        .delay(super::hover::TOOLTIP_DELAY);
-        let list: Element<'_, Msg> = column![
-            iced::widget::row![iced::widget::space::horizontal(), collapse].padding([0, 8]),
-            list
-        ]
-        .height(Length::Fill)
-        .into();
         let list = if let Some(notice) = self.notice.view(Msg::GroupChatNoticeDismiss) {
             column![notice, list].height(Length::Fill).into()
         } else {
             list
         };
-        let content = self.content_view(area.collapsed);
+        let content = self.content_view();
         pair_view(
             area,
             list,
@@ -368,31 +331,7 @@ impl GroupChatPanel {
     }
 }
 
-fn expand_group_list() -> Element<'static, Msg> {
-    iced::widget::row![
-        iced::widget::space::horizontal(),
-        iced::widget::tooltip(
-            iced::widget::button(byteui::interaction::icons::view(
-                byteui::interaction::icons::IconKind::PanelRightOpen,
-                byteui::theme::icon_size::row(),
-                byteui::theme::color::current().dim,
-            ))
-            .on_press(Msg::Shell(ShellMsg::TogglePane(
-                crate::shell::group_chat_id()
-            ))),
-            iced::widget::container(
-                iced::widget::text("展开群聊列表").size(byteui::theme::font::body()),
-            )
-            .padding(6)
-            .style(iced::widget::container::rounded_box),
-            iced::widget::tooltip::Position::Bottom,
-        )
-        .delay(super::hover::TOOLTIP_DELAY)
-    ]
-    .into()
-}
-
-fn placeholder(first: &str, second: &str, collapsed: bool) -> Element<'static, Msg> {
+fn placeholder(first: &str, second: &str) -> Element<'static, Msg> {
     let tokens = byteui::theme::color::current();
     let body = column![
         text(first.to_owned())
@@ -403,11 +342,6 @@ fn placeholder(first: &str, second: &str, collapsed: bool) -> Element<'static, M
             .color(tokens.dim),
     ]
     .spacing(8);
-    let body = if collapsed {
-        column![expand_group_list(), body].spacing(8)
-    } else {
-        body
-    };
     container(body)
         .padding(16)
         .width(Length::Fill)
@@ -620,11 +554,10 @@ pub(crate) mod tests {
         let reason = panel.page_failure().expect("failed");
         assert!(reason.contains("页面加载超时"));
         assert!(!reason.contains("待办"));
-        let _ = panel.content_view(false);
-        let _ = panel.content_view(true);
+        let _ = panel.content_view();
         panel.retry_page();
         assert!(panel.page_failure().is_none());
-        let _ = panel.content_view(false);
+        let _ = panel.content_view();
     }
 
     #[test]

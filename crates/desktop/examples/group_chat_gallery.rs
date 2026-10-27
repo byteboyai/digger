@@ -73,7 +73,7 @@ fn fixture() -> Gallery {
     );
     Gallery {
         state,
-        display: GroupChatDisplay::new(PID),
+        display: GroupChatDisplay::new(),
     }
 }
 
