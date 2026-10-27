@@ -72,7 +72,9 @@
 ## Verification
 
 - `cargo test -p digger-desktop --lib`: **620 passed, 0 failed**.
-- `cargo test --workspace --no-fail-fast`: see final gate record below.
+- `cargo test --workspace --no-fail-fast`: **805 passed, 2 flaky**, 807 total
+  (the two failures are the pre-existing `agent_hooks` install-timeout tests;
+  immediate reruns pass).
 - `cargo fmt --all -- --check`: clean.
 - `cargo clippy -p digger-desktop --all-targets -- -D warnings`: clean.
 - `scripts/check-shared-deps.sh`: 0 blocking, 0 warnings.
@@ -80,8 +82,16 @@
 - `scripts/check-shell-regions.sh`: ok.
 - `group_chat_gallery -- --check`: `2 groups, selected=1, one Running reply`.
 
-Baseline and final full-workspace counts are recorded after the clean archive
-run; no baseline test was deleted or renamed.
+Baseline clean archive (`f149e23`) and final full-workspace counts are recorded
+below; no baseline test was deleted or renamed.
+
+- Baseline `f149e23`: **788 passed, 0 failed** (the plan's expected number was
+  713; the actual baseline is authoritative).
+- Final `feat/group-chat-list`: **807 total; 805 passed, 2 failed**. Both failures
+  are the pre-existing `adapters::agent_hooks::tests` install-timeout flake;
+  `cargo test -p digger-desktop --lib adapters::agent_hooks::tests` immediately
+  reran **14 passed, 0 failed**, and the full desktop lib reran **620 passed,
+  0 failed**. No product test failed.
 
 ## User acceptance
 
@@ -98,6 +108,15 @@ run; no baseline test was deleted or renamed.
    create/select/delete.
 7. Repeat in two projects; confirm polling and dialogs never cross projects.
 8. Run the gallery: `scripts/sandbox/group-chat/launch.sh check` and `run`.
+
+## Commits
+
+- `9182491` shell registration and layout migration (Task 1)
+- `b269c9b` host/list/placeholder and NoticeBar (Task 2)
+- `2cd91ba` polling, modal and product wiring (Tasks 3-4)
+- `48c9d62` gallery and sandbox fixture (Task 5)
+- `29709ff` delivery report and known gaps (Task 5)
+- `eae68c0` direction-aware collapse affordance (follow-up fix)
 
 Stop point: branch left on `feat/group-chat-list`; no merge, tag, push, release or
 install performed.

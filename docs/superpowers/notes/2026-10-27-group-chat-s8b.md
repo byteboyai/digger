@@ -13,9 +13,10 @@
    in the notice bar but cannot restore the dialog.
 4. **List collapse button interface.** `PanelDisplay<Message>::list_collapse_button`
    can only return the library `Message`, not a host `ShellMsg`. The product
-   adds a real collapse button above the library list; the adapter's required
-   trait method remains a no-op placeholder until the library widens the host
-   message type or provides a callback seam.
+   adds a real direction-aware collapse button above the library list and an
+   expand button in the collapsed content slot; the adapter's required trait
+   method remains a no-op placeholder until the library widens the host message
+   type or provides a callback seam.
 5. **No group-content chat.** The content column is the S8b native placeholder
    (selected topic, member handles, “聊天内容即将可用”). Sending, streaming,
    retry, cancel and Todo push are intentionally absent until S8c.
@@ -32,3 +33,7 @@
    iced text editor under a real window manager was not verified.
 9. **Gallery uses a product-level fixture, not a daemon fixture.** It proves the
    library list/state render seam, not backend authorization or member creation.
+
+10. **Pre-existing test flake.** Two `agent_hooks` install-timeout tests failed
+    once under parallel full-workspace load; both pass on immediate rerun and the
+    desktop lib passes 620/620. This is not a group-chat failure.
