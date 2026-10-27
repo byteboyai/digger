@@ -1,5 +1,7 @@
 # S8b group chat list — delivery report (2026-10-27)
 
+> **状态更新(2026-10-27):** 已合并进 `main`(`3e0fefc`);用户已完成人工 GUI 验收。已知缺口见 `../notes/2026-10-18-group-chat-open-items.md`。
+
 ## Scope and base
 
 - Plan: `dozer/docs/superpowers/plans/2026-10-27-digger-handoff-11-s8b-group-chat-list.md`

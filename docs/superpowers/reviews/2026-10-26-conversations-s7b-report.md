@@ -1,5 +1,7 @@
 # S7b Digger 会话列表交付报告
 
+> **状态更新(2026-10-27):** 已合并进 `main`;用户已完成人工 GUI 验收。下文「GUI 未验 / 未达到人工验收」为写报告时的状态,已不再成立。全 workspace 中与基线相同的那条失败未在此重新核对。
+
 日期：2026-10-26。分支：`feat/conversations-list`。实现基线：Digger `main` 的 `682fc53`；Task 1–4 实现 HEAD：`e90c6c9`。
 
 **当前状态：Task 1–4 实现及各任务的 spec / quality review 已完成；Task 5 自动验证结束，全 workspace 712 passed / 1 failed / 0 ignored，唯一失败与基线相同。构建、lint、格式和门禁通过。当前环境未能启动 GUI，截图与九项用户点击验收尚未完成；尚未达到人工验收完成状态。**
