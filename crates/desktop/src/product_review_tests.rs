@@ -732,3 +732,100 @@ fn actual_search_focus_feedback_blocks_agent_then_panel_switch_restores_input_el
     // the content NSView first responder. Live typing/IME remains a manual check.
     assert!(shell.conversations.native.document_identity().is_none());
 }
+
+#[test]
+fn mapped_zero_resize_before_minimize_response_preserves_layout_and_close_json() {
+    for minimized in [Some(true), None] {
+        let (mut shell, rt) = review_shell(&format!("review-zero-resize-{minimized:?}"));
+        loaded(&mut shell);
+        let dimensions = size(&shell);
+        let older_query = host(&mut shell, Msg::Tick);
+        let older_reply =
+            answer_window_sample(older_query, &rt, Some(false), Size::new(1000., 700.));
+        // Follow the same event mapper as the actual Iced subscription, before
+        // receiving any OS minimized response.
+        let mapped =
+            bytehost_chrome::map_event(&iced::Event::Window(window::Event::Resized(Size::ZERO)))
+                .unwrap();
+        let query = host(&mut shell, Msg::Shell(mapped));
+        assert_eq!(
+            size(&shell),
+            dimensions,
+            "raw zero resize must not enter the shared layout"
+        );
+        let response = answer_window_sample(query, &rt, minimized, Size::ZERO);
+        let _ = host(&mut shell, older_reply);
+        assert_eq!(
+            size(&shell),
+            dimensions,
+            "even a rejected resize invalidates older queries"
+        );
+        let _ = host(&mut shell, response);
+        assert_eq!(size(&shell), dimensions);
+        let _ = host(&mut shell, Msg::CloseRequested);
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&shell.shell_path).unwrap()).unwrap();
+        assert_eq!(json["window_width"], serde_json::json!(dimensions.width));
+        assert_eq!(json["window_height"], serde_json::json!(dimensions.height));
+    }
+}
+
+#[test]
+fn invalid_ready_and_unknown_minimized_sample_dimensions_preserve_usable_size() {
+    let (mut shell, rt) = review_shell("review-invalid-window-dimensions");
+    let dimensions = size(&shell);
+    for invalid in [
+        Size::ZERO,
+        Size::new(-1., 800.),
+        Size::new(1200., 0.),
+        Size::new(f32::NAN, 800.),
+        Size::new(1200., f32::INFINITY),
+    ] {
+        let id = shell.window.unwrap();
+        let ready_query = host(&mut shell, Msg::WindowReady(id, invalid));
+        assert_eq!(size(&shell), dimensions, "WindowReady {invalid:?}");
+        let unknown = answer_window_sample(ready_query, &rt, None, invalid);
+        let _ = host(&mut shell, unknown);
+        assert_eq!(
+            size(&shell),
+            dimensions,
+            "unknown minimized sample {invalid:?}"
+        );
+        let mapped =
+            bytehost_chrome::map_event(&iced::Event::Window(window::Event::Resized(invalid)))
+                .unwrap();
+        let query = host(&mut shell, Msg::Shell(mapped));
+        assert_eq!(size(&shell), dimensions, "mapped resize {invalid:?}");
+        let reply = answer_window_sample(query, &rt, Some(false), invalid);
+        let _ = host(&mut shell, reply);
+        assert_eq!(size(&shell), dimensions, "nonminimized sample {invalid:?}");
+    }
+}
+
+#[test]
+fn confirmed_minimize_preserves_normal_geometry_until_the_restore_sample() {
+    let (mut shell, rt) = review_shell("review-minimize-animation-size");
+    let dimensions = size(&shell);
+    let query = host(&mut shell, Msg::Tick);
+    let minimized = answer_window_sample(query, &rt, Some(true), dimensions);
+    let _ = host(&mut shell, minimized);
+    assert!(shell.window_minimized);
+    let mapped = bytehost_chrome::map_event(&iced::Event::Window(window::Event::Resized(
+        Size::new(700., 400.),
+    )))
+    .unwrap();
+    let query = host(&mut shell, Msg::Shell(mapped));
+    assert_eq!(
+        size(&shell),
+        dimensions,
+        "minimize animation dimensions must not replace normal geometry"
+    );
+    let restored = answer_window_sample(query, &rt, Some(false), Size::new(1300., 850.));
+    let _ = host(&mut shell, restored);
+    assert!(!shell.window_minimized);
+    assert_eq!(
+        size(&shell),
+        Size::new(1300., 850.),
+        "restore sample applies usable dimensions after clearing minimized state"
+    );
+}

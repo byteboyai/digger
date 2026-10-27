@@ -884,6 +884,16 @@ impl ProductShell {
         if self.closing {
             return Task::none();
         }
+        // Keep normal geometry during minimize animation, and reject unusable
+        // dimensions even before the OS confirms minimization. All size sources
+        // (mapped events, WindowReady, samples) pass this boundary before the shared
+        // model or persistence. Msg::Shell still queries the OS after rejection;
+        // a restore sample clears minimized state before applying its dimensions.
+        if let ShellMsg::Resized { w, h } = &msg
+            && (self.window_minimized || !w.is_finite() || !h.is_finite() || *w <= 0. || *h <= 0.)
+        {
+            return Task::none();
+        }
         let resized = matches!(msg, ShellMsg::Resized { .. });
         if let ShellMsg::CursorMoved { x, y } = msg {
             // 文件树的拖拽幽灵胶囊要跟着光标走(展示语义读这两个值)。
@@ -2163,11 +2173,7 @@ impl Product<Msg> for ProductShell {
                 if let Some(minimized) = minimized {
                     self.window_minimized = minimized;
                 }
-                // Some platforms report zero client size while minimized. Keep the
-                // last usable layout until the restored window supplies its dimensions.
-                if let Some(size) = size.filter(|s| {
-                    !self.window_minimized && (s.width, s.height) != self.shell.window()
-                }) {
+                if let Some(size) = size.filter(|s| (s.width, s.height) != self.shell.window()) {
                     self.on_shell(ShellMsg::Resized {
                         w: size.width,
                         h: size.height,
