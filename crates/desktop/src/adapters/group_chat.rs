@@ -219,13 +219,13 @@ impl GroupChatPanel {
         .map(Msg::GroupChat);
         let collapse = iced::widget::tooltip(
             iced::widget::button(byteui::interaction::icons::view(
-                byteui::interaction::icons::IconKind::PanelRightClose,
+                display.collapse_icon(),
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim,
             ))
             .on_press(self.collapse_message()),
             iced::widget::container(
-                iced::widget::text("收起群聊列表").size(byteui::theme::font::body()),
+                iced::widget::text(display.collapse_label()).size(byteui::theme::font::body()),
             )
             .padding(6)
             .style(iced::widget::container::rounded_box),
