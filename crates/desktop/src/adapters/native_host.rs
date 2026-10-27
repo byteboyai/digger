@@ -93,6 +93,34 @@ pub(super) fn allows_navigation(scheme: &str, host: &str, url: &str) -> bool {
         .is_some_and(|(authority, _)| authority == host)
 }
 
+pub(super) fn apply_actions(
+    actions: Vec<Action>,
+    mut execute: impl FnMut(Action) -> Result<(), String>,
+) -> Result<(), String> {
+    for action in actions {
+        execute(action)?;
+    }
+    Ok(())
+}
+pub(super) fn sync_outcome<E>(
+    generation: u64,
+    result: Result<(), String>,
+    failed: impl FnOnce(u64, Result<(), String>) -> E,
+    done: E,
+) -> E {
+    match result {
+        Ok(()) => done,
+        Err(error) => failed(generation, Err(error)),
+    }
+}
+
+pub(super) fn allows_download() -> bool {
+    false
+}
+pub(super) fn new_window_response() -> wry::NewWindowResponse {
+    wry::NewWindowResponse::Deny
+}
+
 struct Entry {
     generation: u64,
     view: wry::WebView,
@@ -173,8 +201,8 @@ impl Host {
                     })
                     .with_visible(desired.visible)
                     .with_devtools(false)
-                    .with_download_started_handler(|_, _| false)
-                    .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+                    .with_download_started_handler(|_, _| allows_download())
+                    .with_new_window_req_handler(|_, _| new_window_response())
                     .with_navigation_handler(move |url| allows_navigation(scheme, host, &url));
                 let view = builder.build_as_child(&window).map_err(|e| e.to_string())?;
                 view.zoom(desired.scale).map_err(|e| e.to_string())?;
@@ -194,6 +222,7 @@ impl Host {
         generation: u64,
         desired: Desired,
         script: Option<String>,
+        failed: impl FnOnce(u64, Result<(), String>) -> E + Send + 'static,
         done: E,
     ) -> Task<E> {
         // URL changes start a new document. A previous document's loaded bit must
@@ -217,41 +246,40 @@ impl Host {
             if epoch.load(Ordering::SeqCst) != generation {
                 return done;
             }
-            VIEWS.with(|views| {
+            let result = VIEWS.with(|views| {
                 let mut views = views.borrow_mut();
-                if let Some(e) = views.get_mut(&slot).filter(|e| e.generation == generation) {
-                    for action in actions {
-                        match action {
-                            Action::Navigate => {
-                                let _ = e.view.load_url(&desired.url);
-                            }
-                            Action::Zoom => {
-                                let _ = e.view.zoom(desired.scale);
-                            }
-                            Action::SetBounds => {
-                                let _ = e.view.set_bounds(bounds(desired.rect));
-                            }
-                            Action::Park => {
-                                restore_focus(&e.view);
-                                let _ = e.view.set_bounds(parked_bounds(desired.rect));
-                                // WKWebView must stay visible to run requestAnimationFrame
-                                // and finish document bootstrap while parked offscreen.
-                                let _ = e.view.set_visible(desired.visible);
-                            }
-                            Action::Show => {
-                                let _ = e.view.set_visible(true);
-                            }
-                            Action::Create | Action::Destroy => {
-                                unreachable!("identity replacement requires create")
-                            }
+                let e = views
+                    .get_mut(&slot)
+                    .filter(|e| e.generation == generation)
+                    .ok_or_else(|| "native child unavailable during sync".to_owned())?;
+                apply_actions(actions, |action| {
+                    let result = match action {
+                        Action::Navigate => e.view.load_url(&desired.url),
+                        Action::Zoom => e.view.zoom(desired.scale),
+                        Action::SetBounds => e.view.set_bounds(bounds(desired.rect)),
+                        Action::Park => {
+                            restore_focus(&e.view);
+                            e.view
+                                .set_bounds(parked_bounds(desired.rect))
+                                .map_err(|error| format!("native park bounds failed: {error}"))?;
+                            // Keep WKWebView running rAF while parked offscreen.
+                            e.view.set_visible(desired.visible)
                         }
-                    }
-                    if let Some(script) = script {
-                        let _ = e.view.evaluate_script(&script);
-                    }
+                        Action::Show => e.view.set_visible(true),
+                        Action::Create | Action::Destroy => {
+                            unreachable!("identity replacement requires create")
+                        }
+                    };
+                    result.map_err(|error| format!("native {action:?} failed: {error}"))
+                })?;
+                if let Some(script) = script {
+                    e.view
+                        .evaluate_script(&script)
+                        .map_err(|error| format!("native script failed: {error}"))?;
                 }
+                Ok(())
             });
-            done
+            sync_outcome(generation, result, failed, done)
         })
     }
     pub fn probe<E: Send + 'static>(

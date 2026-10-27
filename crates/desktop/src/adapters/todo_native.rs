@@ -199,8 +199,14 @@ impl Native {
             dispatch(&encode_todo_push(revision, Some(locale), payload))
         });
         let generation = self.epoch.load(Ordering::SeqCst);
-        self.host
-            .sync(id, generation, self.desired(rect), script, Event::Done)
+        self.host.sync(
+            id,
+            generation,
+            self.desired(rect),
+            script,
+            Event::Built,
+            Event::Done,
+        )
     }
 
     pub fn failed(&self) -> Option<String> {

@@ -28,6 +28,7 @@ impl LinkedTodos for NoTodos {
 }
 
 pub struct ConversationsPanel {
+    pub native: super::review_native::ReviewNative,
     states: HashMap<i64, WorkspaceState>,
     // The library view borrows its display for the lifetime of the element.
     // Keep one beside each state so returned widgets never borrow a local adapter.
@@ -72,6 +73,7 @@ impl ConversationsPanel {
         let (import_tx, import_rx) = tokio::sync::mpsc::unbounded_channel();
         let import_marker = ImportMarker::load(&marker_path);
         Self {
+            native: super::review_native::ReviewNative::new(),
             imports: HashMap::new(),
             import_marker,
             marker_path,
@@ -219,6 +221,44 @@ impl ConversationsPanel {
         );
         Some(content.push(action).push(disclosure).padding(12).into())
     }
+    pub fn sync_native(
+        &mut self,
+        id: iced::window::Id,
+        visible: bool,
+        rect: bytehost_core::LogicalRect,
+        project_id: Option<i64>,
+    ) -> Task<super::review_native::Event> {
+        let state = project_id.and_then(|pid| self.states.get(&pid));
+        let spec = dozer_panel_conversations::snapshot::review_webview_spec(
+            state.and_then(|s| s.review.as_ref()),
+            "zh-CN",
+            "digger-review",
+        );
+        self.native.sync(
+            id,
+            super::review_native::Desired {
+                visible,
+                rect,
+                spec,
+                project_id,
+            },
+            state.map(WorkspaceState::review_snapshot),
+        )
+    }
+    pub fn update_native(
+        &mut self,
+        event: super::review_native::Event,
+        project: Option<&ProjectInfo>,
+    ) -> Task<Msg> {
+        let loaded = self.native.update(event);
+        if let Some(error) = self.native.failed() {
+            self.notice = Some(error.to_owned());
+        }
+        if let Some(pid) = loaded {
+            return self.update(pid, Message::ReviewTraceLoaded, project);
+        }
+        Task::none()
+    }
     pub fn state(&self, pid: i64) -> Option<&WorkspaceState> {
         self.states.get(&pid)
     }
@@ -352,6 +392,7 @@ impl ConversationsPanel {
         std::mem::take(&mut self.requests)
     }
     pub fn close_project(&mut self, pid: i64) {
+        self.native.invalidate_project(pid);
         self.imports.remove(&pid);
         self.states.remove(&pid);
         self.displays.remove(&pid);

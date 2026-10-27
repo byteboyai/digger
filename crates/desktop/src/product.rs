@@ -130,6 +130,7 @@ pub enum Msg {
     Conversations(i64, dozer_panel_conversations::Message),
     ConversationsImport(i64, crate::adapters::conversations_import::ImportEvent),
     ConversationsNoticeDismiss,
+    ReviewNative(crate::adapters::review_native::Event),
     /// 待办原生 webview 的回传。
     NativeTodo(crate::adapters::todo_native::Event),
     /// 待办面板可见时的 1 秒轮询。
@@ -958,6 +959,9 @@ impl ProductShell {
             };
             todo_native_rect(content, pair, add_h)
         });
+        // Task2 supplies the library review pane's final header/notice geometry.
+        // This Task1 host wiring intentionally uses the content block for now.
+        let review_rect = content_of(&shell::conversations_id());
         let markdown_rect = content_of(&shell::markdown_id());
         let hidden = LogicalRect {
             x: 0.0,
@@ -1004,16 +1008,41 @@ impl ProductShell {
                 todo_rect.map(logical).unwrap_or(hidden),
             )
             .map(Msg::NativeTodo);
+        let review_task = self
+            .conversations
+            .sync_native(
+                window,
+                review_rect.is_some() && !closing && !self.review_overlay_open(),
+                review_rect.map(logical).unwrap_or(hidden),
+                self.projects.current_project_id(),
+            )
+            .map(Msg::ReviewNative);
         let preview_tasks = self.sync_preview_native(&rects, closing);
         Task::batch([
             apps_task,
             usage_task,
             markdown_task,
             todo_task,
+            review_task,
             Task::batch(preview_tasks),
         ])
     }
 
+    /// Review also yields to Agent and Conversations overlays.
+    fn review_overlay_open(&self) -> bool {
+        self.preview_overlay_open()
+            || self.agent.overlay_is_open()
+            || self.projects.current_project().is_some_and(|p| {
+                self.conversations
+                    .state(p.id)
+                    .is_some_and(|s| s.agent_picker_open())
+                    || self
+                        .agent
+                        .states
+                        .get(&p.id)
+                        .is_some_and(|s| s.pending_close_tab.is_some())
+            })
+    }
     /// 此刻有没有 iced 浮层会被原生预览 webview 盖住:任一预览面板的页签溢出菜单、Files 的右键菜单 /
     /// 对话框、Project 的删除确认卡。
     fn preview_overlay_open(&self) -> bool {
@@ -2281,6 +2310,10 @@ impl Product<Msg> for ProductShell {
                     self.closing,
                 )
             }
+            Msg::ReviewNative(event) => {
+                let project = self.projects.current_project();
+                self.conversations.update_native(event, project)
+            }
             Msg::ConversationsNoticeDismiss => {
                 self.conversations.dismiss_notice();
                 Task::none()
@@ -3266,6 +3299,12 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let review_native_task = match shell.conversations.native.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::ReviewNative(event), rx))
+        })),
+        None => Task::none(),
+    };
     let conversations_import_task = match shell.conversations.take_import_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv()
@@ -3305,6 +3344,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             agent_task,
             conversations_task,
             conversations_import_task,
+            review_native_task,
             preview_cmds_task,
             Task::batch(initial),
         ]),

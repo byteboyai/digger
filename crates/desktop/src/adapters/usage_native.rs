@@ -195,7 +195,13 @@ impl Native {
             None
         };
         let generation = self.epoch.load(Ordering::SeqCst);
-        self.host
-            .sync(id, generation, self.desired(rect), script, Event::Done)
+        self.host.sync(
+            id,
+            generation,
+            self.desired(rect),
+            script,
+            Event::Built,
+            Event::Done,
+        )
     }
 }
