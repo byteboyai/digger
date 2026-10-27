@@ -359,3 +359,79 @@ fn late_document_errors_from_a_previous_url_do_not_poison_the_current_document()
     });
     assert_eq!(n.failed(), Some("current document error"));
 }
+
+fn window_actions(task: Task<Event>) -> usize {
+    use iced::futures::StreamExt;
+    let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+        return 0;
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut count = 0;
+            while let Ok(Some(action)) =
+                tokio::time::timeout(std::time::Duration::from_millis(100), stream.next()).await
+            {
+                if matches!(action, iced_runtime::Action::Window(_)) {
+                    count += 1;
+                }
+            }
+            count
+        })
+}
+
+#[test]
+fn shown_document_failure_schedules_park_preserves_error_and_allows_valid_loaded_recovery() {
+    let mut native = ReviewNative::new();
+    let id = window::Id::unique();
+    let d = desired(1);
+    let snapshot = Arc::new(Mutex::new(Some("cached transcript".into())));
+    let _ = native.sync(id, d.clone(), Some(snapshot.clone()));
+    let generation = native.live.as_ref().unwrap().generation;
+    let loaded = || Event::Loaded {
+        generation,
+        nonce: 1,
+        page_url: d.spec.as_ref().unwrap().url.clone(),
+    };
+    assert_eq!(native.update(loaded()), Some(1));
+    assert_eq!(
+        window_actions(native.sync(id, d.clone(), Some(snapshot.clone()))),
+        1,
+        "show must reach iced runtime"
+    );
+    native.update(Event::DocumentFailed {
+        generation,
+        page_url: d.spec.as_ref().unwrap().url.clone(),
+        error: "page rendering failed".into(),
+    });
+    assert_eq!(plan(native.live.as_ref(), &d), vec![Action::Park]);
+    assert_eq!(
+        window_actions(native.sync(id, d.clone(), Some(snapshot.clone()))),
+        1,
+        "parking an already shown child must reach iced runtime"
+    );
+    assert_eq!(native.failed(), Some("page rendering failed"));
+    assert_eq!(
+        native.serving.serve("/data.json").unwrap().2,
+        b"cached transcript"
+    );
+    assert_eq!(
+        window_actions(native.sync(id, d.clone(), Some(snapshot.clone()))),
+        0,
+        "repeated sync must not recreate or loop on the error"
+    );
+    assert_eq!(native.failed(), Some("page rendering failed"));
+    assert_eq!(
+        native.update(loaded()),
+        Some(1),
+        "a valid current Loaded may show the page's own error fallback"
+    );
+    assert!(native.failed().is_none());
+    assert_eq!(
+        window_actions(native.sync(id, d, Some(snapshot))),
+        1,
+        "recovered document must be shown again"
+    );
+}

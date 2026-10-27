@@ -1756,7 +1756,27 @@ fn load_more_appends_and_renavigates_with_a_new_nonce() {
         .lock()
         .unwrap()
         .push_back(Ok(vec![turn(1, "second")]));
-    let _ = panel.update(1, Message::DetailLoadMore("one".into(), 1), Some(&a));
+    // This verifies the iced button's real hit target/message. Native coverage
+    // and actual click-through behavior still require desktop GUI verification.
+    let shared = ready();
+    let mut view = panel.view(Some(&a), &area(600., true), &shared);
+    let at = layout(&mut view, 600.)
+        .3
+        .0
+        .into_iter()
+        .find(|(label, _)| label == "加载更多…")
+        .unwrap()
+        .1
+        .center();
+    let messages = click(&mut view, at, 600.);
+    drop(view);
+    assert!(messages.iter().any(|message| matches!(message,
+        Msg::Conversations(1, Message::DetailLoadMore(cid, 1)) if cid == "one")));
+    for message in messages {
+        if let Msg::Conversations(pid, message) = message {
+            let _ = panel.update(pid, message, Some(&a));
+        }
+    }
     apply(&mut panel, &rt, &a);
     sync_review(&mut panel, Some(1));
     let next = panel.native.document_identity().unwrap();
@@ -1943,12 +1963,20 @@ fn collapsed_notice_is_dismissible_and_outside_the_native_review() {
     let (mut panel, _, _) = panel(&rt);
     let a = project(1, "/a");
     panel.ensure_state(&a);
-    panel.notice = Some("visible error".into());
+    let error = format!(
+        "无法读取会话文件 /private/tmp/history/{}: connection lost",
+        "nested-path/".repeat(50)
+    );
+    panel.notice = Some(error.clone());
     let shared = ready();
     let mut view = panel.view(Some(&a), &area(600., true), &shared);
     let texts = layout(&mut view, 600.).3.0;
     let close = texts.iter().find(|(s, _)| s == "×").unwrap().1;
-    assert!(texts.iter().any(|(s, _)| s == "visible error"));
+    assert!(texts.iter().any(|(s, _)| s == &error));
+    assert!(
+        close.y >= 0. && close.y + close.height <= panel.review_notice_height(true),
+        "dismiss control {close:?} must be in the initial notice viewport"
+    );
     let bounds = super::super::review_geometry::review_bounds(
         bytehost_chrome::Rect {
             x: 0.,

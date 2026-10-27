@@ -335,24 +335,26 @@ impl ReviewNative {
             }
             target.loaded = live.loaded;
             live.desired = target.clone();
-            if self.error.is_none() {
-                let page_url = target.url.clone();
-                tasks.push(self.host.sync(
-                    id,
-                    live.generation,
-                    target,
-                    None,
-                    move |generation, result| match result {
-                        Err(error) => Event::DocumentFailed {
-                            generation,
-                            page_url,
-                            error,
-                        },
-                        Ok(()) => Event::Done,
+            // Even after an error, the shared host must receive loaded=false:
+            // it parks a previously shown child so iced's error stays readable.
+            // Its scheduled state makes subsequent syncs idle, while a validated
+            // current Loaded can clear the error and reveal the page fallback.
+            let page_url = target.url.clone();
+            tasks.push(self.host.sync(
+                id,
+                live.generation,
+                target,
+                None,
+                move |generation, result| match result {
+                    Err(error) => Event::DocumentFailed {
+                        generation,
+                        page_url,
+                        error,
                     },
-                    Event::Done,
-                ));
-            }
+                    Ok(()) => Event::Done,
+                },
+                Event::Done,
+            ));
         }
         Task::batch(tasks)
     }

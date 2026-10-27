@@ -444,7 +444,7 @@ impl ConversationsPanel {
             ]
             .spacing(8)
             .padding([6, 12])
-            .align_y(iced::Alignment::Center)
+            .align_y(iced::Alignment::Start)
             .into()
         })
     }
