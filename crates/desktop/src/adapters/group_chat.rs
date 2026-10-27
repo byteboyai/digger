@@ -159,15 +159,15 @@ impl GroupChatPanel {
             )),
         ))
     }
-    fn content_placeholder(&self, pid: i64) -> Element<'_, Msg> {
+    fn content_placeholder(&self, pid: i64, collapsed: bool) -> Element<'_, Msg> {
         let Some(state) = self.states.get(&pid) else {
-            return placeholder("选择一个群聊,或点击＋新建", "聊天内容即将可用", true);
+            return placeholder("选择一个群聊,或点击＋新建", "聊天内容即将可用", collapsed);
         };
         let Some(group) = state
             .selected()
             .and_then(|id| state.groups().iter().find(|g| g.id == id))
         else {
-            return placeholder("选择一个群聊,或点击＋新建", "聊天内容即将可用", true);
+            return placeholder("选择一个群聊,或点击＋新建", "聊天内容即将可用", collapsed);
         };
         let tokens = byteui::theme::color::current();
         let mut body = column![
@@ -192,6 +192,11 @@ impl GroupChatPanel {
                 .size(byteui::theme::font::body())
                 .color(tokens.dim),
         );
+        let body = if collapsed {
+            column![expand_group_list(), body].spacing(8)
+        } else {
+            body
+        };
         container(body)
             .padding(16)
             .width(Length::Fill)
@@ -201,10 +206,14 @@ impl GroupChatPanel {
     pub fn view<'a>(&'a self, project: Option<&ProjectInfo>, area: &BodyArea) -> Element<'a, Msg> {
         let tokens = byteui::theme::color::current();
         let Some(project) = project else {
-            return placeholder("请先打开一个 Project", "聊天内容即将可用", false);
+            return placeholder("请先打开一个 Project", "聊天内容即将可用", area.collapsed);
         };
         let Some(state) = self.states.get(&project.id) else {
-            return placeholder("选择一个群聊,或点击＋新建", "聊天内容即将可用", false);
+            return placeholder(
+                "选择一个群聊,或点击＋新建",
+                "聊天内容即将可用",
+                area.collapsed,
+            );
         };
         let display = &self.displays[&project.id];
         display.configure(area);
@@ -243,7 +252,7 @@ impl GroupChatPanel {
         } else {
             list
         };
-        let content = self.content_placeholder(project.id);
+        let content = self.content_placeholder(project.id, area.collapsed);
         pair_view(
             area,
             list,
@@ -255,26 +264,52 @@ impl GroupChatPanel {
     }
 }
 
-fn placeholder(first: &str, second: &str, with_notice: bool) -> Element<'static, Msg> {
-    let tokens = byteui::theme::color::current();
-    let _ = with_notice;
-    container(
-        column![
-            text(first.to_owned())
-                .size(byteui::theme::font::body())
-                .color(tokens.body),
-            text(second.to_owned())
-                .size(byteui::theme::font::body())
-                .color(tokens.dim),
-        ]
-        .spacing(8)
-        .padding(16),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
+fn expand_group_list() -> Element<'static, Msg> {
+    iced::widget::row![
+        iced::widget::space::horizontal(),
+        iced::widget::tooltip(
+            iced::widget::button(byteui::interaction::icons::view(
+                byteui::interaction::icons::IconKind::PanelRightOpen,
+                byteui::theme::icon_size::row(),
+                byteui::theme::color::current().dim,
+            ))
+            .on_press(Msg::Shell(ShellMsg::TogglePane(
+                crate::shell::group_chat_id()
+            ))),
+            iced::widget::container(
+                iced::widget::text("展开群聊列表").size(byteui::theme::font::body()),
+            )
+            .padding(6)
+            .style(iced::widget::container::rounded_box),
+            iced::widget::tooltip::Position::Bottom,
+        )
+        .delay(super::hover::TOOLTIP_DELAY)
+    ]
     .into()
 }
 
+fn placeholder(first: &str, second: &str, collapsed: bool) -> Element<'static, Msg> {
+    let tokens = byteui::theme::color::current();
+    let body = column![
+        text(first.to_owned())
+            .size(byteui::theme::font::body())
+            .color(tokens.body),
+        text(second.to_owned())
+            .size(byteui::theme::font::body())
+            .color(tokens.dim),
+    ]
+    .spacing(8);
+    let body = if collapsed {
+        column![expand_group_list(), body].spacing(8)
+    } else {
+        body
+    };
+    container(body)
+        .padding(16)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,7 +489,7 @@ mod tests {
         let p = project(1);
         panel.ensure_state(&p);
         let _ = panel.update(GcMessage::GroupsLoaded(1, Ok(vec![])), |_| true);
-        let _ = panel.content_placeholder(1);
+        let _ = panel.content_placeholder(1, false);
     }
 
     #[test]
