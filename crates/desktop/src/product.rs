@@ -127,6 +127,9 @@ pub enum Msg {
     NativeUsage(crate::adapters::usage_native::Event),
     /// 「待办」面板的库消息(S3b-1)。
     Todo(dozer_panel_todo::Message),
+    Conversations(i64, dozer_panel_conversations::Message),
+    ConversationsImport(i64, crate::adapters::conversations_import::ImportEvent),
+    ConversationsNoticeDismiss,
     /// 待办原生 webview 的回传。
     NativeTodo(crate::adapters::todo_native::Event),
     /// 待办面板可见时的 1 秒轮询。
@@ -143,6 +146,8 @@ pub enum Msg {
     Projects(crate::projects::Message),
     /// 每帧焦点探针:`view` 刚渲染完(库的 `text_input` 焦点态已写回),`id` 是渲染时聚焦的项目。
     ProjectFocusFrame(i64),
+    ConversationSearchFocusFrame(i64),
+    ConversationSearchFocused(i64, bytehost_core::request::RequestToken, bool),
     /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
@@ -208,6 +213,7 @@ pub struct ProductShell {
     usage: crate::adapters::usage::UsagePanel,
     /// 「待办」面板适配(S3b-1):按项目状态 + `diggerd` 的 TodoService。
     todo: crate::adapters::todo::TodoPanel,
+    conversations: crate::adapters::conversations::ConversationsPanel,
     /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
     markdown: crate::markdown::MarkdownPanel,
     /// 项目注册表与已开页签(Project 是 host 层共享业务,ADR-014)。
@@ -430,6 +436,7 @@ impl ProductShell {
             (shell::files_id(), "文件"),
             (shell::todo_id(), "待办"),
             (shell::agent_id(), "Agent"),
+            (shell::conversations_id(), "会话"),
         ] {
             catalog
                 .register(CatalogEntry {
@@ -470,6 +477,13 @@ impl ProductShell {
         let todo_client = dozer_client::Client::new(digger_paths::product().socket_path());
         let todo =
             crate::adapters::todo::TodoPanel::new(Arc::new(todo_client.clone()), todo_client);
+        let (conversation, summary, transcript) =
+            crate::daemon::Daemon::new().conversation_services();
+        let conversations = crate::adapters::conversations::ConversationsPanel::new(
+            conversation,
+            summary,
+            transcript,
+        );
         let markdown = crate::markdown::MarkdownPanel::new();
         // 项目数据与布局同在一个数据目录里:生产是产品数据根,测试是各自的临时目录。
         let data_dir = shell_path
@@ -515,6 +529,7 @@ impl ProductShell {
             project,
             files,
             agent: crate::adapters::agent::AgentPanel::new(),
+            conversations,
             term_style: crate::fonts::terminal_style(),
             preview: None,
             preview_bridge: None,
@@ -690,6 +705,9 @@ impl ProductShell {
             // 进入「用量」面板:触发一次取数(库的 on_activate,Task 20)。
             self.usage.activate();
         }
+        if *panel == shell::conversations_id() {
+            return self.activate_conversations_panel();
+        }
         if *panel == shell::todo_id() {
             self.activate_todo_panel();
         }
@@ -709,6 +727,18 @@ impl ProductShell {
             }
         }
         Task::none()
+    }
+
+    fn activate_conversations_panel(&mut self) -> Task<Msg> {
+        let Some(project) = self.projects.current_project().cloned() else {
+            return Task::none();
+        };
+        self.conversations.ensure_state(&project);
+        if self.agent.shell.status == crate::adapters::agent::Status::Ready {
+            self.conversations.activate(&project)
+        } else {
+            Task::none()
+        }
     }
 
     /// 当前项目从 `before` 换成了现在这个(页签点击 / 关闭 / 删除 / 列表修剪都走这里):
@@ -745,6 +775,9 @@ impl ProductShell {
         }
         self.activate_files_panel();
         self.activate_todo_panel();
+        if self.panel_visible(&shell::conversations_id()) {
+            let _ = self.activate_conversations_panel();
+        }
     }
 
     /// 把待办面板切到当前项目;面板可见时立即拉一次列表与分类。
@@ -790,6 +823,7 @@ impl ProductShell {
             .update(crate::projects::Message::Close(project.id));
         let _ = close;
         let _ = self.agent.close_project(project.id);
+        self.conversations.close_project(project.id);
         self.on_current_project_changed(before, before != Some(project.id));
         let (project, tx) = (project.clone(), self.delete_tx.clone());
         self.project
@@ -1115,6 +1149,11 @@ impl ProductShell {
             .into()
     }
 
+    fn conversations_view(&self, area: &BodyArea) -> Element<'_, Msg> {
+        self.conversations
+            .view(self.projects.current_project(), area, &self.agent.shell)
+    }
+
     fn todo_view<'a>(&'a self, area: &BodyArea) -> Element<'a, Msg> {
         let tokens = color::current();
         let collapsed = self.pane_collapsed(&shell::todo_id());
@@ -1191,14 +1230,82 @@ impl ProductShell {
         )
     }
 
-    /// Agent 自己的浮层 / 确认框是否打开:打开时键盘不投终端。
+    /// Hidden Agent panes, focused conversation search and iced overlays block terminal keys.
     pub(crate) fn agent_keys_blocked(&self) -> bool {
-        self.agent.overlay_is_open()
+        !self.panel_visible(&shell::agent_id())
+            || self
+                .conversation_search_project()
+                .and_then(|pid| self.conversations.state(pid))
+                .is_some_and(|state| state.search_focused() || state.agent_picker_open())
+            || self.preview_overlay_open()
+            || self.agent.overlay_is_open()
             || self
                 .projects
                 .current_project()
                 .and_then(|p| self.agent.states.get(&p.id))
                 .is_some_and(|state| state.pending_close_tab.is_some())
+    }
+
+    fn conversation_search_project(&self) -> Option<i64> {
+        (self.panel_visible(&shell::conversations_id())
+            && !self.pane_collapsed(&shell::conversations_id())
+            && self.agent.shell.status == crate::adapters::agent::Status::Ready
+            && !self.closing)
+            .then(|| self.projects.current_project_id())
+            .flatten()
+    }
+
+    fn run_conversation_requests(&mut self) -> Task<Msg> {
+        #[cfg(target_os = "macos")]
+        let mut tasks = vec![];
+        for (pid, request) in self.conversations.take_requests() {
+            if self.conversation_search_project() != Some(pid)
+                || self.conversations.state(pid).is_none()
+            {
+                continue;
+            }
+            match request {
+                dozer_panel_conversations::adapter::ConversationsRequest::ShowAgentFilter {
+                    at,
+                    current,
+                    present,
+                } => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let items = crate::adapters::native_menu::conversation_filter_items(
+                            pid, current, &present,
+                        );
+                        if let Some(message) = byteui::native_menu::show(items, at) {
+                            tasks.push(Task::done(message));
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = (at, current, present);
+                        self.show_iced_conversation_filter(pid);
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Task::batch(tasks)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Task::none()
+        }
+    }
+
+    #[cfg(any(not(target_os = "macos"), test))]
+    fn show_iced_conversation_filter(&mut self, pid: i64) {
+        self.dismiss_agent_overflow();
+        self.agent.close_picker();
+        if let Some(state) = self.agent.states.get_mut(&pid) {
+            // A previous overflow can already have dismissed the product picker.
+            state.agent_picker_open = false;
+        }
+        self.conversations.open_agent_filter(pid);
     }
 
     /// 关闭溢出下拉:产品态清掉,并让库把 `term_tab_overflow_anchor` 也归零。
@@ -1776,6 +1883,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.project" => self.project_view(area),
             "digger.files" => self.files_view(area),
             "digger.agent" => self.agent_view(area),
+            "digger.conversations" => self.conversations_view(area),
             _ => column![].into(),
         }
     }
@@ -1969,9 +2077,24 @@ impl Product<Msg> for ProductShell {
                     let grid = self.current_agent_grid().unwrap_or((80, 24));
                     enter = self.agent.ensure_started(&project, grid);
                 }
-                Task::batch([task, enter])
+                let conversations = if !was_ready
+                    && self.agent.shell.status == crate::adapters::agent::Status::Ready
+                    && self.panel_visible(&shell::conversations_id())
+                {
+                    self.activate_conversations_panel()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, enter, conversations])
             }
             Msg::Agent(pid, m) => {
+                if matches!(
+                    m,
+                    dozer_panel_agent::update::Message::PickerToggle
+                        | dozer_panel_agent::update::Message::OverflowToggle { .. }
+                ) {
+                    self.conversations.close_agent_filters();
+                }
                 // macOS:Agent 页签溢出下拉走原生菜单(与预览页签一致)。库发的锚点是 `(0, 0)`。
                 #[cfg(target_os = "macos")]
                 if matches!(m, dozer_panel_agent::update::Message::OverflowToggle { .. }) {
@@ -2006,6 +2129,9 @@ impl Product<Msg> for ProductShell {
                 Task::none()
             }
             Msg::AgentKey(event) => {
+                if self.agent_keys_blocked() {
+                    return Task::none();
+                }
                 let visible = self.panel_visible(&shell::agent_id());
                 let project = self.projects.current_project();
                 self.agent.on_key(&event, visible, project, self.closing)
@@ -2121,6 +2247,44 @@ impl Product<Msg> for ProductShell {
                 self.usage.native.update(event);
                 Task::none()
             }
+            Msg::Conversations(pid, message) => {
+                let pid = message.result_project().unwrap_or(pid);
+                let project = self
+                    .projects
+                    .open_ids()
+                    .contains(&pid)
+                    .then(|| self.projects.project_by_id(pid))
+                    .flatten();
+                let task = self.conversations.update(pid, message, project.as_ref());
+                let requests = self.run_conversation_requests();
+                Task::batch([task, requests])
+            }
+            Msg::ConversationsImport(pid, event) => {
+                if matches!(
+                    event,
+                    crate::adapters::conversations_import::ImportEvent::Start
+                ) && self.projects.current_project_id() != Some(pid)
+                {
+                    return Task::none();
+                }
+                let project = self
+                    .projects
+                    .open_ids()
+                    .contains(&pid)
+                    .then(|| self.projects.project_by_id(pid))
+                    .flatten();
+                self.conversations.update_import(
+                    pid,
+                    event,
+                    project.as_ref(),
+                    self.agent.shell.status == crate::adapters::agent::Status::Ready,
+                    self.closing,
+                )
+            }
+            Msg::ConversationsNoticeDismiss => {
+                self.conversations.dismiss_notice();
+                Task::none()
+            }
             Msg::Todo(message) => {
                 for effect in self.todo.update(message) {
                     match effect {
@@ -2194,6 +2358,12 @@ impl Product<Msg> for ProductShell {
                 let task = self.projects.update(m).map(Msg::Projects);
                 // 消失的项目页签:abort 转发并 kill 该项目全部会话(会话语义同 Dozer)。
                 self.close_agent_for(&open_before);
+                for id in open_before
+                    .iter()
+                    .filter(|id| !self.projects.open_ids().contains(id))
+                {
+                    self.conversations.close_project(*id);
+                }
                 if before != self.projects.current_project_id() {
                     self.agent.reset_input_state();
                 }
@@ -2206,7 +2376,48 @@ impl Product<Msg> for ProductShell {
                     let grid = self.current_agent_grid().unwrap_or((80, 24));
                     enter = self.agent.ensure_started(&project, grid);
                 }
-                Task::batch([task, enter])
+                let conversations = if self.panel_visible(&shell::conversations_id())
+                    && self
+                        .projects
+                        .current_project_id()
+                        .is_some_and(|id| self.conversations.state(id).is_none())
+                {
+                    self.activate_conversations_panel()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, enter, conversations])
+            }
+            Msg::ConversationSearchFocusFrame(pid) => {
+                if self.conversation_search_project() != Some(pid)
+                    || self.conversations.state(pid).is_none()
+                {
+                    return Task::none();
+                }
+                let token = self
+                    .conversations
+                    .state(pid)
+                    .unwrap()
+                    .requests
+                    .begin(Some(pid), "host-search-focus");
+                iced::widget::operation::is_focused(
+                    dozer_panel_conversations::view::conversation_search_field_id(),
+                )
+                .map(move |focused| Msg::ConversationSearchFocused(pid, token.clone(), focused))
+            }
+            Msg::ConversationSearchFocused(pid, token, focused) => {
+                let active = self.conversation_search_project();
+                self.conversations.reset_inactive_focus(active);
+                if active == Some(pid)
+                    && self.projects.open_ids().contains(&pid)
+                    && self
+                        .conversations
+                        .state(pid)
+                        .is_some_and(|state| state.requests.accepts(&token))
+                {
+                    self.conversations.set_search_focused(pid, focused);
+                }
+                Task::none()
             }
             Msg::ProjectFocusFrame(id) => {
                 let Some(project) = self
@@ -2323,6 +2534,7 @@ impl Product<Msg> for ProductShell {
                         .projects
                         .update(crate::projects::Message::Close(project_id));
                     let _ = self.agent.close_project(project_id);
+                    self.conversations.close_project(project_id);
                     self.on_current_project_changed(before, before != Some(project_id));
                     // 被删项目的布局文件不留孤儿。
                     if let Some(path) = self.project_shell_path_for(project_id) {
@@ -2591,15 +2803,31 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
         HostMessage::Surface(event) => route_lifecycle(shell, event),
         HostMessage::Product(m) => Product::update(shell, HostMessage::Product(m)),
     };
-    // Agent 回合结束:Project 面板在眼前且是当前项目时刷新记忆列表。
+    // One drain fans turn completion out to Project memories and Conversations.
+    let mut turn_tasks = vec![];
     for (pid, event) in shell.agent.drain_host_events() {
         if matches!(
             event,
             dozer_panel_agent::adapter::AgentHostEvent::TurnEnded { .. }
         ) {
             shell.on_agent_turn_ended(pid);
+            let project = shell
+                .projects
+                .project_by_id(pid)
+                .filter(|_| shell.projects.open_ids().contains(&pid));
+            let visible = shell.panel_visible(&shell::conversations_id())
+                && shell.projects.current_project_id() == Some(pid)
+                && shell.agent.shell.status == crate::adapters::agent::Status::Ready;
+            turn_tasks.push(
+                shell
+                    .conversations
+                    .on_turn_ended(pid, project.as_ref(), visible),
+            );
         }
     }
+    let task = Task::batch(std::iter::once(task).chain(turn_tasks));
+    let search_project = shell.conversation_search_project();
+    shell.conversations.reset_inactive_focus(search_project);
     // 退出分支自己将销毁与 shutdown 串行；其他更新后同步内容与几何。
     let native = shell.sync_native();
     shell
@@ -2645,6 +2873,9 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NameFocusProbe(i64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ConversationSearchFocusProbe(i64);
+
 /// 键盘事件是否该作为 Agent 输入投上去:`Captured` 的按键已被别处(输入框等)
 /// 消费,绝不能进终端;Agent 自己的浮层(选择器 / 关页签确认)打开时也不投。
 pub fn agent_key_message(
@@ -2655,7 +2886,7 @@ pub fn agent_key_message(
 }
 
 /// `listen_with` 的事件映射(必须是无捕获函数指针):光标与"浮层打开"状态
-/// 由 `view` 每帧写 thread-local,见 `main.rs` 的 `CURRENT_CURSOR` /
+/// 由 `view` 每帧写进进程级原子,见 `lib.rs` 的 `CURRENT_CURSOR` /
 /// `AGENT_KEYS_BLOCKED`。
 fn agent_event(
     event: iced::Event,
@@ -2697,7 +2928,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     }
     // 终端输入:键盘只在未被控件消费时投;鼠标按下带最近一次光标位置;
     // 拖入文件走窗口事件。`listen_with` 只收函数指针,光标与浮层状态由
-    // `view` 每帧写 thread-local(同 `CURRENT_WINDOW` 的手法)。
+    // `view` 每帧写进进程级原子,供订阅工作线程读取。
     let agent_input = iced::event::listen_with(agent_event);
     // 左键按下 / 松开与修饰键:文件树的单击 / 拖拽 / 多选靠它们(库对这些消息的 `update` 不处理)。
     let pointer = iced::event::listen_with(|evt, _status, _id| match evt {
@@ -2758,6 +2989,54 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
                 )
             },
         ));
+    }
+    if let Some(pid) = shell.conversation_search_project() {
+        subs.push(Subscription::run_with(
+            ConversationSearchFocusProbe(pid),
+            |probe| {
+                let pid = probe.0;
+                iced::stream::channel(
+                    1,
+                    move |mut out: iced::futures::channel::mpsc::Sender<Msg>| async move {
+                        use iced::futures::SinkExt;
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                            if out
+                                .send(Msg::ConversationSearchFocusFrame(pid))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    },
+                )
+            },
+        ));
+    }
+    #[cfg(any(not(target_os = "macos"), test))]
+    if let Some(pid) = shell.conversation_search_project()
+        && shell
+            .conversations
+            .state(pid)
+            .is_some_and(|state| state.agent_picker_open())
+    {
+        subs.push(
+            iced::event::listen_with(|event, _, _| {
+                matches!(
+                    event,
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                        ..
+                    })
+                )
+                .then_some(())
+            })
+            .with(pid)
+            .map(|(pid, ())| {
+                Msg::Conversations(pid, dozer_panel_conversations::Message::AgentFilterClose)
+            }),
+        );
     }
     // 右键菜单打开时订阅 Esc:关掉浮层(点空白走浮层自己的透明按下区)。
     if shell.files.has_modal() || shell.files.menu().is_some() {
@@ -2853,6 +3132,9 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     shell.files.attach_handle(tokio::runtime::Handle::current());
     shell.agent.attach_handle(tokio::runtime::Handle::current());
     shell.todo.attach_handle(tokio::runtime::Handle::current());
+    shell
+        .conversations
+        .attach_handle(tokio::runtime::Handle::current());
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
     // 缺资源时宿主只会整块白屏:启动即点名报出,与 selftest 同一份名单。
@@ -2976,6 +3258,22 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let conversations_task = match shell.conversations.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|(pid, m)| (Msg::Conversations(pid, m), rx))
+        })),
+        None => Task::none(),
+    };
+    let conversations_import_task = match shell.conversations.take_import_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|(pid, event)| (Msg::ConversationsImport(pid, event), rx))
+        })),
+        None => Task::none(),
+    };
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
     for panel in shell::all_panels() {
@@ -3005,6 +3303,8 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             lifecycle_task,
             daemon_task,
             agent_task,
+            conversations_task,
+            conversations_import_task,
             preview_cmds_task,
             Task::batch(initial),
         ]),
@@ -3987,12 +4287,424 @@ mod tests {
     }
 
     #[test]
+    fn conversations_is_registered_as_a_native_panel() {
+        let shell = fresh("conversations-catalog");
+        let id = PanelId::new("digger.conversations").unwrap();
+        let entry = shell.catalog.get(&id).expect("conversations registered");
+        assert_eq!(entry.title, "会话");
+        assert!(entry.surfaces.is_empty());
+    }
+
+    fn conversations_shell(
+        tag: &str,
+    ) -> (
+        ProductShell,
+        tokio::runtime::Runtime,
+        Arc<crate::adapters::conversations::tests::FakeConversation>,
+    ) {
+        let rt = crate::adapters::conversations::tests::runtime();
+        let (panel, fake, _) = crate::adapters::conversations::tests::panel(&rt);
+        let mut shell = fresh(tag);
+        shell.conversations = panel;
+        shell.agent.shell.status = crate::adapters::agent::Status::Ready;
+        (shell, rt, fake)
+    }
+
+    #[test]
+    fn conversations_import_start_is_limited_to_current_project_and_never_runs_during_exit() {
+        use crate::adapters::conversations::tests::{FakeTranscript, import_panel, project};
+        use crate::adapters::conversations_import::ImportEvent;
+        let (mut shell, rt, _) = conversations_shell("conv-import-explicit-scope");
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(FakeTranscript::default());
+        shell.conversations = import_panel(&rt, &dir.path().join("marker.json"), fake.clone());
+        let a = project(1, "/a");
+        let b = project(2, "/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Activate(b.id)),
+        );
+        send(
+            &mut shell,
+            Msg::ConversationsImport(a.id, ImportEvent::Start),
+        );
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert!(fake.calls.lock().unwrap().is_empty());
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Activate(a.id)),
+        );
+        shell.closing = true;
+        send(
+            &mut shell,
+            Msg::ConversationsImport(a.id, ImportEvent::Start),
+        );
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert!(fake.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn conversations_results_route_to_the_token_project_even_while_it_is_unfocused() {
+        use crate::adapters::conversations::tests::{project, row};
+        use dozer_panel_conversations::Message as C;
+        let (mut shell, _rt, _) = conversations_shell("conv-token-routing");
+        let a = project(1, "/a");
+        let b = project(2, "/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        shell.conversations.ensure_state(&a);
+        shell.conversations.ensure_state(&b);
+        let token = shell
+            .conversations
+            .state(a.id)
+            .unwrap()
+            .requests
+            .begin(Some(a.id), "sessions");
+        send(
+            &mut shell,
+            Msg::Conversations(
+                b.id,
+                C::AsyncResult(
+                    token,
+                    Box::new(C::SessionsRefreshed(a.id, Ok(vec![row("a")]))),
+                ),
+            ),
+        );
+        assert_eq!(
+            shell.conversations.state(a.id).unwrap().sessions().unwrap()[0].conversation_id,
+            "a"
+        );
+        assert!(
+            shell
+                .conversations
+                .state(b.id)
+                .unwrap()
+                .sessions()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn conversations_tab_close_reclaims_state_and_drops_late_results() {
+        use crate::adapters::conversations::tests::{project, row};
+        use dozer_panel_conversations::Message as C;
+        let (mut shell, _rt, _) = conversations_shell("conv-close");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Close(a.id)),
+        );
+        assert!(shell.conversations.state(a.id).is_none());
+        send(
+            &mut shell,
+            Msg::Conversations(a.id, C::SessionsRefreshed(a.id, Ok(vec![row("late")]))),
+        );
+        assert!(shell.conversations.state(a.id).is_none());
+    }
+
+    #[test]
+    fn conversations_project_delete_reclaims_state() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, _rt, _) = conversations_shell("conv-delete");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        send(
+            &mut shell,
+            Msg::ProjectDeleteDone {
+                project_id: a.id,
+                deregistered: true,
+                errors: vec![],
+            },
+        );
+        assert!(shell.conversations.state(a.id).is_none());
+    }
+
+    #[test]
+    fn conversations_shared_daemon_recovery_fetches_once_without_starting_another_lifecycle() {
+        use crate::adapters::agent::{AgentShellMsg, Status};
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell("conv-recovery");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.agent.shell.status = Status::Unavailable("offline".into());
+        press(&mut shell, &shell::conversations_id());
+        assert!(shell.conversations.state(a.id).is_some());
+        assert!(fake.calls.lock().unwrap().is_empty());
+        send(&mut shell, Msg::AgentShell(AgentShellMsg::Ensured(Ok(()))));
+        let (pid, m) = receive(&mut shell.conversations, &rt);
+        send(&mut shell, Msg::Conversations(pid, m));
+        assert_eq!(fake.calls.lock().unwrap().len(), 1);
+        assert!(
+            shell
+                .conversations
+                .state(a.id)
+                .unwrap()
+                .sessions()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn conversations_project_switch_refreshes_the_visible_new_project_only() {
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell("conv-switch");
+        let a = project(1, "/a");
+        let b = project(2, "/a/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        press(&mut shell, &shell::conversations_id());
+        let _ = receive(&mut shell.conversations, &rt);
+        // The new project's persisted layout also has Conversations selected.
+        let mut defaults = shell::defaults();
+        defaults.selected[1] = shell::conversations_id();
+        let layout = ShellModel::new(
+            defaults.rails,
+            defaults.selected,
+            defaults.left_width,
+            defaults.window,
+        )
+        .unwrap();
+        let path = shell.project_shell_path_for(a.id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        bytehost_chrome::persist::save_atomic(&path, &layout).unwrap();
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Activate(a.id)),
+        );
+        let _ = receive(&mut shell.conversations, &rt);
+        let calls = fake.calls.lock().unwrap();
+        assert_eq!(
+            calls.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(),
+            vec!["/a/b", "/a"]
+        );
+    }
+
+    #[test]
+    fn conversations_deleting_the_current_project_refreshes_the_remaining_visible_project() {
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell("conv-delete-switch");
+        let a = project(1, "/a");
+        let b = project(2, "/a/b");
+        shell.projects.seed_for_test(a.clone());
+        shell.projects.seed_for_test(b.clone());
+        press(&mut shell, &shell::conversations_id());
+        let _ = receive(&mut shell.conversations, &rt);
+        let mut defaults = shell::defaults();
+        defaults.selected[1] = shell::conversations_id();
+        let model = ShellModel::new(
+            defaults.rails,
+            defaults.selected,
+            defaults.left_width,
+            defaults.window,
+        )
+        .unwrap();
+        let path = shell.project_shell_path_for(a.id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        bytehost_chrome::persist::save_atomic(&path, &model).unwrap();
+        send(
+            &mut shell,
+            Msg::ProjectDeleteDone {
+                project_id: b.id,
+                deregistered: true,
+                errors: vec![],
+            },
+        );
+        assert!(shell.conversations.state(b.id).is_none());
+        assert_eq!(shell.projects.current_project_id(), Some(a.id));
+        let _ = receive(&mut shell.conversations, &rt);
+        assert_eq!(
+            fake.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.0.clone())
+                .collect::<Vec<_>>(),
+            vec!["/a/b", "/a"]
+        );
+    }
+
+    type PendingUnavailableConversations = (
+        ProductShell,
+        tokio::runtime::Runtime,
+        Arc<crate::adapters::conversations::tests::FakeConversation>,
+        dozer_model::ProjectInfo,
+        (i64, dozer_panel_conversations::Message),
+    );
+    fn pending_unavailable_conversations(tag: &str) -> PendingUnavailableConversations {
+        use crate::adapters::conversations::tests::{project, receive};
+        let (mut shell, rt, fake) = conversations_shell(tag);
+        let project = project(1, "/a");
+        shell.projects.seed_for_test(project.clone());
+        *fake.error.lock().unwrap() = Some(dozer_services::ServiceError::new(
+            dozer_services::ServiceErrorKind::Unavailable,
+            "socket disconnected",
+        ));
+        press(&mut shell, &shell::conversations_id());
+        let pending = receive(&mut shell.conversations, &rt);
+        (shell, rt, fake, project, pending)
+    }
+
+    fn deliver_conversations_task(
+        shell: &mut ProductShell,
+        rt: &tokio::runtime::Runtime,
+        pid: i64,
+        message: dozer_panel_conversations::Message,
+    ) {
+        use iced::futures::StreamExt;
+        let task = Product::update(
+            shell,
+            HostMessage::Product(Msg::Conversations(pid, message)),
+        );
+        if let Some(mut stream) = iced_runtime::task::into_stream(task) {
+            let messages = rt.block_on(async {
+                let mut messages = vec![];
+                while let Some(action) = stream.next().await {
+                    if let iced_runtime::Action::Output(message) = action {
+                        messages.push(message);
+                    }
+                }
+                messages
+            });
+            for message in messages {
+                send(shell, message);
+            }
+        }
+    }
+
+    #[test]
+    fn conversations_accepted_unavailable_changes_shared_status_and_retry_refetches() {
+        use crate::adapters::agent::{AgentShellMsg, Status};
+        use crate::adapters::conversations::tests::{receive, view_texts};
+        let (mut shell, rt, fake, project, (pid, message)) =
+            pending_unavailable_conversations("conv-accepted-unavailable");
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert!(
+            matches!(&shell.agent.shell.status, Status::Unavailable(reason) if reason.contains("socket disconnected"))
+        );
+        assert!(
+            shell
+                .conversations
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("socket disconnected")
+        );
+        let texts = view_texts(
+            &shell.conversations,
+            Some(&project),
+            &shell.agent.shell,
+            700.,
+            false,
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("socket disconnected")),
+            "{texts:?}"
+        );
+        assert!(texts.iter().any(|text| text == "重试"), "{texts:?}");
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("没有会话") || text.contains("No conversations")),
+            "{texts:?}"
+        );
+        let empty = dozer_panel_conversations::i18n::t(
+            "empty.no_sessions",
+            "No conversations yet",
+            "zh-CN",
+        );
+        assert!(!texts.contains(&empty), "{texts:?}");
+        *fake.error.lock().unwrap() = None;
+        let retry = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::AgentShell(AgentShellMsg::Retry)),
+        );
+        assert_eq!(shell.agent.shell.status, Status::Checking);
+        // Retry queues exactly the existing daemon ensure task; do not launch a daemon in this test.
+        assert!(iced_runtime::task::into_stream(retry).is_some());
+        send(&mut shell, Msg::AgentShell(AgentShellMsg::Ensured(Ok(()))));
+        let (pid, message) = receive(&mut shell.conversations, &rt);
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        assert_eq!(
+            shell
+                .conversations
+                .state(project.id)
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn conversations_stale_unavailable_does_not_change_shared_daemon_status() {
+        use crate::adapters::agent::Status;
+        let (mut shell, rt, _, project, (pid, message)) =
+            pending_unavailable_conversations("conv-stale-unavailable");
+        let _ = shell.conversations.activate(&project);
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert!(shell.conversations.notice.is_none());
+    }
+
+    #[test]
+    fn conversations_closed_project_unavailable_does_not_change_shared_daemon_status() {
+        use crate::adapters::agent::Status;
+        let (mut shell, rt, _, project, (pid, message)) =
+            pending_unavailable_conversations("conv-closed-unavailable");
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Close(project.id)),
+        );
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert!(shell.conversations.notice.is_none());
+        assert!(shell.conversations.state(project.id).is_none());
+    }
+
+    #[test]
+    fn conversations_reopened_owner_unavailable_does_not_change_shared_daemon_status() {
+        use crate::adapters::agent::Status;
+        let (mut shell, rt, _, project, (pid, message)) =
+            pending_unavailable_conversations("conv-reopened-unavailable");
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Close(project.id)),
+        );
+        send(
+            &mut shell,
+            Msg::Projects(crate::projects::Message::Opened(Ok(Some(project.clone())))),
+        );
+        deliver_conversations_task(&mut shell, &rt, pid, message);
+        assert_eq!(shell.agent.shell.status, Status::Ready);
+        assert!(shell.conversations.notice.is_none());
+        assert!(
+            shell
+                .conversations
+                .state(project.id)
+                .unwrap()
+                .sessions()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn registers_product_panels() {
         let shell = ProductShell::new();
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 8);
+        assert_eq!(shell.catalog.len(), 9);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
@@ -4042,6 +4754,256 @@ mod tests {
         assert!(shell.agent.confirm_is_open(Some(7)));
         // 覆盖层同样阻断键盘。
         shell.agent.open_overflow(7, (0.0, 0.0));
+        assert!(shell.agent_keys_blocked());
+    }
+
+    fn focus_search(shell: &mut ProductShell, pid: i64, focused: bool) {
+        let empty = dozer_panel_conversations::WorkspaceState::default();
+        let state = shell.conversations.state(pid).unwrap_or(&empty);
+        let token = state.requests.begin(Some(pid), "host-search-focus");
+        send(shell, Msg::ConversationSearchFocused(pid, token, focused));
+    }
+
+    #[test]
+    fn conversations_hidden_filter_requests_are_drained_without_opening_or_changing_filter() {
+        use crate::adapters::conversations::tests::project;
+        use dozer_panel_conversations::Message as C;
+        let (mut shell, _rt, _) = conversations_shell("conv-hidden-menu");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        send(
+            &mut shell,
+            Msg::Conversations(
+                1,
+                C::AgentFilterSelect(Some(dozer_model::AgentKind::Claude)),
+            ),
+        );
+        send(
+            &mut shell,
+            Msg::Conversations(1, C::AgentFilterOpen { at: (0., 0.) }),
+        );
+        assert!(shell.conversations.take_requests().is_empty());
+        assert!(!shell.conversations.state(1).unwrap().agent_picker_open());
+        assert_eq!(
+            shell.conversations.state(1).unwrap().agent_filter(),
+            Some(dozer_model::AgentKind::Claude)
+        );
+    }
+
+    #[test]
+    fn conversations_iced_fallback_closes_agent_overlays_and_agent_picker_closes_it() {
+        use crate::adapters::agent::PickerMenu;
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, rt, _) = conversations_shell("conv-iced-fallback");
+        shell.agent.attach_handle(rt.handle().clone());
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        shell
+            .agent
+            .states
+            .insert(1, dozer_panel_agent::state::AgentPanelState::new());
+        shell.agent.open_picker(PickerMenu { pid: 1, at: None });
+        shell.show_iced_conversation_filter(1);
+        assert!(!shell.agent.overlay_is_open());
+        assert!(shell.conversations.state(1).unwrap().agent_picker_open());
+        send(
+            &mut shell,
+            Msg::Agent(1, dozer_panel_agent::update::Message::PickerToggle),
+        );
+        assert!(!shell.conversations.state(1).unwrap().agent_picker_open());
+        assert!(shell.agent.picker.is_some());
+        shell.agent.open_overflow(1, (0., 0.));
+        shell.show_iced_conversation_filter(1);
+        assert!(!shell.agent.overlay_is_open());
+        assert!(shell.conversations.state(1).unwrap().agent_picker_open());
+        assert!(shell.agent.states[&1].term_tab_overflow_anchor.is_none());
+        assert!(!shell.agent.states[&1].agent_picker_open);
+        send(
+            &mut shell,
+            Msg::Conversations(1, dozer_panel_conversations::Message::AgentFilterClose),
+        );
+        assert!(!shell.conversations.state(1).unwrap().agent_picker_open());
+    }
+
+    #[test]
+    fn overlays_stay_mutually_exclusive_with_the_agent_picker_and_overflow_menu() {
+        use crate::adapters::agent::PickerMenu;
+        let mut shell = fresh("conv-iced-overlay-exclusion");
+        shell
+            .agent
+            .states
+            .insert(1, dozer_panel_agent::state::AgentPanelState::new());
+        shell.agent.open_picker(PickerMenu { pid: 1, at: None });
+        assert!(shell.agent.picker.is_some() && shell.agent.overflow.is_none());
+        shell.agent.open_overflow(1, (0., 0.));
+        assert!(shell.agent.picker.is_none() && shell.agent.overflow.is_some());
+        shell.agent.open_picker(PickerMenu { pid: 1, at: None });
+        assert!(shell.agent.picker.is_some() && shell.agent.overflow.is_none());
+        assert!(shell.agent_keys_blocked());
+    }
+
+    #[test]
+    fn conversations_real_focus_operation_updates_gain_and_loss_and_rejects_closed_owner() {
+        use crate::adapters::conversations::tests::{project, search_focus_feedback};
+        let (mut shell, rt, _) = conversations_shell("conv-real-focus");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        press(&mut shell, &shell::conversations_id());
+        for focused in [true, false] {
+            let task = Product::update(
+                &mut shell,
+                HostMessage::Product(Msg::ConversationSearchFocusFrame(1)),
+            );
+            let message = search_focus_feedback(&shell.conversations, &a, &rt, task, focused);
+            send(&mut shell, message);
+            assert_eq!(
+                shell.conversations.state(1).unwrap().search_focused(),
+                focused
+            );
+        }
+        let task = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::ConversationSearchFocusFrame(1)),
+        );
+        let stale = search_focus_feedback(&shell.conversations, &a, &rt, task, true);
+        shell.conversations.close_project(1);
+        shell.conversations.ensure_state(&a);
+        send(&mut shell, stale);
+        assert!(
+            !shell.conversations.state(1).unwrap().search_focused(),
+            "closed owner's query must not focus a reopened state"
+        );
+    }
+
+    #[test]
+    fn conversations_opposite_rail_allows_agent_keys_until_search_really_has_focus() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, _rt, _) = conversations_shell("conv-both-rails");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a);
+        press(&mut shell, &shell::conversations_id());
+        send(
+            &mut shell,
+            Msg::Shell(ShellMsg::RailDragMove {
+                side: Side::Left,
+                index: 0,
+            }),
+        );
+        send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
+        assert!(shell.panel_visible(&shell::conversations_id()));
+        assert!(shell.panel_visible(&shell::agent_id()));
+        assert!(!shell.agent_keys_blocked());
+        focus_search(&mut shell, 1, true);
+        assert!(shell.agent_keys_blocked());
+        let _ = update_host(
+            &mut shell,
+            HostMessage::Product(Msg::Shell(ShellMsg::TogglePane(shell::conversations_id()))),
+        );
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        assert!(!shell.agent_keys_blocked());
+    }
+
+    #[test]
+    fn conversations_state_changed_alone_does_not_refresh() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, rt, fake) = conversations_shell("conv-state-event");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        shell.agent.push_host_event_for_test(
+            1,
+            dozer_panel_agent::adapter::AgentHostEvent::StateChanged {
+                tab_id: 0,
+                agent: dozer_model::AgentKind::Claude,
+                state: dozer_model::AgentState::Running,
+                transcript_path: None,
+            },
+        );
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert!(fake.calls.lock().unwrap().is_empty());
+        assert!(shell.conversations.dirty.is_empty());
+    }
+
+    #[test]
+    fn conversations_host_turn_events_respect_readiness_visibility_and_current_project() {
+        use crate::adapters::agent::Status;
+        use crate::adapters::conversations::tests::{project, receive};
+        use dozer_panel_agent::adapter::AgentHostEvent;
+        let (mut shell, rt, fake) = conversations_shell("conv-turn-events");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        shell.conversations.ensure_state(&a);
+        // Hidden event defers work.
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        assert!(shell.conversations.dirty.contains(&1));
+        press(&mut shell, &shell::conversations_id());
+        let _ = receive(&mut shell.conversations, &rt);
+        assert_eq!(fake.calls.lock().unwrap().len(), 1);
+        assert!(!shell.conversations.dirty.contains(&1));
+        // Visible current ready event refreshes immediately.
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        let _ = receive(&mut shell.conversations, &rt);
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        shell.agent.shell.status = Status::Unavailable("offline".into());
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        shell.agent.shell.status = Status::Ready;
+        shell.projects.seed_for_test(project(2, "/b"));
+        shell
+            .agent
+            .push_host_event_for_test(1, AgentHostEvent::TurnEnded { tab_id: 0 });
+        shell
+            .agent
+            .push_host_event_for_test(2, AgentHostEvent::TurnEnded { tab_id: 0 });
+        let _ = update_host(&mut shell, HostMessage::Product(Msg::Tick));
+        rt.block_on(async { tokio::task::yield_now().await });
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
+        assert!(shell.conversations.state(2).is_none());
+    }
+
+    #[test]
+    fn conversations_search_focus_blocks_keys_and_late_hidden_focus_is_ignored() {
+        use crate::adapters::conversations::tests::project;
+        let (mut shell, _rt, _) = conversations_shell("conv-focus-routing");
+        let a = project(1, "/a");
+        shell.projects.seed_for_test(a.clone());
+        press(&mut shell, &shell::conversations_id());
+        focus_search(&mut shell, 1, true);
+        assert!(shell.conversations.state(1).unwrap().search_focused());
+        assert!(shell.agent_keys_blocked());
+        focus_search(&mut shell, 1, false);
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        press(&mut shell, &shell::agent_id());
+        focus_search(&mut shell, 1, true);
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        assert!(!shell.agent_keys_blocked());
+        press(&mut shell, &shell::conversations_id());
+        focus_search(&mut shell, 2, true);
+        assert!(!shell.conversations.state(1).unwrap().search_focused());
+        shell.conversations.close_project(1);
+        focus_search(&mut shell, 1, true);
+        assert!(shell.conversations.state(1).is_none());
+    }
+
+    #[test]
+    fn conversations_selected_with_agent_hidden_blocks_uncaptured_terminal_keys() {
+        let mut shell = fresh("conv-hidden-keys");
+        assert!(!shell.agent_keys_blocked());
+        press(&mut shell, &shell::conversations_id());
+        assert!(!shell.panel_visible(&shell::agent_id()));
         assert!(shell.agent_keys_blocked());
     }
 
