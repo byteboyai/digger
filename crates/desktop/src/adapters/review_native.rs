@@ -132,6 +132,11 @@ impl Serving {
     }
 }
 pub struct ReviewNative {
+    // Planned effects from every sync in one update_host turn; never live NSView evidence.
+    #[cfg(test)]
+    pub(crate) scheduled_actions: Vec<String>,
+    #[cfg(test)]
+    pub(crate) scheduled_target: Option<(LogicalRect, bool)>,
     host: Host,
     epoch: Arc<AtomicU64>,
     live: Option<Live>,
@@ -150,6 +155,10 @@ impl ReviewNative {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let epoch = Arc::new(AtomicU64::new(0));
         Self {
+            #[cfg(test)]
+            scheduled_actions: vec![],
+            #[cfg(test)]
+            scheduled_target: None,
             host: Host::new(epoch.clone()),
             epoch,
             live: None,
@@ -242,6 +251,23 @@ impl ReviewNative {
         } else {
             plan(self.live.as_ref(), &desired)
         };
+        #[cfg(test)]
+        {
+            self.scheduled_actions
+                .extend(actions.iter().map(|a| format!("{a:?}")));
+            self.scheduled_target = host_desired(
+                &desired,
+                self.live.as_ref().is_some_and(|l| {
+                    l.loaded
+                        && desired.project_id == Some(l.project_id)
+                        && desired
+                            .spec
+                            .as_ref()
+                            .is_some_and(|s| s.url == l.desired.url)
+                }) && !actions.contains(&Action::Destroy),
+            )
+            .map(|d| (d.rect, d.loaded));
+        }
         let replace = actions.contains(&Action::Destroy);
         let mut tasks = Vec::new();
         if replace {

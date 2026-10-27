@@ -78,6 +78,14 @@ const PREVIEW_CHROME_RESERVE_PX: f32 = 32.0 * 3.0 + 4.0 * 3.0;
 #[derive(Clone)]
 pub enum Msg {
     WindowReady(window::Id, Size),
+    /// Iced has no minimized event. Query the owning OS window, never infer it from focus.
+    WindowStateRefresh(window::Id),
+    WindowStateSample {
+        id: window::Id,
+        request: u64,
+        minimized: Option<bool>,
+        size: Option<Size>,
+    },
     /// 窗口骨架的消息(点图标、拖分隔线、窗口缩放……),由 `bytehost-chrome` 的 `ShellModel` 处理。
     Shell(ShellMsg),
     /// Agent 面板壳(守护进程可用性)的消息。
@@ -199,6 +207,8 @@ type PreviewCommands = (i64, Vec<dozer_model::PreviewCommand>);
 
 pub struct ProductShell {
     window: Option<window::Id>,
+    window_minimized: bool,
+    window_state_request: u64,
     catalog: PanelCatalog,
     /// 窗口骨架状态(布局、选中、收起、放大、尺寸……)。
     shell: ShellModel,
@@ -538,6 +548,8 @@ impl ProductShell {
 
         let mut shell = Self {
             window: None,
+            window_minimized: false,
+            window_state_request: 0,
             catalog,
             shell: model,
             shell_path,
@@ -941,6 +953,24 @@ impl ProductShell {
         Task::none()
     }
 
+    /// Sample both values on the runtime's window thread. A newer request, replacement
+    /// window, or closing owner makes an asynchronous response obsolete.
+    fn query_window_state(&mut self) -> Task<Msg> {
+        let Some(id) = self.window.filter(|_| !self.closing) else {
+            return Task::none();
+        };
+        self.window_state_request = self.window_state_request.wrapping_add(1);
+        let request = self.window_state_request;
+        window::is_minimized(id).then(move |minimized| {
+            window::size(id).map(move |size| Msg::WindowStateSample {
+                id,
+                request,
+                minimized,
+                size: Some(size),
+            })
+        })
+    }
+
     /// 原生 webview 的位置与可见性:矩形取自骨架的面板内容矩形(外框 − 外边距 − 内边距;放大态是放大盒子),
     /// 再各自减掉面板自己头部占的高度。**骨架负责"在哪、看不看得见",面板只负责自己头部多高。**
     fn sync_native(&mut self) -> Task<Msg> {
@@ -1039,7 +1069,10 @@ impl ProductShell {
             .conversations
             .sync_native(
                 window,
-                review_rect.is_some() && !closing && !self.review_overlay_open(),
+                review_rect.is_some()
+                    && !closing
+                    && !self.window_minimized
+                    && !self.review_overlay_open(),
                 review_rect.map(logical).unwrap_or(hidden),
                 self.projects.current_project_id(),
             )
@@ -2090,6 +2123,7 @@ impl Product<Msg> for ProductShell {
         match m {
             Msg::WindowReady(id, size) => {
                 self.window = Some(id);
+                self.window_minimized = false;
                 let resized = self.on_shell(ShellMsg::Resized {
                     w: size.width,
                     h: size.height,
@@ -2107,9 +2141,50 @@ impl Product<Msg> for ProductShell {
                 .discard();
                 #[cfg(not(target_os = "macos"))]
                 let guard = Task::none();
-                Task::batch([resized, guard])
+                let query = self.query_window_state();
+                Task::batch([resized, guard, query])
             }
-            Msg::Shell(m) => self.on_shell(m),
+            Msg::WindowStateRefresh(id) => {
+                if self.window == Some(id) && !self.closing {
+                    Task::batch([self.restyle_window(), self.query_window_state()])
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::WindowStateSample {
+                id,
+                request,
+                minimized,
+                size,
+            } => {
+                if self.closing || self.window != Some(id) || request != self.window_state_request {
+                    return Task::none();
+                }
+                if let Some(minimized) = minimized {
+                    self.window_minimized = minimized;
+                }
+                // Some platforms report zero client size while minimized. Keep the
+                // last usable layout until the restored window supplies its dimensions.
+                if let Some(size) = size.filter(|s| {
+                    !self.window_minimized && (s.width, s.height) != self.shell.window()
+                }) {
+                    self.on_shell(ShellMsg::Resized {
+                        w: size.width,
+                        h: size.height,
+                    })
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::Shell(m) => {
+                let resized = matches!(m, ShellMsg::Resized { .. });
+                let task = self.on_shell(m);
+                if resized {
+                    Task::batch([task, self.query_window_state()])
+                } else {
+                    task
+                }
+            }
             Msg::AgentShell(m) => {
                 let was_ready = self.agent.shell.status == crate::adapters::agent::Status::Ready;
                 let task = self
@@ -2297,7 +2372,8 @@ impl Product<Msg> for ProductShell {
                     .agent
                     .tooltip_deadline()
                     .is_some_and(|deadline| std::time::Instant::now() >= deadline);
-                self.apps.update(crate::apps::Message::Tick).map(Msg::Apps)
+                let apps = self.apps.update(crate::apps::Message::Tick).map(Msg::Apps);
+                Task::batch([apps, self.query_window_state()])
             }
             Msg::NativeUsage(event) => {
                 self.usage.native.update(event);
@@ -2859,6 +2935,8 @@ impl Product<Msg> for ProductShell {
 /// (复盘发现 6),产品消息则走 `Product::update`。`Product::update` 的 Surface 分支只消费、不再重投,
 /// 二者分工使路由不成环。
 pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg> {
+    #[cfg(test)]
+    shell.conversations.native.scheduled_actions.clear();
     let task = match msg {
         HostMessage::Surface(event) => route_lifecycle(shell, event),
         HostMessage::Product(m) => Product::update(shell, HostMessage::Product(m)),
@@ -2975,6 +3053,18 @@ fn agent_event(
     }
 }
 
+/// A native menu can unfocus the window without minimizing it. Events only ask
+/// for an OS sample; the guarded response changes review visibility.
+fn window_state_event(event: iced::Event, _: iced::event::Status, id: window::Id) -> Option<Msg> {
+    matches!(
+        event,
+        iced::Event::Window(
+            window::Event::Focused | window::Event::Unfocused | window::Event::Rescaled(_)
+        )
+    )
+    .then_some(Msg::WindowStateRefresh(id))
+}
+
 /// 订阅:窗口关闭请求、骨架需要的鼠标 / 缩放事件,以及仅在有动画时才开的 ~60fps 动画拍。
 pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     let events = iced::event::listen_with(|evt, _status, _id| {
@@ -3007,6 +3097,7 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         events,
         pointer,
         agent_input,
+        iced::event::listen_with(window_state_event),
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
     ];
     // 页签拖拽中:在页签行外松手也要结束拖拽(行内松手由页签行自己的 `on_release` 管),
@@ -5573,6 +5664,11 @@ mod tests {
                     |tab| matches!(&tab.kind, dozer_panel_preview::TabKind::File(p) if p == path),
                 )
             })
+    }
+
+    mod review_lifecycle {
+        use super::*;
+        include!("product_review_tests.rs");
     }
 
     fn send(shell: &mut ProductShell, m: Msg) {
