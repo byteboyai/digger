@@ -250,7 +250,9 @@ fn state_for(name: &str) -> (AgentPanel, (f32, f32)) {
                 true,
                 "shell\n",
             ));
-            panel.notice = Some("Could not create a new session: diggerd 拒绝了请求".into());
+            panel
+                .notice
+                .push("Could not create a new session: diggerd 拒绝了请求");
         }
         "daemon-unavailable" => {
             panel.shell.status =
@@ -341,9 +343,9 @@ impl Gallery {
             iced_widget::core::Border::default(),
         );
         let body: Element<'_, Msg> = row![term, list].height(Length::Fill).into();
-        let body: Element<'_, Msg> = match &self.panel.notice {
+        let body: Element<'_, Msg> = match self.panel.notice.text() {
             Some(note) => column![
-                text(note.clone())
+                text(note.to_owned())
                     .size(13.0)
                     .color(byteui::theme::color::current().red),
                 body

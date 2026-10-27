@@ -7,6 +7,7 @@
 //! **本期范围:** Task 2–4、6。键盘/输入法(Task 5)等 S6d-1 的输入法探针结果
 //! 由用户填写后再做;`focus` 恒假、不接收按键(报告里记入"待用户")。
 
+use super::notice::NoticeBar;
 use dozer_model::ProjectInfo;
 use dozer_panel_agent::adapter::{AgentCapabilities, HookInstaller};
 use dozer_panel_agent::display::AgentHover;
@@ -195,7 +196,7 @@ pub struct AgentPanel {
     tx: UnboundedSender<(i64, Message)>,
     rx: Mutex<Option<UnboundedReceiver<(i64, Message)>>>,
     /// 顶部一行错误提示(红字,可关闭)。Digger 一期没有 Toast。
-    pub notice: Option<String>,
+    pub notice: NoticeBar,
     /// hook/MCP 安装器登记的待展示警告(与 `DiggerHooks` 共享)。
     hook_warnings: Arc<Mutex<Vec<String>>>,
     /// 库交给产品跟随处理的跨面板事件(`TurnEnded` 等),按项目排队。
@@ -253,7 +254,7 @@ impl AgentPanel {
             handle: tokio::runtime::Handle::try_current().ok(),
             tx,
             rx: Mutex::new(Some(rx)),
-            notice: None,
+            notice: NoticeBar::default(),
             hook_warnings,
             host_events: Vec::new(),
             critical: Arc::new(Mutex::new(Vec::new())),
@@ -485,7 +486,7 @@ impl AgentPanel {
                 "digger: agent 面板/{:?}: {text}", // cli-output
                 notice.level
             );
-            self.notice = Some(text);
+            self.notice.push_quiet(text);
         }
         for request in requests {
             let dozer_panel_agent::adapter::AgentRequest::ShowPicker { at } = request;
@@ -525,7 +526,7 @@ impl AgentPanel {
     }
 
     pub fn dismiss_notice(&mut self) {
-        self.notice = None;
+        self.notice.dismiss();
     }
 
     fn drain_hook_warnings(&mut self) {
@@ -535,7 +536,7 @@ impl AgentPanel {
             .map(|mut warnings| std::mem::take(&mut *warnings))
             .unwrap_or_default();
         for warning in warnings {
-            self.notice = Some(warning);
+            self.notice.push(warning);
         }
     }
 

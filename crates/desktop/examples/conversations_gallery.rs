@@ -322,11 +322,10 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
         Msg::ConversationsNoticeDismiss => gallery.panel.dismiss_notice(),
         Msg::Shell(ShellMsg::DividerPress(_)) => {}
         // Keep synthetic import disabled: the real explicit import is exercised in Digger.
-        Msg::ConversationsImport(..) => {
-            gallery.panel.notice = Some(
-                "Synthetic gallery: use the isolated Digger launcher for explicit import.".into(),
-            )
-        }
+        Msg::ConversationsImport(..) => gallery
+            .panel
+            .notice
+            .push("Synthetic gallery: use the isolated Digger launcher for explicit import."),
         _ => {}
     }
     for (pid, request) in gallery.panel.take_requests() {
