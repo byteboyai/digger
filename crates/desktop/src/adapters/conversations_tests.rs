@@ -2000,7 +2000,7 @@ fn collapsed_notice_is_dismissible_and_outside_the_native_review() {
         "无法读取会话文件 /private/tmp/history/{}: connection lost",
         "nested-path/".repeat(50)
     );
-    panel.notice = Some(error.clone());
+    panel.notice.push(error.clone());
     let shared = ready();
     let mut view = panel.view(Some(&a), &area(600., true), &shared);
     let (_, node, _, texts) = layout(&mut view, 600.);

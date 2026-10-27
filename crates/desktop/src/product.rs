@@ -136,6 +136,10 @@ pub enum Msg {
     /// 「待办」面板的库消息(S3b-1)。
     Todo(dozer_panel_todo::Message),
     Conversations(i64, dozer_panel_conversations::Message),
+    /// 群聊面板的消息(项目 id 在库 Message 内部)。
+    GroupChat(dozer_panel_group_chat::Message),
+    GroupChatNoticeDismiss,
+    GroupChatTick,
     ConversationsImport(i64, crate::adapters::conversations_import::ImportEvent),
     ConversationsNoticeDismiss,
     ReviewNative(crate::adapters::review_native::Event),
@@ -225,6 +229,7 @@ pub struct ProductShell {
     /// 「待办」面板适配(S3b-1):按项目状态 + `diggerd` 的 TodoService。
     todo: crate::adapters::todo::TodoPanel,
     conversations: crate::adapters::conversations::ConversationsPanel,
+    group_chat: crate::adapters::group_chat::GroupChatPanel,
     /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
     markdown: crate::markdown::MarkdownPanel,
     /// 项目注册表与已开页签(Project 是 host 层共享业务,ADR-014)。
@@ -468,6 +473,7 @@ impl ProductShell {
             (shell::files_id(), "文件"),
             (shell::todo_id(), "待办"),
             (shell::agent_id(), "Agent"),
+            (shell::group_chat_id(), "群聊"),
             (shell::conversations_id(), "会话"),
         ] {
             catalog
@@ -515,6 +521,9 @@ impl ProductShell {
             conversation,
             summary,
             transcript,
+        );
+        let group_chat = crate::adapters::group_chat::GroupChatPanel::new(
+            crate::daemon::Daemon::new().services(),
         );
         let markdown = crate::markdown::MarkdownPanel::new();
         // 项目数据与布局同在一个数据目录里:生产是产品数据根,测试是各自的临时目录。
@@ -564,6 +573,7 @@ impl ProductShell {
             files,
             agent: crate::adapters::agent::AgentPanel::new(),
             conversations,
+            group_chat,
             term_style: crate::fonts::terminal_style(),
             preview: None,
             preview_bridge: None,
@@ -742,6 +752,9 @@ impl ProductShell {
         if *panel == shell::conversations_id() {
             return self.activate_conversations_panel();
         }
+        if *panel == shell::group_chat_id() {
+            return self.activate_group_chat_panel();
+        }
         if *panel == shell::todo_id() {
             self.activate_todo_panel();
         }
@@ -773,6 +786,15 @@ impl ProductShell {
         } else {
             Task::none()
         }
+    }
+
+    fn activate_group_chat_panel(&mut self) -> Task<Msg> {
+        let Some(project) = self.projects.current_project().cloned() else {
+            self.group_chat.set_focus(None);
+            return Task::none();
+        };
+        self.group_chat
+            .activate(&project, std::time::Instant::now())
     }
 
     /// 当前项目从 `before` 换成了现在这个(页签点击 / 关闭 / 删除 / 列表修剪都走这里):
@@ -811,6 +833,16 @@ impl ProductShell {
         self.activate_todo_panel();
         if self.panel_visible(&shell::conversations_id()) {
             let _ = self.activate_conversations_panel();
+        }
+        if let Some(old) = before
+            && before != self.projects.current_project_id()
+        {
+            self.group_chat.cancel_dialog(old);
+        }
+        self.group_chat
+            .set_focus(self.projects.current_project_id());
+        if self.panel_visible(&shell::group_chat_id()) {
+            let _ = self.activate_group_chat_panel();
         }
     }
 
@@ -858,6 +890,7 @@ impl ProductShell {
         let _ = close;
         let _ = self.agent.close_project(project.id);
         self.conversations.close_project(project.id);
+        self.group_chat.close_project(project.id);
         self.on_current_project_changed(before, before != Some(project.id));
         let (project, tx) = (project.clone(), self.delete_tx.clone());
         self.project
@@ -1102,6 +1135,10 @@ impl ProductShell {
     fn review_overlay_open(&self) -> bool {
         self.preview_overlay_open()
             || self.agent.overlay_is_open()
+            || self
+                .group_chat
+                .state(self.projects.current_project_id().unwrap_or_default())
+                .is_some_and(|s| s.new_group_dialog_open())
             || self.projects.current_project().is_some_and(|p| {
                 self.conversations
                     .state(p.id)
@@ -1339,6 +1376,10 @@ impl ProductShell {
             || self.preview_overlay_open()
             || self.agent.overlay_is_open()
             || self
+                .group_chat
+                .state(self.projects.current_project_id().unwrap_or_default())
+                .is_some_and(|s| s.new_group_dialog_open())
+            || self
                 .projects
                 .current_project()
                 .and_then(|p| self.agent.states.get(&p.id))
@@ -1512,10 +1553,10 @@ impl ProductShell {
             tokens.bg,
             tokens.term_bg,
         );
-        let body = match &self.agent.notice {
+        let body = match self.agent.notice.text() {
             Some(notice) => {
                 let line: Element<'_, Msg> = row![
-                    text(notice.clone())
+                    text(notice.to_owned())
                         .size(byteui::theme::font::caption())
                         .color(tokens.red)
                         .width(Length::Fill),
@@ -1983,6 +2024,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.files" => self.files_view(area),
             "digger.agent" => self.agent_view(area),
             "digger.conversations" => self.conversations_view(area),
+            "digger.group_chat" => self.group_chat.view(self.projects.current_project(), area),
             _ => column![].into(),
         }
     }
@@ -2098,6 +2140,13 @@ fn publish_panes(panes: &bytehost_desktop::PaneStore) {
 }
 
 /// 待办轮询只在面板真正可见且未在退出时订阅。
+fn group_chat_poll_active(shell: &ProductShell) -> bool {
+    !shell.closing
+        && shell
+            .group_chat
+            .poll_wanted(shell.panel_visible(&shell::group_chat_id()))
+}
+
 fn todo_poll_active(shell: &ProductShell) -> bool {
     !shell.closing && shell.panel_visible(&shell::todo_id())
 }
@@ -2222,7 +2271,15 @@ impl Product<Msg> for ProductShell {
                 } else {
                     Task::none()
                 };
-                Task::batch([task, enter, conversations])
+                let group_chat = if !was_ready
+                    && self.agent.shell.status == crate::adapters::agent::Status::Ready
+                    && self.panel_visible(&shell::group_chat_id())
+                {
+                    self.activate_group_chat_panel()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, enter, conversations, group_chat])
             }
             Msg::Agent(pid, m) => {
                 if matches!(
@@ -2427,6 +2484,27 @@ impl Product<Msg> for ProductShell {
                 self.conversations.dismiss_notice();
                 Task::none()
             }
+            Msg::GroupChat(message) => {
+                if matches!(
+                    message,
+                    dozer_panel_group_chat::Message::NewGroupDialogToggle(_)
+                ) {
+                    self.agent.close_picker();
+                }
+                let open = self.projects.open_ids().to_vec();
+                self.group_chat.update(message, |pid| open.contains(&pid))
+            }
+            Msg::GroupChatNoticeDismiss => {
+                self.group_chat.dismiss_notice();
+                Task::none()
+            }
+            Msg::GroupChatTick => {
+                self.group_chat.tick(
+                    std::time::Instant::now(),
+                    self.panel_visible(&shell::group_chat_id()),
+                );
+                Task::none()
+            }
             Msg::Todo(message) => {
                 for effect in self.todo.update(message) {
                     match effect {
@@ -2505,6 +2583,7 @@ impl Product<Msg> for ProductShell {
                     .filter(|id| !self.projects.open_ids().contains(id))
                 {
                     self.conversations.close_project(*id);
+                    self.group_chat.close_project(*id);
                 }
                 if before != self.projects.current_project_id() {
                     self.agent.reset_input_state();
@@ -2677,6 +2756,7 @@ impl Product<Msg> for ProductShell {
                         .update(crate::projects::Message::Close(project_id));
                     let _ = self.agent.close_project(project_id);
                     self.conversations.close_project(project_id);
+                    self.group_chat.close_project(project_id);
                     self.on_current_project_changed(before, before != Some(project_id));
                     // 被删项目的布局文件不留孤儿。
                     if let Some(path) = self.project_shell_path_for(project_id) {
@@ -2916,7 +2996,14 @@ impl Product<Msg> for ProductShell {
         } else {
             None
         };
-        match agent_overlay {
+        let body: Element<'_, Msg> = match agent_overlay {
+            Some(overlay) => iced::widget::stack![body, overlay].into(),
+            None => body,
+        };
+        match self
+            .group_chat
+            .group_create_overlay(self.projects.current_project())
+        {
             Some(overlay) => iced::widget::stack![body, overlay].into(),
             None => body,
         }
@@ -3123,6 +3210,11 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     if todo_poll_active(shell) {
         subs.push(iced::time::every(crate::adapters::todo::POLL_INTERVAL).map(|_| Msg::TodoPoll));
     }
+    if group_chat_poll_active(shell) {
+        subs.push(
+            iced::time::every(std::time::Duration::from_millis(500)).map(|_| Msg::GroupChatTick),
+        );
+    }
     // 名称编辑框的真焦点态只有渲染时(Operation)读得到:用一个 16ms 的订阅在帧与帧之间
     // 把它取回来(同 Dozer 的 `CaptureNameEditFocus`,这里借订阅当逐帧钩子)。
     if let Some(project) = shell.projects.current_project().map(|p| p.id)
@@ -3195,6 +3287,31 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
             }),
         );
     }
+    // 新建群弹窗:Esc 取消(背景点击不关闭,保留草稿)。
+    if let Some(pid) = shell.projects.current_project().map(|p| p.id)
+        && shell
+            .group_chat
+            .state(pid)
+            .is_some_and(|state| state.new_group_dialog_open())
+    {
+        subs.push(
+            iced::event::listen_with(|evt, _status, _id| {
+                matches!(
+                    evt,
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                        ..
+                    })
+                )
+                .then_some(())
+            })
+            .with(pid)
+            .map(|(pid, ())| {
+                Msg::GroupChat(dozer_panel_group_chat::Message::NewGroupDialogCancel(pid))
+            }),
+        );
+    }
+
     // 右键菜单打开时订阅 Esc:关掉浮层(点空白走浮层自己的透明按下区)。
     if shell.files.has_modal() || shell.files.menu().is_some() {
         subs.push(iced::event::listen_with(|evt, _status, _id| {
@@ -3291,6 +3408,9 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     shell.todo.attach_handle(tokio::runtime::Handle::current());
     shell
         .conversations
+        .attach_handle(tokio::runtime::Handle::current());
+    shell
+        .group_chat
         .attach_handle(tokio::runtime::Handle::current());
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
@@ -3415,6 +3535,12 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let group_chat_task = match shell.group_chat.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|m| (Msg::GroupChat(m), rx))
+        })),
+        None => Task::none(),
+    };
     let conversations_task = match shell.conversations.take_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv()
@@ -3466,6 +3592,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             lifecycle_task,
             daemon_task,
             agent_task,
+            group_chat_task,
             conversations_task,
             conversations_import_task,
             review_native_task,
@@ -4935,7 +5062,7 @@ mod tests {
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 9);
+        assert_eq!(shell.catalog.len(), 10);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
@@ -5998,5 +6125,13 @@ mod tests {
             shell.pane_collapsed(&shell::todo_id()),
             "ToggleListCollapse must flip the shell PaneStore"
         );
+    }
+
+    #[test]
+    fn group_chat_poll_is_off_by_default_and_when_closing() {
+        let mut shell = ProductShell::new();
+        assert!(!group_chat_poll_active(&shell));
+        shell.closing = true;
+        assert!(!group_chat_poll_active(&shell));
     }
 }

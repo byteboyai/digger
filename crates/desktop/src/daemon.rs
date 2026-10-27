@@ -80,6 +80,33 @@ impl Daemon {
         (client.clone(), client.clone(), client)
     }
 
+    /// 完整服务束:会话/对话/总结/群聊走同一个 `diggerd` Client;其余面板
+    /// 在本任务不使用,用 `UnavailableService` 占位。
+    pub fn services(&self) -> dozer_services::Services {
+        use crate::adapters::project::UnavailableService;
+        use std::sync::Arc;
+        let client = Arc::new(self.client.clone());
+        let unavailable =
+            |reason: &str| -> Arc<UnavailableService> { Arc::new(UnavailableService::new(reason)) };
+        dozer_services::Services {
+            usage: unavailable("群聊面板不用用量服务"),
+            todo: unavailable("群聊面板不用待办服务"),
+            project: unavailable("群聊面板不用项目服务"),
+            transcript: client.clone(),
+            memory: unavailable("群聊面板不用记忆服务"),
+            group_chat: client.clone(),
+            conversation: client.clone(),
+            summary: client.clone(),
+            codehealth: unavailable("群聊面板不用健康服务"),
+            context: unavailable("群聊面板不用上下文服务"),
+            edit_history: unavailable("群聊面板不用编辑历史服务"),
+            bookmark: unavailable("群聊面板不用书签服务"),
+            locale: unavailable("群聊面板不用语言服务"),
+            daemon: unavailable("群聊面板不用 daemon 服务"),
+            session: client,
+        }
+    }
+
     /// 确保守护进程在跑并能响应请求。
     ///
     /// 先尝试连接并握手;连不上就 spawn 一个 `diggerd`,隔 1 秒重试最多 3 次。

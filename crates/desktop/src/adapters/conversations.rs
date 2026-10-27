@@ -18,6 +18,7 @@ use super::conversations_display::{ConversationsDisplay, relative_time};
 use super::conversations_import::{
     ImportEvent, ImportMarker, ImportPrompt, ImportState, LOG_DISCLOSURE, READ_DISCLOSURE,
 };
+use super::notice::NoticeBar;
 use crate::product::Msg;
 
 pub struct NoTodos;
@@ -40,7 +41,7 @@ pub struct ConversationsPanel {
     handle: Option<tokio::runtime::Handle>,
     tx: tokio::sync::mpsc::UnboundedSender<(i64, Message)>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<(i64, Message)>>,
-    pub notice: Option<String>,
+    pub notice: NoticeBar,
     pub(crate) dirty: HashSet<i64>,
     requests: Vec<(i64, ConversationsRequest)>,
     caps: ConversationsCapabilities,
@@ -88,7 +89,7 @@ impl ConversationsPanel {
             handle: None,
             tx,
             rx: Some(rx),
-            notice: None,
+            notice: NoticeBar::default(),
             dirty: HashSet::new(),
             requests: vec![],
             caps: ConversationsCapabilities::default(),
@@ -173,13 +174,13 @@ impl ConversationsPanel {
                         if let Err(error) = self.import_marker.save(&self.marker_path) {
                             let message = format!("导入已完成,但无法保存导入提示标记: {error}");
                             eprintln!("digger: conversations: {message}");
-                            self.notice = Some(message);
+                            self.notice.push_quiet(message);
                         }
                         return self.activate(project);
                     }
                     Err(error) => {
                         eprintln!("digger: conversations import: {error}");
-                        self.notice = Some(format!("历史会话导入失败: {error}"));
+                        self.notice.push_quiet(format!("历史会话导入失败: {error}"));
                         self.imports.insert(pid, ImportState::Failed(error));
                     }
                 }
@@ -261,7 +262,7 @@ impl ConversationsPanel {
     ) -> Task<Msg> {
         let loaded = self.native.update(event);
         if let Some(error) = self.native.failed() {
-            self.notice = Some(error.to_owned());
+            self.notice.push(error.to_owned());
         }
         if let Some(pid) = loaded {
             return self.update_library(pid, Message::ReviewTraceLoaded, project);
@@ -397,11 +398,11 @@ impl ConversationsPanel {
         for notice in notices {
             let message = dozer_panel_conversations::i18n::render(&notice.text, "zh-CN");
             eprintln!("digger: conversations {:?}: {message}", notice.level);
-            self.notice = Some(message);
+            self.notice.push_quiet(message);
         }
         if let Some((error, daemon_unavailable)) = failure {
             eprintln!("digger: conversations: {error}");
-            self.notice = Some(error.clone());
+            self.notice.push_quiet(error.clone());
             if daemon_unavailable {
                 // Reuse the shared status/retry lifecycle. Only a library-accepted
                 // result reaches here; stale or closed-project errors cannot mark
@@ -424,7 +425,7 @@ impl ConversationsPanel {
         self.requests.retain(|(id, _)| *id != pid);
     }
     pub fn dismiss_notice(&mut self) {
-        self.notice = None;
+        self.notice.dismiss();
     }
     pub(crate) fn review_notice_height(&self, collapsed: bool) -> f32 {
         if collapsed && self.notice.is_some() {

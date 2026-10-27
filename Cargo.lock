@@ -1085,6 +1085,7 @@ dependencies = [
  "dozer-panel-agent",
  "dozer-panel-conversations",
  "dozer-panel-files",
+ "dozer-panel-group-chat",
  "dozer-panel-host",
  "dozer-panel-preview",
  "dozer-panel-project",
@@ -1412,6 +1413,25 @@ dependencies = [
  "serde_json",
  "tokio",
  "trash",
+]
+
+[[package]]
+name = "dozer-panel-group-chat"
+version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-26b#c76302fc56297e0263f7c56670217dea81bcaace"
+dependencies = [
+ "bytehost-core",
+ "byteui",
+ "dozer-i18n",
+ "dozer-model",
+ "dozer-panel-host",
+ "dozer-services",
+ "iced_renderer",
+ "iced_widget",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

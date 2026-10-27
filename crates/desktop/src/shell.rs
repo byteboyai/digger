@@ -54,10 +54,16 @@ pub fn conversations_id() -> PanelId {
     id("digger.conversations")
 }
 
+/// 群聊面板:落盘 id 不随显示名称变化。
+pub fn group_chat_id() -> PanelId {
+    id("digger.group_chat")
+}
+
 /// 产品的全部面板。落盘时清单里有而文件里没有的面板,会回到它的默认栏(新版本新增面板不会重置用户布局)。
 pub fn all_panels() -> Vec<PanelId> {
     vec![
         agent_id(),
+        group_chat_id(),
         conversations_id(),
         markdown_id(),
         info_id(),
@@ -80,6 +86,7 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
         "digger.files" => ("文件", IconKind::FolderTree),
         "digger.todo" => ("待办", IconKind::ListTodo),
         "digger.agent" => ("Agent", IconKind::Brain),
+        "digger.group_chat" => ("群聊", IconKind::SquareSparkles),
         "digger.conversations" => ("会话", IconKind::BotMessageSquare),
         _ => return None,
     };
@@ -105,14 +112,16 @@ pub fn list_min_width() -> f32 {
 /// ——配对的第一块(列表)默认渲染在前,预览在后(右)。列表可拖窄收起,收起后预览独占整块。
 pub fn rules(panel: &PanelId) -> Option<PanelRules> {
     match panel.as_str() {
-        "digger.usage" | "digger.agent" | "digger.conversations" => Some(PanelRules {
-            default_side: Side::Right,
-            pane: Some(PaneRules {
-                spec: PaneSpec::new(false, true),
-                default_split: byteui::theme::geometry::default_split_ratio(),
-                min_first_px: list_min_width(),
-            }),
-        }),
+        "digger.usage" | "digger.agent" | "digger.conversations" | "digger.group_chat" => {
+            Some(PanelRules {
+                default_side: Side::Right,
+                pane: Some(PaneRules {
+                    spec: PaneSpec::new(false, true),
+                    default_split: byteui::theme::geometry::default_split_ratio(),
+                    min_first_px: list_min_width(),
+                }),
+            })
+        }
         "digger.project" | "digger.files" | "digger.todo" => Some(PanelRules {
             default_side: Side::Left,
             pane: Some(PaneRules {
@@ -149,7 +158,13 @@ pub fn defaults() -> Defaults {
                 markdown_id(),
                 info_id(),
             ],
-            vec![agent_id(), conversations_id(), apps_id(), usage_id()],
+            vec![
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id(),
+            ],
         ],
         selected: [markdown_id(), agent_id()],
         left_width: 640.0,
@@ -181,8 +196,8 @@ pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
 
 fn load_file(path: &Path) -> Loaded {
     let json = std::fs::read_to_string(path).ok().map(|j| {
-        conversations_after_agent(&agent_first_on_right(&files_after_project(
-            &project_first_on_left(&j),
+        group_chat_after_agent(&conversations_after_agent(&agent_first_on_right(
+            &files_after_project(&project_first_on_left(&j)),
         )))
     });
     persist::load(
@@ -196,6 +211,36 @@ fn load_file(path: &Path) -> Loaded {
 /// 旧布局缺会话时放到右栏 Agent 后面;Agent 在左栏时放到右栏最前。
 /// 只改读入文本中的栏顺序,保留两侧的选中字段;已放置(任一栏)则原样返回。
 /// 不写盘,更高 schema 的保护仍由 `Loaded::may_save` 执行。
+fn group_chat_after_agent(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_owned();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return json.to_owned();
+    };
+    let wire = group_chat_id();
+    if ["left", "right"].iter().any(|side| {
+        object
+            .get(*side)
+            .and_then(|v| v.as_array())
+            .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(wire.as_str())))
+    }) {
+        return json.to_owned();
+    }
+    let right = object
+        .entry("right")
+        .or_insert_with(|| serde_json::json!([]));
+    let Some(right) = right.as_array_mut() else {
+        return json.to_owned();
+    };
+    let at = right
+        .iter()
+        .position(|v| v.as_str() == Some(agent_id().as_str()))
+        .map_or(0, |i| i + 1);
+    right.insert(at, serde_json::Value::String(wire.as_str().to_owned()));
+    value.to_string()
+}
+
 fn conversations_after_agent(json: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
         return json.to_owned();
@@ -369,6 +414,7 @@ mod tests {
             d.rails[1],
             [
                 agent_id(),
+                group_chat_id(),
                 id("digger.conversations"),
                 apps_id(),
                 usage_id()
@@ -387,6 +433,7 @@ mod tests {
             model.rail(Side::Right),
             [
                 agent_id(),
+                group_chat_id(),
                 id("digger.conversations"),
                 apps_id(),
                 usage_id()
@@ -466,7 +513,7 @@ mod tests {
                 r#"{{"left":["digger.agent","digger.markdown"],"right":{right},"selected_left":"digger.agent","selected_right":"digger.usage"}}"#
             );
             let (model, dir) = load_json(&format!("conversations-no-agent-{tag}"), &json);
-            assert_eq!(model.rail(Side::Right)[0], id("digger.conversations"));
+            assert_eq!(model.rail(Side::Right)[0], id("digger.group_chat"));
             assert_eq!(model.selected(Side::Left), &agent_id());
             if tag == "occupied" {
                 assert_eq!(model.selected(Side::Right), &usage_id());
@@ -590,7 +637,13 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [agent_id(), conversations_id(), apps_id(), usage_id()]
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
         );
         assert_eq!(model.selected(Side::Left), &markdown_id());
         assert_eq!(model.selected(Side::Right), &agent_id());
@@ -617,6 +670,7 @@ mod tests {
             model.rail(Side::Right),
             [
                 agent_id(),
+                group_chat_id(),
                 conversations_id(),
                 apps_id(),
                 usage_id(),
@@ -670,7 +724,13 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [agent_id(), conversations_id(), apps_id(), usage_id()],
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ],
             "the new panels land on their default side"
         );
         assert_eq!(model.left_width(), 500.0);
@@ -712,7 +772,13 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [agent_id(), conversations_id(), apps_id(), usage_id()]
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -784,7 +850,13 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [agent_id(), conversations_id(), apps_id(), usage_id()]
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
         );
         assert_eq!(
             model.selected(Side::Right),
@@ -1093,7 +1165,13 @@ mod tests {
         );
         assert_eq!(
             first.rail(Side::Right),
-            [agent_id(), conversations_id(), apps_id(), usage_id()]
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
         );
         drag_left_width_to(&mut first, 744.0);
         persist::save_atomic(&project, &first).unwrap();
@@ -1152,8 +1230,125 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [agent_id(), conversations_id(), apps_id(), usage_id()]
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_chat_panel_id_is_the_persisted_wire_name() {
+        let panel = group_chat_id();
+        assert_eq!(panel.as_str(), "digger.group_chat");
+        assert!(all_panels().contains(&panel));
+        let meta = meta(&panel).expect("registered group chat metadata");
+        assert_eq!(meta.title, "群聊");
+        assert_eq!(meta.icon, IconKind::SquareSparkles);
+    }
+
+    #[test]
+    fn the_default_layout_orders_agent_group_chat_conversations_apps_usage() {
+        let d = defaults();
+        assert_eq!(
+            d.rails[1],
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
+        );
+        assert_eq!(d.selected, [markdown_id(), agent_id()]);
+    }
+
+    #[test]
+    fn an_old_file_without_group_chat_places_it_right_after_agent_and_keeps_selection() {
+        let (model, dir) = load_json(
+            "group-chat-old",
+            r#"{"left":["digger.project","digger.files","digger.markdown"],"right":["digger.agent","digger.conversations","digger.apps","digger.usage"],"selected_right":"digger.conversations"}"#,
+        );
+        assert_eq!(
+            model.rail(Side::Right),
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
+        );
+        assert_eq!(model.selected(Side::Right), &conversations_id());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_file_with_only_agent_and_apps_gets_group_chat_after_agent() {
+        let (model, dir) = load_json(
+            "group-chat-only-agent",
+            r#"{"left":["digger.project"],"right":["digger.agent","digger.apps"]}"#,
+        );
+        assert_eq!(
+            model.rail(Side::Right),
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                apps_id(),
+                usage_id()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_chat_migration_is_idempotent() {
+        let once = group_chat_after_agent(
+            r#"{"left":[],"right":["digger.agent","digger.conversations"]}"#,
+        );
+        assert_eq!(group_chat_after_agent(&once), once);
+        let placed = r#"{"left":[],"right":["digger.group_chat","digger.agent"]}"#;
+        assert_eq!(group_chat_after_agent(placed), placed);
+    }
+
+    #[test]
+    fn an_old_file_with_an_empty_right_rail_gets_group_chat_first() {
+        let (model, dir) = load_json(
+            "group-chat-empty",
+            r#"{"left":["digger.markdown"],"right":[]}"#,
+        );
+        assert_eq!(model.rail(Side::Right)[0], agent_id());
+        assert!(model.rail(Side::Right).contains(&group_chat_id()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_chat_is_a_right_pair_with_the_same_geometry_as_conversations() {
+        let g = rules(&group_chat_id()).expect("group chat rules");
+        assert_eq!(g.default_side, Side::Right);
+        let pane = g.pane.expect("group chat pair");
+        assert_eq!(pane.spec, bytehost_desktop::PaneSpec::new(false, true));
+        assert_eq!(pane.min_first_px, list_min_width());
+        let model = ShellModel::new(
+            defaults().rails.clone(),
+            defaults().selected.clone(),
+            defaults().left_width,
+            defaults().window,
+        )
+        .unwrap();
+        let side = model.side_of(&group_chat_id()).unwrap();
+        let rects = model.pair_rects(
+            side,
+            &Ctx {
+                metrics: &metrics_from_theme(),
+                rules: &rules,
+            },
+        );
+        assert!(rects.is_some());
     }
 }
