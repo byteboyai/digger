@@ -1,0 +1,54 @@
+{
+  "scope": "Task 0-5; stopped by user before Task 6 and final workspace gates",
+  "code_head": "e9c79489533450598f76b5717947619c22914ac7",
+  "branch": "feat/conversations-review",
+  "workspace": "/private/tmp/digger-s7c",
+  "baseline": {
+    "passed": 712,
+    "failed": 1,
+    "ignored": 0,
+    "total": 713,
+    "exit": 101,
+    "failed_tests": [
+      "a_restart_after_a_kill_reaps_the_recorded_orphan_and_leaves_unrelated_processes_alone"
+    ]
+  },
+  "expected_final_default_workspace_tests": 788,
+  "final_workspace_gates": {
+    "status": "not_run",
+    "reason": "user requested stop after Task 5"
+  },
+  "last_verified": {
+    "desktop_unit_passed": 601,
+    "desktop_integration_passed": 7,
+    "explicit_gallery_tests_passed": 4,
+    "python_tests_passed": 6,
+    "desktop_tests_exit": 0,
+    "gallery_tests_exit": 0,
+    "gallery_build_exit": 0,
+    "desktop_clippy_all_targets_exit": 0,
+    "cargo_fmt_exit": 0
+  },
+  "preserved_native_tests": {
+    "usage_native.rs": {
+      "baseline_inline_tests": 0,
+      "current_inline_tests": 0,
+      "inline_test_module_unchanged": true
+    },
+    "todo_native.rs": {
+      "baseline_inline_tests": 7,
+      "current_inline_tests": 7,
+      "inline_test_module_unchanged": true
+    }
+  },
+  "gui": {
+    "command": "orca computer get-app-state --app pid:67976 --json",
+    "exit": 1,
+    "error": "app_not_found",
+    "screenshots": [],
+    "launcher_log": "/private/tmp/s7c-gallery-observation/launch.log",
+    "pid": 67976
+  },
+  "task6": "not_started",
+  "no_merge_push_release_install_version_change": true
+}
