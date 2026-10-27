@@ -434,16 +434,30 @@ impl ConversationsPanel {
     }
     fn notice_view(&self) -> Option<Element<'_, Msg>> {
         let tokens = byteui::theme::color::current();
+        let scale = byteui::theme::icon_size::scale();
+        let button_size = byteui::theme::geometry::tab_button_size();
         self.notice.as_ref().map(|notice| {
             row![
                 text(notice.clone())
                     .size(byteui::theme::font::caption())
                     .color(tokens.red)
                     .width(Length::Fill),
-                button(text("×").color(tokens.dim)).on_press(Msg::ConversationsNoticeDismiss)
+                button(
+                    container(
+                        text("×")
+                            .size(byteui::theme::font::caption())
+                            .color(tokens.dim)
+                    )
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                )
+                .padding(super::conversations_display::review_button_padding())
+                .width(Length::Fixed(button_size))
+                .height(Length::Fixed(button_size))
+                .on_press(Msg::ConversationsNoticeDismiss)
             ]
-            .spacing(8)
-            .padding([6, 12])
+            .spacing(8. * scale)
+            .padding([6. * scale, 12. * scale])
             .align_y(iced::Alignment::Start)
             .into()
         })

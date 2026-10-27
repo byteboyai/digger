@@ -1970,7 +1970,8 @@ fn collapsed_notice_is_dismissible_and_outside_the_native_review() {
     panel.notice = Some(error.clone());
     let shared = ready();
     let mut view = panel.view(Some(&a), &area(600., true), &shared);
-    let texts = layout(&mut view, 600.).3.0;
+    let (_, node, _, texts) = layout(&mut view, 600.);
+    let texts = texts.0;
     let close = texts.iter().find(|(s, _)| s == "×").unwrap().1;
     assert!(texts.iter().any(|(s, _)| s == &error));
     assert!(
@@ -1984,7 +1985,7 @@ fn collapsed_notice_is_dismissible_and_outside_the_native_review() {
             w: 600.,
             h: 600. - panel.review_notice_height(true),
         },
-        1.,
+        byteui::theme::icon_size::scale(),
     );
     assert!(close.y + close.height <= bounds.y, "{close:?} {bounds:?}");
     let header = texts.iter().find(|(s, _)| s == "对话").unwrap().1;
@@ -1992,6 +1993,29 @@ fn collapsed_notice_is_dismissible_and_outside_the_native_review() {
         header.y + header.height <= bounds.y,
         "header {header:?} covered by native {bounds:?}"
     );
+    fn rectangles(layout: iced_core::Layout<'_>, out: &mut Vec<iced_core::Rectangle>) {
+        out.push(layout.bounds());
+        for child in layout.children() {
+            rectangles(child, out);
+        }
+    }
+    let mut rects = vec![];
+    rectangles(iced_core::Layout::new(&node), &mut rects);
+    let mut found = false;
+    for rect in rects {
+        if click(&mut view, rect.center(), 600.)
+            .iter()
+            .any(|msg| matches!(msg, Msg::ConversationsNoticeDismiss))
+        {
+            found = true;
+            assert!(
+                rect.y >= 0. && rect.y + rect.height <= panel.review_notice_height(true),
+                "entire dismiss hit bounds {rect:?} must be inside initial notice viewport at scale {}",
+                byteui::theme::icon_size::scale()
+            );
+        }
+    }
+    assert!(found, "notice dismiss button must be hittable");
     assert!(
         click(&mut view, close.center(), 600.)
             .iter()
@@ -2008,6 +2032,17 @@ fn actual_widget_header_and_collapse_control_are_above_native_review() {
         None,
     );
     let (_, head_node, _, _) = layout(&mut head, 600.);
+    let divider = head_node.children().last().unwrap().bounds();
+    let style = super::super::conversations_display::review_pane_style();
+    assert!(divider.height > 0.);
+    assert!(
+        style.padding.top + divider.y + divider.height
+            <= byteui::theme::geometry::preview_chrome_top_px(),
+        "actual divider {divider:?} plus pane top {} exceeds native chrome {} at scale {}",
+        style.padding.top,
+        byteui::theme::geometry::preview_chrome_top_px(),
+        byteui::theme::icon_size::scale()
+    );
     assert!(
         head_node.size().height > byteui::theme::geometry::tab_button_size(),
         "header must contain its existing divider"
@@ -2017,44 +2052,62 @@ fn actual_widget_header_and_collapse_control_are_above_native_review() {
     let a = project(1, "/a");
     panel.ensure_state(&a);
     let shared = ready();
-    let mut view = panel.view(Some(&a), &area(600., true), &shared);
-    let (_, node, _, texts) = layout(&mut view, 600.);
-    let bounds = super::super::review_geometry::review_bounds(
-        bytehost_chrome::Rect {
-            x: 0.,
-            y: 0.,
-            w: 600.,
-            h: 600.,
-        },
-        1.,
-    );
-    let header = texts.0.iter().find(|(s, _)| s == "对话").unwrap().1;
-    assert!(
-        header.y + header.height <= bounds.y,
-        "{header:?} {bounds:?}"
-    );
-    fn rectangles(layout: iced_core::Layout<'_>, out: &mut Vec<iced_core::Rectangle>) {
-        out.push(layout.bounds());
-        for child in layout.children() {
-            rectangles(child, out);
+    for collapsed in [false, true] {
+        let mut view = panel.view(Some(&a), &area(600., collapsed), &shared);
+        let (_, node, _, texts) = layout(&mut view, 600.);
+        let bounds = super::super::review_geometry::review_bounds(
+            if collapsed {
+                bytehost_chrome::Rect::new(0., 0., 600., 600.)
+            } else {
+                let block = node.children().last().unwrap().bounds();
+                bytehost_chrome::Rect::new(block.x, block.y, block.width, block.height)
+            },
+            byteui::theme::icon_size::scale(),
+        );
+        let header = texts.0.iter().find(|(s, _)| s == "对话").unwrap().1;
+        assert!(
+            header.y + header.height <= bounds.y,
+            "{header:?} {bounds:?}"
+        );
+        fn rectangles(layout: iced_core::Layout<'_>, out: &mut Vec<iced_core::Rectangle>) {
+            out.push(layout.bounds());
+            for child in layout.children() {
+                rectangles(child, out);
+            }
         }
-    }
-    let mut all = vec![];
-    rectangles(iced_core::Layout::new(&node), &mut all);
-    let mut found = false;
-    for rect in all {
-        if click(&mut view, rect.center(), 600.)
-            .iter()
-            .any(|msg| matches!(msg, Msg::Shell(bytehost_chrome::ShellMsg::TogglePane(_))))
-        {
-            found = true;
-            assert!(
-                rect.y + rect.height <= bounds.y,
-                "collapse button {rect:?} covered by native {bounds:?}"
-            );
+        let mut all = vec![];
+        rectangles(iced_core::Layout::new(&node), &mut all);
+        let mut found_divider = false;
+        for rect in &all {
+            if rect.height == 1.
+                && rect.width > bounds.w / 2.
+                && rect.x < bounds.x + bounds.w
+                && rect.x + rect.width > bounds.x
+            {
+                found_divider = true;
+                assert!(
+                    rect.y + rect.height <= bounds.y,
+                    "actual pane divider {rect:?} covered by native {bounds:?} at scale {}",
+                    byteui::theme::icon_size::scale()
+                );
+            }
         }
+        assert!(found_divider, "actual review pane divider must be laid out");
+        let mut found = false;
+        for rect in all {
+            if click(&mut view, rect.center(), 600.)
+                .iter()
+                .any(|msg| matches!(msg, Msg::Shell(bytehost_chrome::ShellMsg::TogglePane(_))))
+            {
+                found = true;
+                assert!(
+                    rect.y + rect.height <= bounds.y,
+                    "collapse button {rect:?} covered by native {bounds:?}"
+                );
+            }
+        }
+        assert!(found, "real collapse button must be hittable");
     }
-    assert!(found, "real collapse button must be hittable");
 }
 
 #[test]
@@ -2085,4 +2138,29 @@ fn native_failure_keeps_a_readable_fallback_and_existing_collapsed_notice() {
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn review_widgets_preserve_header_and_notice_clearance_at_supported_scales() {
+    const CHILD: &str = "S7C_REVIEW_SCALE_WIDGET_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let expected: f32 = std::env::var(CHILD).unwrap().parse().unwrap();
+        assert_eq!(byteui::theme::icon_size::scale(), expected);
+        actual_widget_header_and_collapse_control_are_above_native_review();
+        collapsed_notice_is_dismissible_and_outside_the_native_review();
+        return;
+    }
+    // The production widgets read byteui globals. Isolate each scale in a child
+    // running only this test, without mutating globals in the shared test runner.
+    for scale in ["0.5", "1", "2"] {
+        let output=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","adapters::conversations::tests::review_widgets_preserve_header_and_notice_clearance_at_supported_scales","--test-threads=1","--nocapture"])
+            .env(CHILD,scale).env("BYTEUI_ICON_SCALE",scale).output().unwrap();
+        assert!(
+            output.status.success(),
+            "scale {scale}: stdout {} stderr {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

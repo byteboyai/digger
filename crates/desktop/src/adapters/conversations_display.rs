@@ -67,13 +67,15 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
                 .size(byteui::theme::font::title())
                 .color(tokens.tab_active_border)
         ]
-        .spacing(8)
+        .spacing(review_pane_style().padding.left)
         .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
         .align_y(iced::Alignment::Center);
         if let Some(actions) = actions {
             head = head.push(iced::widget::space::horizontal()).push(actions);
         }
-        column![head, self.tab_divider()].spacing(4).into()
+        column![head, self.tab_divider()]
+            .spacing(review_pane_style().gap)
+            .into()
     }
     fn list_collapse_button<'a>(&self, collapse: String, expand: String) -> Element<'a, Msg> {
         let (icon, tip) = match (self.collapsed.get(), self.list_on_left.get()) {
@@ -89,6 +91,7 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim,
             ))
+            .padding(review_button_padding())
             .on_press(toggle_pane_message()),
             container(text(tip).size(byteui::theme::font::body()))
                 .padding(6)
@@ -220,4 +223,9 @@ pub fn review_bottom_inset(scale: f32) -> f32 {
     let zone = bytehost_chrome::metrics_from_theme().right_zone;
     ((geometry.status_bar_height - geometry.footbar_height) * scale.max(0.) - zone.padding.bottom)
         .max(0.)
+}
+
+/// Keep chrome button hit areas aligned with the exported scaled header row.
+pub fn review_button_padding() -> f32 {
+    ((byteui::theme::geometry::tab_button_size() - byteui::theme::icon_size::row()) / 2.).max(0.)
 }
