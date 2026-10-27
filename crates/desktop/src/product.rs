@@ -140,6 +140,10 @@ pub enum Msg {
     GroupChat(dozer_panel_group_chat::Message),
     GroupChatNoticeDismiss,
     GroupChatTick,
+    /// 聊天页加载失败后点「重试」。
+    GroupChatRetry,
+    /// 群聊原生页面的回传(IPC、构建结果、探针)。
+    GroupChatNative(crate::adapters::group_chat_native::Event),
     ConversationsImport(i64, crate::adapters::conversations_import::ImportEvent),
     ConversationsNoticeDismiss,
     ReviewNative(crate::adapters::review_native::Event),
@@ -353,6 +357,23 @@ fn review_native_rect(
     block.y += notice_height;
     block.h = (block.h - notice_height).max(0.);
     crate::adapters::review_geometry::review_bounds(block, byteui::theme::icon_size::scale())
+}
+
+fn group_chat_native_rect(shell: &ShellModel, content: Rect, collapsed: bool) -> Rect {
+    let block = if collapsed {
+        content
+    } else {
+        shell
+            .side_of(&shell::group_chat_id())
+            .and_then(|side| shell::pair_rects(shell, side))
+            .map(|pair| pair.second)
+            .unwrap_or(content)
+    };
+    crate::adapters::group_chat_geometry::chat_bounds(
+        block,
+        byteui::theme::icon_size::scale(),
+        collapsed,
+    )
 }
 
 /// 向下缩 `top` 像素(面板自己的头部占掉的高度)。
@@ -1062,6 +1083,10 @@ impl ProductShell {
                 self.conversations.review_notice_height(collapsed),
             )
         });
+        let chat_rect = content_of(&shell::group_chat_id()).map(|content| {
+            let collapsed = self.pane_collapsed(&shell::group_chat_id());
+            group_chat_native_rect(&self.shell, content, collapsed)
+        });
         let markdown_rect = content_of(&shell::markdown_id());
         let hidden = LogicalRect {
             x: 0.0,
@@ -1120,8 +1145,21 @@ impl ProductShell {
                 self.projects.current_project_id(),
             )
             .map(Msg::ReviewNative);
+        let chat_overlay = self.chat_overlay_open();
+        let chat_task = self
+            .group_chat
+            .sync_native(
+                window,
+                chat_rect.is_some() && !closing && !self.window_minimized,
+                chat_overlay,
+                chat_rect.map(logical).unwrap_or(hidden),
+                self.projects.current_project_id(),
+                std::time::Instant::now(),
+            )
+            .map(Msg::GroupChatNative);
         let preview_tasks = self.sync_preview_native(&rects, closing);
         Task::batch([
+            chat_task,
             apps_task,
             usage_task,
             markdown_task,
@@ -1129,6 +1167,22 @@ impl ProductShell {
             review_task,
             Task::batch(preview_tasks),
         ])
+    }
+
+    /// iced 内的模态/浮层打开时聊天页停放并隐藏(原生菜单不算,它是独立窗口)。
+    fn chat_overlay_open(&self) -> bool {
+        self.preview_overlay_open()
+            || self.agent.overlay_is_open()
+            || self
+                .group_chat
+                .state(self.projects.current_project_id().unwrap_or_default())
+                .is_some_and(|s| s.new_group_dialog_open())
+            || self.projects.current_project().is_some_and(|p| {
+                self.agent
+                    .states
+                    .get(&p.id)
+                    .is_some_and(|s| s.pending_close_tab.is_some())
+            })
     }
 
     /// Review also yields to Agent and Conversations overlays.
@@ -2498,6 +2552,20 @@ impl Product<Msg> for ProductShell {
                 self.group_chat.dismiss_notice();
                 Task::none()
             }
+            Msg::GroupChatRetry => {
+                self.group_chat.retry_page();
+                Task::none()
+            }
+            Msg::GroupChatNative(event) => {
+                let (task, show_todo) = self.group_chat.update_native(event);
+                if show_todo {
+                    return Task::batch([
+                        task,
+                        self.on_shell(ShellMsg::ShowPanel(shell::todo_id())),
+                    ]);
+                }
+                task
+            }
             Msg::GroupChatTick => {
                 self.group_chat.tick(
                     std::time::Instant::now(),
@@ -3549,6 +3617,14 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let group_chat_native_task = match shell.group_chat.native.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|event| (Msg::GroupChatNative(event), rx))
+        })),
+        None => Task::none(),
+    };
     let review_native_task = match shell.conversations.native.take_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|event| (Msg::ReviewNative(event), rx))
@@ -3596,6 +3672,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             conversations_task,
             conversations_import_task,
             review_native_task,
+            group_chat_native_task,
             preview_cmds_task,
             Task::batch(initial),
         ]),
@@ -5802,6 +5879,11 @@ mod tests {
     mod review_lifecycle {
         use super::*;
         include!("product_review_tests.rs");
+    }
+
+    mod chat_lifecycle {
+        use super::*;
+        include!("product_chat_tests.rs");
     }
 
     fn send(shell: &mut ProductShell, m: Msg) {

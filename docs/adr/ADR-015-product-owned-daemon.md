@@ -114,6 +114,10 @@ Agent 面板与会话也走这条产品自有守护进程:面板的会话服务�
 
 会话面板(`digger.conversations`)读写的是各自产品自己的库:Digger 经 `diggerd` 读写 `digger.db`,Dozer 经 `dozerd` 读写 Dozer 的库,两者互不串用。历史导入在 Digger 里由用户显式触发,不静默复制用户的历史。
 
+## 群聊面板
+
+群聊面板(`digger.group_chat`)读写各自产品的库:Digger 经 `diggerd` 读写 `digger.db`。成员 Agent 的发言由各自产品的守护进程以只读方式拉起(Claude 工具白/黑名单、Codex `--sandbox read-only`),Digger 不增加也不放宽这一点;建群、选群、增删成员、删群本身不拉起任何 Agent 进程。
+
 ## Related ADRs
 
 - **ADR-014**: Agent Panel S6 Design (references this ADR for daemon architecture)

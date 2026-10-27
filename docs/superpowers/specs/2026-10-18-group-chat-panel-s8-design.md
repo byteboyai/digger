@@ -1,7 +1,7 @@
 # S8 群聊面板:抽成共享库,Digger 接入
 
 - 日期:2026-10-18
-- 状态:设计稿,待用户审阅。**2026-10-25:S6 与 S3b 之后的修订见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md`,冲突处以它为准**
+- 状态:**代码已实现(S8a/S8b/S8c Task 2–6),GUI 目测验收待用户完成**;原为设计稿。**2026-10-25:S6 与 S3b 之后的修订见 Dozer 仓库 `docs/superpowers/plans/2026-10-25-s7-s8-refresh.md`,冲突处以它为准**
 - 路径:架构级,**分三期交付,每期单独写实施计划**(S8a Dozer 抽库、S8b Digger 接群列表与状态、S8c Digger 接聊天内容 webview 与发布)
 - 相关:`2026-10-18-conversations-panel-s7-design.md`(同类的「列表 + webview 内容」面板,S7 的做法是本文的模板)、`2026-10-18-agent-panel-s6-design.md`(`diggerd` 与 `digger.db`)、`2026-10-18-agent-panel-s6d-design.md`(Digger 里已有的原生 webview 宿主做法、覆盖层互斥)、Dozer `2026-10-02-group-chat-panel-design.md`
 
@@ -99,3 +99,13 @@ Digger 要有与 Dozer 一模一样的群聊面板:在当前项目里建一个�
 ## 9. 留给实现者决定
 
 `Message` / `Effect` 的最终清单(原样搬,不增不减)、`PanelDisplay` 的精确方法、`GroupChatWebviewSpec` 字段、几何度量(对照 Dozer `group_chat_content_pane_bounds_for`)、`native_host.rs` 的抽取边界、500ms 订阅的开关位置、各 Agent 无头适配在 Digger 里是否需要额外的环境变量处理(`group_adapter` 里 `env_remove("DOZER_SESSION_ID")` 是否已由 S6a 参数化为产品的会话环境变量,S8a 开工时先核对,没有就先停下报告)。
+
+## 10. 实现结果(2026-10-27,S8c)
+
+- **范围:** S8a(Dozer 抽库)、S8b(群列表、新建群、轮询)、S8c(聊天内容原生 webview)代码均已完成;Digger 依赖 `libs-2026-10-26b`,库、页面、`dozerd`、协议均未改。报告:`docs/superpowers/reviews/2026-10-27-group-chat-s8c-report.md`。
+- **页面宿主:** 复用 S7c 抽出的 `native_host`;`adapters/group_chat_native.rs` 负责协议 `digger-groupchat://group-chat-content/`、IPC 来源校验(非本源丢弃、超限/畸形上报)、代数与就绪记账;事件一律经库的 `parse_group_chat_event` → `host::handle_webview_event`,脚本只用库的 `take_content_script`。
+- **转待办开启**(总览 §5 Q1):`OpenTodo` 映射为「切到待办面板」,`PushTodo` 由库经 `GroupChatService` 执行。没有 `GroupChatCapabilities`。
+- **覆盖层:** iced 内的模态(新建群弹窗、Agent 选择器、关闭确认)使聊天页停放并隐藏(不销毁);原生 Agent 筛选菜单不算。
+- **几何:** 与 Dozer 真实函数在 1 像素内(列表展开 (693,54,291.2,712))。**已知偏离:** 列表收起时聊天区顶部让出一条按钮条放 iced 展开按钮(Dozer 没有),待用户确认。
+- **对照结论:** 逐状态目测尚未完成,已接受差异为零。清单:`notes/2026-10-18-group-chat-parity.md`;回归记录:`notes/2026-10-18-group-chat-regression.md`。
+- **遗留:** `notes/2026-10-18-group-chat-open-items.md`。
