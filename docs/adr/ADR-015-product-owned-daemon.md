@@ -110,6 +110,10 @@ Agent 面板与会话也走这条产品自有守护进程:面板的会话服务�
 - `digger-hook` 与 `dozer-hook` 各自写自己产品的配置条目,同机并存不互相覆盖。
 - 页签部件与菜单弹层目前仍是 Digger 侧的临时复制(`agent_tabs.rs`、`menu_overlay.rs`),后续应迁入 byteui。
 
+## 会话面板
+
+会话面板(`digger.conversations`)读写的是各自产品自己的库:Digger 经 `diggerd` 读写 `digger.db`,Dozer 经 `dozerd` 读写 Dozer 的库,两者互不串用。历史导入在 Digger 里由用户显式触发,不静默复制用户的历史。
+
 ## Related ADRs
 
 - **ADR-014**: Agent Panel S6 Design (references this ADR for daemon architecture)
