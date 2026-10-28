@@ -27,7 +27,7 @@ The probe report `docs/superpowers/reviews/2026-10-28-browser-panel-spikes.md` (
 | Setting | Decision |
 |---|---|
 | Custom protocols (`dozer://`, `digger-*://`) | **none registered** |
-| Initialization scripts, IPC handler | **none** — the page cannot see `window.ipc`; titles and load events come from wry's native callbacks |
+| Initialization scripts, IPC handler | **none** — wry still injects an inert `window.ipc` stub (a page can see it, but `postMessage` throws because no handler exists on the host side; measured in a real Dozer window), so the host receives nothing from the page; titles and load events come from wry's native callbacks |
 | Developer tools | off |
 | Downloads | always refused |
 | Link preview | off |
