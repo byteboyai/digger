@@ -4,6 +4,10 @@
 //!   `build_app_child`(应用类:`<id>.localhost` 来源、AppIpc 白名单)——编辑器是可信的第一方代码。
 //! - 每一项 wry 设置都显式钉死,并有测试读本文件的生产源码断言(见 `tests`)。
 //! - 内容只来自编译进二进制的页面:不走 `file://`、不走 URL、不注册自定义协议。
+//! - **为什么不并入 `bytehost_desktop::native_child`(X1 阶段 B 评估,2026-10-28):** 那个执行器的模型是
+//!   「按 URL 载入、`allows_navigation` 按 scheme/host 严格比对、`Desired`/`plan` 状态机」,而这里是
+//!   `with_html` 载入编译进二进制的页面、导航只放行 `about:blank`、带 IPC 处理器与初始化脚本、剪贴板故意开着,
+//!   生命周期是一组直接操作单槽的函数。设置与模型都不同,硬并只会把差异塞进 `configure` 闭包里。
 //! - 句柄表是本模块私有的 `thread_local`,与应用面板的句柄表**永不共用**。
 //! - 剪贴板**故意不关**(与 `build_app_child` 相反):粘贴是写作的核心动作,而这里跑的是第一方代码。
 //!   wry 0.55 在 macOS 上没有剪贴板开关(恒开),`with_clipboard(true)` 只是把意图写明。

@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use super::native_host::{self, Host};
+use bytehost_desktop::native_child::{self, Host};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -19,7 +19,7 @@ pub enum Event {
     Probed(Probe),
 }
 
-pub use super::native_host::Probe;
+pub use bytehost_desktop::native_child::Probe;
 
 pub struct Native {
     surface: UsageSurface,
@@ -95,8 +95,8 @@ impl Native {
             _ => {}
         }
     }
-    fn desired(&self, rect: LogicalRect) -> native_host::Desired {
-        native_host::Desired {
+    fn desired(&self, rect: LogicalRect) -> native_child::Desired {
+        native_child::Desired {
             identity: "usage".into(),
             url: "digger-usage://localhost/host.html".into(),
             rect,
@@ -142,7 +142,7 @@ impl Native {
             return self.host.create(
                 id,
                 generation,
-                native_host::Document {
+                native_child::Document {
                     scheme: "digger-usage",
                     host: "localhost",
                     desired: self.desired(rect),

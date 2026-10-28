@@ -18,7 +18,7 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use super::native_host::{self, Host};
+use bytehost_desktop::native_child::{self, Host};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -94,8 +94,8 @@ impl Native {
         }
     }
 
-    fn desired(&self, rect: LogicalRect) -> native_host::Desired {
-        native_host::Desired {
+    fn desired(&self, rect: LogicalRect) -> native_child::Desired {
+        native_child::Desired {
             identity: "todo".into(),
             url: "digger-todo://localhost/host.html?theme=dark".into(),
             rect,
@@ -152,7 +152,7 @@ impl Native {
             return self.host.create(
                 id,
                 generation,
-                native_host::Document {
+                native_child::Document {
                     scheme: "digger-todo",
                     host: "localhost",
                     desired: self.desired(rect),
@@ -250,7 +250,7 @@ impl Native {
 
 /// 导航只放行本协议入口(严格 CSP 的一部分)。
 pub fn allows_navigation(url: &str) -> bool {
-    native_host::allows_navigation("digger-todo", "localhost", url)
+    native_child::allows_navigation("digger-todo", "localhost", url)
 }
 
 /// 双重 JSON 编码:外层 `to_string` 生成 JS 字符串字面量,内层由页面

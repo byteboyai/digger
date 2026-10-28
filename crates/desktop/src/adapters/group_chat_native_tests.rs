@@ -239,9 +239,9 @@ fn the_protocol_serves_the_three_files_and_404s_everything_else() {
 
 #[test]
 fn new_window_and_download_requests_are_denied_by_the_shared_executor() {
-    assert!(!native_host::allows_download());
+    assert!(!native_child::allows_download());
     assert!(matches!(
-        native_host::new_window_response(),
+        native_child::new_window_response(),
         wry::NewWindowResponse::Deny
     ));
 }

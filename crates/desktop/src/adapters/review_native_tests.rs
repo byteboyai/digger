@@ -185,9 +185,9 @@ fn navigation_handler_allows_only_the_review_trace_origin() {
 
 #[test]
 fn new_window_and_download_requests_are_denied() {
-    assert!(!native_host::allows_download());
+    assert!(!native_child::allows_download());
     assert!(matches!(
-        native_host::new_window_response(),
+        native_child::new_window_response(),
         wry::NewWindowResponse::Deny
     ));
 }
@@ -329,11 +329,11 @@ fn shared_sync_failures_stop_before_show_and_reach_the_review_notice_channel() {
     let _ = n.sync(window::Id::unique(), desired(1), None);
     let generation = n.live.as_ref().unwrap().generation;
     let mut executed = Vec::new();
-    let result = native_host::apply_actions(vec![Action::Navigate, Action::Show], |action| {
+    let result = native_child::apply_actions(vec![Action::Navigate, Action::Show], |action| {
         executed.push(action);
         Err("injected navigation failure".into())
     });
-    let event = native_host::sync_outcome(generation, result, Event::Built, Event::Done);
+    let event = native_child::sync_outcome(generation, result, Event::Built, Event::Done);
     n.update(event);
     assert_eq!(n.failed(), Some("injected navigation failure"));
     assert_eq!(executed, vec![Action::Navigate]);

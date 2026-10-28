@@ -20,7 +20,6 @@ pub mod native_menu;
 pub mod project;
 pub mod usage;
 
-mod native_host;
 pub mod usage_native;
 
 /// 预览原生宿主(S5b-2 P3):清单 / 协议 / 注入脚本 / IPC 全走共享库。

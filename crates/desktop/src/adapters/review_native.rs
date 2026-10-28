@@ -1,7 +1,7 @@
 //! Review's single trusted native child. The shared executor alone owns wry handles.
-pub use super::native_host::Probe;
-use super::native_host::{self, Action, Host};
 use bytehost_core::LogicalRect;
+pub use bytehost_desktop::native_child::Probe;
+use bytehost_desktop::native_child::{self, Action, Host};
 use dozer_panel_conversations::{
     assets::{parse_review_trace_event, serve_review_trace},
     snapshot::ReviewWebviewSpec,
@@ -38,18 +38,18 @@ pub enum Event {
 }
 pub struct Live {
     project_id: i64,
-    desired: native_host::Desired,
+    desired: native_child::Desired,
     generation: u64,
     nonce: u64,
     loaded: bool,
 }
-fn host_desired(d: &Desired, loaded: bool) -> Option<native_host::Desired> {
+fn host_desired(d: &Desired, loaded: bool) -> Option<native_child::Desired> {
     if !d.visible {
         return None;
     }
     let spec = d.spec.as_ref()?;
     let pid = d.project_id?;
-    Some(native_host::Desired {
+    Some(native_child::Desired {
         identity: format!("review:{pid}"),
         url: spec.url.clone(),
         rect: LogicalRect {
@@ -75,10 +75,10 @@ pub(super) fn plan(current: Option<&Live>, desired: &Desired) -> Vec<Action> {
                     .is_some_and(|s| s.url == c.desired.url)
         }),
     );
-    native_host::plan(current.map(|c| &c.desired), target.as_ref())
+    native_child::plan(current.map(|c| &c.desired), target.as_ref())
 }
 pub fn allows_navigation(url: &str) -> bool {
-    native_host::allows_navigation("digger-review", "review-trace", url)
+    native_child::allows_navigation("digger-review", "review-trace", url)
 }
 // Read the raw query: permissive percent decoding and duplicate keys must never
 // turn an unrelated page into the current document. Decimal u64 includes wrapped 0.
@@ -330,7 +330,7 @@ impl ReviewNative {
             tasks.push(self.host.create(
                 id,
                 generation,
-                native_host::Document {
+                native_child::Document {
                     scheme: "digger-review",
                     host: "review-trace",
                     desired: target,

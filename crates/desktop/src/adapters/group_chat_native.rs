@@ -1,9 +1,9 @@
 //! Group-chat's single trusted native child. The shared executor alone owns wry
 //! handles; this module owns the page-specific part: protocol answers, IPC origin
 //! checks, readiness and generation bookkeeping.
-pub use super::native_host::Probe;
-use super::native_host::{self, Action, Host};
 use bytehost_core::LogicalRect;
+pub use bytehost_desktop::native_child::Probe;
+use bytehost_desktop::native_child::{self, Action, Host};
 use dozer_panel_group_chat::{
     GroupChatWebviewEvent,
     assets::{group_chat_webview_spec, serve_group_chat_content},
@@ -48,19 +48,19 @@ pub enum Event {
 
 struct Live {
     project_id: i64,
-    desired: native_host::Desired,
+    desired: native_child::Desired,
     generation: u64,
     built: bool,
     ready: bool,
 }
 
-fn host_desired(d: &Desired, ready: bool) -> Option<native_host::Desired> {
+fn host_desired(d: &Desired, ready: bool) -> Option<native_child::Desired> {
     if !d.shown {
         return None;
     }
     let pid = d.project_id?;
     let spec = group_chat_webview_spec(false, ready, SCHEME, THEME)?;
-    Some(native_host::Desired {
+    Some(native_child::Desired {
         identity: format!("group-chat:{pid}"),
         url: spec.url,
         rect: LogicalRect {
@@ -77,7 +77,7 @@ fn host_desired(d: &Desired, ready: bool) -> Option<native_host::Desired> {
 }
 
 pub fn allows_page(url: &str) -> bool {
-    url.len() <= MAX_PAGE_URL_BYTES && native_host::allows_navigation(SCHEME, HOST, url)
+    url.len() <= MAX_PAGE_URL_BYTES && native_child::allows_navigation(SCHEME, HOST, url)
 }
 
 /// Classify one IPC message from the page. `None` means "drop silently".
@@ -236,10 +236,10 @@ impl GroupChatNative {
             // A stale child must be replaced, never reused.
             (Some(_), None) => {
                 let mut actions = vec![Action::Destroy];
-                actions.extend(native_host::plan(None, target.as_ref()));
+                actions.extend(native_child::plan(None, target.as_ref()));
                 actions
             }
-            _ => native_host::plan(current.map(|l| &l.desired), target.as_ref()),
+            _ => native_child::plan(current.map(|l| &l.desired), target.as_ref()),
         }
     }
 
@@ -290,7 +290,7 @@ impl GroupChatNative {
             tasks.push(self.host.create(
                 id,
                 generation,
-                native_host::Document {
+                native_child::Document {
                     scheme: SCHEME,
                     host: HOST,
                     desired: target,
