@@ -196,8 +196,8 @@ pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
 
 fn load_file(path: &Path) -> Loaded {
     let json = std::fs::read_to_string(path).ok().map(|j| {
-        group_chat_after_agent(&conversations_after_agent(&agent_first_on_right(
-            &files_after_project(&project_first_on_left(&j)),
+        group_chat_never_collapsed(&group_chat_after_agent(&conversations_after_agent(
+            &agent_first_on_right(&files_after_project(&project_first_on_left(&j))),
         )))
     });
     persist::load(
@@ -268,6 +268,28 @@ fn conversations_after_agent(json: &str) -> String {
         .position(|v| v.as_str() == Some(agent_id().as_str()))
         .map_or(0, |i| i + 1);
     right.insert(at, serde_json::Value::String(wire.as_str().to_owned()));
+    value.to_string()
+}
+
+/// 群聊没有收起/展开入口(与 Dozer 一致):旧布局里存成「已收起」的群聊读盘时按展开处理,否则用户
+/// 没有任何控件能把它展开。保留用户的分栏比例;只改读进来的文本,不写盘,所以更高版本的文件仍原样保留。
+/// 没有该面板的 `panes` 记录、不是 JSON 对象、解析不了,原样返回(幂等)。
+fn group_chat_never_collapsed(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_owned();
+    };
+    let wire = group_chat_id();
+    let Some(entry) = value
+        .get_mut("panes")
+        .and_then(|panes| panes.get_mut(wire.as_str()))
+        .and_then(|entry| entry.as_object_mut())
+    else {
+        return json.to_owned();
+    };
+    if entry.get("collapsed").and_then(|v| v.as_bool()) != Some(true) {
+        return json.to_owned();
+    }
+    entry.insert("collapsed".into(), serde_json::Value::Bool(false));
     value.to_string()
 }
 
@@ -1237,6 +1259,22 @@ mod tests {
                 apps_id(),
                 usage_id()
             ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_saved_collapsed_group_chat_loads_expanded_because_the_expand_button_is_gone() {
+        let (model, dir) = load_json(
+            "chat-collapsed",
+            r#"{ "left": ["digger.project","digger.files"], "right": ["digger.agent","digger.group_chat"], "selected_right": "digger.group_chat", "left_width": 500.0, "panes": { "digger.group_chat": {"split": 0.4, "collapsed": true}, "digger.agent": {"split": 0.4, "collapsed": true} } }"#,
+        );
+        let chat = model.panes().get(&group_chat_id()).expect("pane kept");
+        assert!(!chat.collapsed, "no control left to expand it");
+        assert_eq!(chat.split, 0.4, "the user's split survives");
+        assert!(
+            model.panes().get(&agent_id()).unwrap().collapsed,
+            "other panels keep their collapsed state"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
