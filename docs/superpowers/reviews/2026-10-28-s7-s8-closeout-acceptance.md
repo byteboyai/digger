@@ -124,6 +124,84 @@ DIGGER_DATA_DIR=/tmp/digger-accept cargo run -p digger        # 在 Digger 仓�
 | H14 | **webview 顶边紧贴地址栏下沿:** 在缩放 1 和缩放 1.5(Dozer 用 ⌘/Ctrl +)下,看网页内容区顶边 | 紧贴地址栏下沿:**不重叠地址栏、也不留空隙**;拖动窗口大小后仍如此 | | **自动化量不出来**:视图高度来自页签栏+分割线+地址栏+间距,webview 让位高度来自配置 `browser_chrome_top_px`(72),两者是否一致只能看 |
 | H15 | 开 4 个页签,关掉中间一个,鼠标停在剩下的页签上 | hover 底色与 2 秒标题气泡都出现在**鼠标所在**的页签,没有残留在别的页签上 | | 对应抽库时修的 bug(`7ea738a8`) |
 
+## I. Digger 浏览器面板(新面板的人工验收)
+
+计划 `dozer/docs/superpowers/plans/2026-10-28-digger-browser-panel.md`,设计取舍见 `docs/adr/ADR-016-browser-panel-untrusted-content.md`,遗留见 `docs/superpowers/notes/2026-10-28-browser-open-items.md`。**这一区测的是自动化测试够不着的:真实窗口里的层级、焦点时机、输入法、Edit 菜单副作用、网页位置。**
+
+**被验收的版本:** Digger `main`(含 `86aa99b` 起的浏览器面板)+ bytehost `v0.4.16` + Dozer `libs-2026-10-28f`。用开发构建、独立数据目录(见 §0)。浏览器面板在右栏「会话」和「应用」之间,图标是地球。
+
+**先造测试页**(一次性,全在 `/tmp`,可丢弃):
+
+```bash
+D=/tmp/digger-browser-accept; mkdir -p "$D"
+cat > "$D/index.html" <<'EOF'
+<!doctype html><meta charset="utf-8"><title>验收首页</title>
+<link rel="stylesheet" href="style.css">
+<script>var q=[];function log(s){q.push(s);var o=document.getElementById('out');if(o)o.textContent=q.join('\n')}</script>
+<body><h1>验收首页</h1><img id="img" src="pic.svg" width="40" height="40" onload="log('img-ok')" onerror="log('img-FAIL')">
+<p><a href="next.html">同页跳转到 next.html</a></p>
+<p><a href="https://example.com/" target="_blank">target=_blank 新页签</a></p>
+<p><a href="javascript:alert('js-link')">javascript: 链接</a> · <a href="dozer://app/x">dozer:// 链接</a> · <a href="mailto:a@b.c">mailto 链接</a></p>
+<p><a href="data.bin" download>download 属性的链接</a></p>
+<p><input id="t" placeholder="在这里输入,测 ⌘A/C/V/X"> <textarea rows="2"></textarea></p>
+<p><button onclick="fetchTest('file:///etc/hosts')">fetch 其它本地文件</button>
+<button onclick="media()">摄像头/麦克风</button> <button onclick="geo()">定位</button></p>
+<div style="height:1200px;background:linear-gradient(#eef,#fee)">(长页面,用来测滚动位置)</div>
+<pre id="out"></pre>
+<script>
+log('css-bg='+getComputedStyle(document.body).backgroundColor);
+function fetchTest(u){fetch(u).then(r=>log('fetch '+u+' => OK(不该成功)')).catch(e=>log('fetch '+u+' => 失败(期望)'))}
+function media(){ if(!navigator.mediaDevices){log('navigator.mediaDevices = undefined(期望)');return}
+ navigator.mediaDevices.getUserMedia({video:true,audio:true}).then(()=>log('getUserMedia 成功(不该)')).catch(e=>log('getUserMedia 被拒: '+e.name)) }
+function geo(){ if(!navigator.geolocation){log('无 geolocation');return}
+ navigator.geolocation.getCurrentPosition(p=>log('定位成功(记下现象)'),e=>log('定位失败: '+e.code+' '+e.message)) }
+</script>
+EOF
+echo 'body{background:#123456;color:#fff;font-family:sans-serif}' > "$D/style.css"
+echo '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="orange"/></svg>' > "$D/pic.svg"
+printf '<!doctype html><meta charset="utf-8"><title>next</title><body><h1>next 页</h1><a href="index.html">回首页</a>' > "$D/next.html"
+printf '<!doctype html><meta charset="utf-8"><title>空格中文</title><body><h1>空格与中文路径 OK</h1>' > "$D/My File 中文.html"
+head -c 1024 /dev/urandom > "$D/data.bin"
+echo "已生成:$D"
+```
+
+下面的 `<你>` 换成你的用户名。路径统一记作 `$D=/tmp/digger-browser-accept`。
+
+| # | 怎么做 | 期望 | 结果 | 备注 |
+|---|--------|------|------|------|
+| I1 | 打开测试项目,点右栏的浏览器图标 | 图标在「会话」与「应用」之间;面板有一个 `about:blank` 页签、页签栏、地址栏、后退/前进/刷新、星标、收藏夹按钮;不崩溃 | | |
+| I2 | 地址栏输入 `https://example.com` 回车 | 页面显示;页签标题变成页面标题;地址栏显示当前网址 | | 需要联网 |
+| I3 | **webview 顶边紧贴地址栏下沿:** 看网页内容区顶边(默认缩放;能改界面缩放就再在放大后看一次);拖动窗口大小后再看 | 紧贴地址栏下沿:**不重叠地址栏、也不留空隙**;左右与下边与面板内边距一致 | | **自动化量不出来:** 网页顶边来自 `chrome_top_px()`,视图高度来自页签栏 + 分割线 + 地址栏 + 间距,两者是否相等只能看。最重要的一项 |
+| I4 | 地址栏输入 `file:///tmp/digger-browser-accept/index.html` | 显示「验收首页」;背景是蓝色(同目录 CSS 生效);橙色方块图可见;页面底部日志有 `img-ok` | | 同目录子资源 |
+| I5 | 依次输入:`/tmp/digger-browser-accept/index.html`;一个 `~/` 开头的路径(指向你家目录下真实存在的某个 html);`/tmp/digger-browser-accept/My File 中文.html`;`//evil.com/x` | 前三个在**当前页签**打开(含空格与中文的那个显示「空格与中文路径 OK」);`//evil.com/x` 给「浏览器不支持打开本地文件」的内联红字,页签不变 | | 对应 H13 在 Digger 里的复验 |
+| I6 | 在首页点「fetch 其它本地文件」 | 日志出现 `fetch file:///etc/hosts => 失败(期望)` | | 页面读不到别的本地文件(只测了 `fetch`) |
+| I7 | 点「同页跳转到 next.html」,看地址栏和标题;再点「回首页」 | 地址栏、页签标题**跟着变**;跳转时页面只加载一次,**不会闪两次**(闪两次 = 页内跳转被多刷了一遍) | | 对应 v0.4.16 的修复,只能看 |
+| I8 | 点「target=_blank 新页签」 | 在浏览器面板里**新开一个页签**打开 example.com,不弹系统窗口 | | |
+| I9 | 点 `javascript:` 链接、`dozer://` 链接、`mailto` 链接 | 页面都**不跳走、不弹 alert、没有任何宿主页面出现**;当前页保持原样 | | 被拒的链接静默无反应(已知局限,不是 bug) |
+| I10 | 地址栏输入 `javascript:alert(1)` 回车;再输入 `data:text/html,hi` 回车 | 不弹 alert、不显示 data 页面;出现一行提示「不支持打开这类网址(javascript:)」(data 同理);页签显示空白页 | | 提示里**只有 scheme**,不回显其余内容 |
+| I11 | 点「download 属性的链接」 | **什么都不下载**,没有保存对话框 | | 下载一律拒绝 |
+| I12 | **导航失败:** 地址栏输入 `http://127.0.0.1:9/`(没人监听的端口)回车,等约 15 秒 | 约 15 秒后页签栏上方出现提示「页面没有响应,无法打开:…」;提示可点 × 关掉;提示出现时**网页整体下移让位,不与提示重叠**;不会是"地址栏已变、页面不变、没有任何说明" | | 超时秒数与文案是我定的默认,可改 |
+| I13 | 点「摄像头/麦克风」 | 日志是 `navigator.mediaDevices = undefined` 或 `getUserMedia 被拒`;**没有系统授权弹窗,更没有被批准** | | 纵深防御的代理委托在页面真调不到时验不到,只验这个现象 |
+| I14 | 点「定位」 | **记下现象**:日志里是成功 / 失败,是否弹了系统定位授权框(弹了就点「不允许」) | | **没测过的项**(wry 无钩子)。结果写进备注,供 ADR 补充 |
+| I15 | **Edit 菜单:** 看屏幕顶部菜单栏;在页面里的输入框输入文字后依次按 ⌘A、⌘C,点到 textarea 按 ⌘V,再回输入框 ⌘A 后按 ⌘X | 菜单栏有 **Edit**(剪切/复制/粘贴/全选);⌘A 全选、⌘C 复制、⌘V 粘贴、⌘X 剪切**都生效** | | 没有 Edit 菜单这四个键在页面里全都不工作 |
+| I16 | 在页面空白处点一下,按 ⌘A | 页面内容被全选 | | |
+| I17 | **Edit 菜单对 iced 输入框的回归:** 依次在**浏览器地址栏**、**会话面板的搜索框**、**群聊的输入框**里输入文字,按 ⌘A / ⌘C / ⌘V / ⌘X | 都照常工作,和装菜单前一样 | | 探针里测过一次;这里是正式回归 |
+| I18 | 地址栏用**中文输入法**输入拼音并选词,回车 | 候选框位置正确,提交后文字正确 | | 对应 H11 |
+| I19 | **地址栏焦点与全选:** ① 单击地址栏 ② 输入一半后点页面 ③ 再点地址栏后按 Tab / 点别处 | ① 整条网址被选中;② 草稿丢弃、恢复显示当前网址;③ 失焦后恢复显示当前网址。每次变化在一帧内完成,没有闪烁或"选中又取消" | | 焦点探针 16ms 一次,时机只能看 |
+| I20 | 单击地址栏聚焦后,直接点右栏的「Agent」图标切到终端,打字 | 字进了**终端**,地址栏没有吞键 | | 面板不可见时的焦点复位 |
+| I21 | 地址栏右键 | 弹出**原生菜单**:剪切 / 复制 / 粘贴 / 全选;菜单盖在网页**上面**(不被网页盖住);地址栏为空时剪切/复制置灰 | | 原生菜单是独立窗口,网页不需要隐藏 |
+| I22 | 用右键菜单:全选;复制后点别处再粘贴;剪切;在未聚焦时用粘贴 | 都作用于**整个**地址栏文本(不是选区);未聚焦时粘贴**替换**整条网址,已聚焦时粘贴**追加**在末尾 | | 整框语义(G1 同款) |
+| I23 | 后退 / 前进 / 刷新 | 都生效 | | 按钮无历史时是否置灰是库的现状,不在此验 |
+| I24 | 点地址栏星标加入全局收藏;展开收藏夹侧栏 | 星标变实心;侧栏里有该收藏;点收藏项在当前页签打开;网页区**让出侧栏宽度**,没有压到侧栏 | | 侧栏宽度固定(约 28%),分隔条不可拖是有意的 |
+| I25 | **iced 浮层让位:** 保持浏览器网页可见,在**左栏**打开 Files 的右键菜单(或 Project 的删除确认卡) | 浮层打开时网页被**隐藏**;关闭浮层后网页回来,页面没有重载 | | 实现是"有 iced 浮层就整体隐藏",不管是否真的重叠 |
+| I26 | 切到别的右栏面板再切回浏览器 | 网页隐藏后回来,**页面还在**(滚动位置、输入框内容保留),没有重新加载 | | 离开面板是"停放"不是销毁 |
+| I27 | 开两个项目。在 A 里打开测试首页并滚动到下面;切到 B;再切回 A | B 里浏览器是一个**全新的空白页**;切回 A 后各页签网址还在,但**页面重新加载**(滚动位置回到顶部) | | 换项目就销毁重建,是有意的取舍 |
+| I28 | 开 3 个页签,关掉中间一个;再关到只剩最后一个并关掉它 | 选中项合理;关掉最后一个后回到**一个空白页**,不是空面板 | | |
+| I29 | 开 4 个页签,鼠标停在其中一个上 2 秒 | hover 底色与标题气泡出现在**鼠标所在**的页签,没有残留在别的页签 | | 对应 H15。另外**留意悬停动画的观感**(Digger 此前约定无悬停动画) |
+| I30 | 最小化窗口再恢复;缩放窗口 | 网页位置、大小跟着变,恢复后正常显示 | | |
+| I31 | 在某个你自己的网站登录,退出 Digger,重开(同一个数据目录) | 登录态仍在 | | 浏览器有独立的持久站点数据;没有合适的站点就标 ➖ |
+| I32 | 退出 Digger | 正常退出,不挂起,没有残留的网页进程占用 | | |
+
 ---
 
 ## 汇总
@@ -138,7 +216,8 @@ DIGGER_DATA_DIR=/tmp/digger-accept cargo run -p digger        # 在 Digger 仓�
 | F 原生子视图(阶段 B) | 9 | | | |
 | G Dozer 回归 | 5 | | | |
 | H Dozer 浏览器面板 | 15 | | | |
+| I Digger 浏览器面板 | 32 | | | |
 
-**优先级:** 如果只能挑几项,先做 **F5、C6、B3、A4、D1、G1、H14**——分别对应「最容易出视觉故障」「最可能出问题的输入法」「失败路径」「最不可逆的删除」「用户被锁住」「Dozer 唯一的有意视觉变化」「浏览器 webview 与地址栏有没有重叠或留缝(自动化量不出来)」。
+**优先级:** 如果只能挑几项,先做 **F5、C6、B3、A4、D1、G1、H14、I3、I15、I17**——分别对应「最容易出视觉故障」「最可能出问题的输入法」「失败路径」「最不可逆的删除」「用户被锁住」「Dozer 唯一的有意视觉变化」「浏览器 webview 与地址栏有没有重叠或留缝(自动化量不出来)」、「Digger 浏览器网页位置」「Edit 菜单让页面快捷键生效」「Edit 菜单没有弄坏 iced 输入框」。
 
 **不在这份清单里的(仍是已知限制,不是待验收):** Digger 没有远端(只在本地);Opencode 群聊发言;`check-shared-deps.sh` 的 vendor 版本滞后(INFO 提示)。
