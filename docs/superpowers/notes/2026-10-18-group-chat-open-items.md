@@ -1,10 +1,18 @@
-# 群聊面板遗留缺口(待用户裁决)
+# 群聊面板遗留缺口
 
-日期:2026-10-27。
+日期:2026-10-27 起草,2026-10-28 收尾更新。收尾计划:`dozer/docs/superpowers/plans/2026-10-27-s7-s8-closeout.md`。
 
-1. **新建群失败时草稿丢失。** 库的 `NewGroupSubmit` 先关弹窗并清空主题框,再异步创建;失败时宿主只能在通知条报错,无法恢复弹窗和草稿。要修需要改 Dozer 的 `dozer-panel-group-chat`(新 libs tag,Digger 重钉)。
-2. **列表收起的展开按钮条。** Digger 在聊天区顶部为 iced 展开按钮让出一条;Dozer 没有。是接受,还是改成与 Dozer 一致(例如把展开入口放进页面或原生菜单),待定。
-3. **库适配里的 `list_collapse_button` 是空占位。** 该 trait 方法只能返回库的 `Message`,Digger 的折叠按钮在产品层另加。要消除需要库放宽宿主消息类型。
-4. **跨仓库迁移。** 页签部件、菜单弹层、`native_host`/wry 样板迁入 byteui/bytehost 共用。
-5. **`no_todo_text_anywhere_in_the_view`** 测试原先没有任何断言;S8c 已删除并以 `the_failure_shell_names_the_reason_has_no_todo_text_and_retry_clears_it` 取代(聊天页现在有转待办入口,「视图里不得有待办文字」的前提已不成立)。
-6. **三个不能发言的成员种类**(Codebuddy、Opencode、Qodercn)仍可加入群;新建群弹窗的常驻说明已注明「目前仅 Claude、Codex 可以发言」。是否隐藏属产品决定。
+## 已解决
+
+1. **新建群失败时草稿丢失 —— 已修(Dozer `d6169951`,libs `libs-2026-10-28a`)。** 失败时恢复弹窗与主题(仅当主题框为空,不覆盖用户之后的新输入),错误进 outbox。
+2. **列表收起的展开按钮条 —— 已对齐 Dozer(Digger `b2ee423`)。** 收起/展开按钮、展开条与顶部预留条一并删除。**注意:** 这两个按钮是群聊收起的唯一入口;若某用户的布局曾把群聊存成「已收起」,现在没有按钮能展开它,需人工确认布局是否持久化该状态。
+3. **`list_collapse_button` 空占位 —— 已删(Dozer `11628d12`)。** 该方法从未被库调用;Dozer 群聊本身没有收起 UI。
+5. **`no_todo_text_anywhere_in_the_view`** —— S8c 已处理,不变。
+6. **三个不能发言的成员种类 —— 部分解决。** Qodercn 已支持群聊只读发言(Dozer `dc9c9c06`,以 `--tools Read,Grep,Glob` + 禁用清单 + `--no-session-persistence`,经真实 runner 冒烟验证),新建群弹窗说明已改为「目前仅 Claude、Codex、Qodercn 可以发言」(Digger `338c1ea`)。调研记录:`dozer/docs/superpowers/specs/2026-10-27-group-chat-agents-readonly-research.md`。
+   - **Codebuddy 仍不支持:** 参数面与 Claude 同构,但调研时未登录(401),没有只读的行为证据。登录后补一条手动冒烟即可解锁。
+   - **Opencode 仍不支持:** 无限制工具参数;配置里写 `webfetch: deny` 后联网仍成功;无「不落会话」开关;提示词只能走 argv。
+   - 这两种仍可加入群、发言时失败;是否在弹窗里隐藏属产品决定。
+
+## 仍然未决
+
+4. **跨仓库迁移(X1)。** 页签部件、菜单弹层、`native_host`/wry 样板迁入 byteui/bytehost 共用,单独排期。
