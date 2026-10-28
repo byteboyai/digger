@@ -53,6 +53,7 @@ pub mod group_chat_overlay;
 pub mod notice;
 
 pub mod conversations_import;
+pub mod conversations_search_menu;
 
 pub mod review_native;
 

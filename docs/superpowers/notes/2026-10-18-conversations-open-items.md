@@ -18,12 +18,14 @@
 
 Dozer 新增 `BackfillReport`/`BackfillFailure` 与 `TranscriptService::backfill_project_transcripts_report`(wire 只追加,旧端互通)。Digger(`cc9f61b`)改调它,提示条列出前 5 个失败文件与原因,其余只给数量。
 
+## 已解决(续)
+
+### 搜索框右键菜单(G1)—— 已完成(整框语义)
+
+会话搜索框右键弹原生菜单:剪切、复制、粘贴、全选。**语义是整框的:** 剪切/复制作用于整个搜索词,粘贴追加到末尾,全选是精确的。原因:Digger 是标准 iced 应用,没有 Dozer 那套「合成 ⌘X/C/V/A 回灌给输入框」的自定义事件循环,而 iced 0.14 的输入框操作读不到选区。⌘C/V/X/A 快捷键仍是 iced 原生的精确选区语义。要做到按选区的菜单,需要在 byteui 的输入框上加「读选区」能力(新 byteui 版本、双方重钉)。仅 macOS;其它平台保持空操作。Project/Files/Todo 的输入框菜单未做。
+
 ## 仍然未决
 
 ### 3. 跨仓库迁移(X1)
 
 页签部件(`agent_tabs.rs`)、菜单弹层(`menu_overlay.rs`)和 `review_native` / `native_host` 的 wry 样板迁入 byteui / bytehost。涉及两个仓库发版与双方重钉,单独排期。
-
-### 4. 搜索框右键菜单(G1)
-
-`TextInputMenuOpen` 在 Digger 仍是空操作。Dozer 的做法是原生菜单 + 合成 ⌘C/V/X/A 键盘事件回灌给输入框(含先聚焦目标),Digger 要接同样一套事件机制,并需中文输入法下人工验证。建议单独立项。

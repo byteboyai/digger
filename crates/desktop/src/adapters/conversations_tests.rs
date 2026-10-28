@@ -2360,3 +2360,37 @@ fn import_failure_notice_lists_a_few_and_counts_the_rest() {
     assert!(!text.contains("/h/5.jsonl"), "只列前 5 个: {text}");
     assert!(text.ends_with("…另有 2 个"), "{text}");
 }
+
+#[test]
+fn search_box_menu_actions_work_on_the_whole_draft() {
+    use crate::adapters::conversations_search_menu::SearchEdit;
+    let rt = runtime();
+    let (mut panel, _fake, _summary) = panel(&rt);
+    let p = project(1, "/a");
+    let _ = panel.activate(&p);
+    // 没经过 SearchInput 之前搜索词视为空;没有状态的项目不响应菜单动作。
+    assert_eq!(panel.search_draft(1), "");
+    let _ = panel.search_edit(99, SearchEdit::Pasted(Some("x".into())), None);
+    assert_eq!(panel.search_draft(99), "");
+
+    let _ = panel.update(1, Message::SearchInput("ab".into()), Some(&p));
+    assert_eq!(panel.search_draft(1), "ab");
+
+    // 粘贴:追加到末尾,多行折成空格;空剪贴板不改动。
+    let _ = panel.search_edit(1, SearchEdit::Pasted(Some("c\r\nd".into())), Some(&p));
+    assert_eq!(panel.search_draft(1), "abc d");
+    let _ = panel.search_edit(1, SearchEdit::Pasted(None), Some(&p));
+    assert_eq!(panel.search_draft(1), "abc d");
+
+    // 复制和全选不改搜索词;剪切清空整个搜索词。
+    let _ = panel.search_edit(1, SearchEdit::Copy, Some(&p));
+    let _ = panel.search_edit(1, SearchEdit::SelectAll, Some(&p));
+    assert_eq!(panel.search_draft(1), "abc d");
+    let _ = panel.search_edit(1, SearchEdit::Cut, Some(&p));
+    assert_eq!(panel.search_draft(1), "");
+
+    // 关闭项目后缓存随状态一起清掉,不会把旧搜索词带给下一次打开。
+    let _ = panel.update(1, Message::SearchInput("again".into()), Some(&p));
+    panel.close_project(1);
+    assert_eq!(panel.search_draft(1), "");
+}

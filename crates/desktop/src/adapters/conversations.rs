@@ -53,6 +53,9 @@ pub struct ConversationsPanel {
     /// 导入任务在发 `Finished` 之前存下失败明细(库的 `ImportEvent` 只带导入数),
     /// 收到 `Finished` 时取走并写进提示条。
     import_failures: Arc<std::sync::Mutex<HashMap<i64, BackfillReport>>>,
+    /// 各项目搜索框当前的内容。库把它放在 crate 私有的 `search_draft` 里,宿主读不到,
+    /// 所以在 `SearchInput` 经过时缓存一份,右键菜单的复制/剪切/粘贴靠它。
+    search_drafts: HashMap<i64, String>,
 }
 
 /// 提示条里最多列出的失败文件数(完整数量写在开头);其余在日志里。
@@ -107,6 +110,7 @@ impl ConversationsPanel {
             import_tx,
             import_rx: Some(import_rx),
             import_failures: Arc::default(),
+            search_drafts: HashMap::new(),
             states: HashMap::new(),
             displays: HashMap::new(),
             conversation,
@@ -394,7 +398,82 @@ impl ConversationsPanel {
         if matches!(inner, Message::ReviewTraceLoaded) {
             return Task::none();
         }
+        match inner {
+            Message::SearchInput(text) => {
+                self.search_drafts.insert(pid, text.clone());
+            }
+            // 库对这条消息什么也不做;右键菜单由宿主自己弹(收尾计划 R5)。
+            Message::TextInputMenuOpen(_) => return self.open_search_menu(pid),
+            _ => {}
+        }
         self.update_library(pid, msg, project)
+    }
+
+    fn search_draft(&self, pid: i64) -> &str {
+        self.search_drafts.get(&pid).map_or("", String::as_str)
+    }
+
+    /// 搜索框右键:在光标处弹原生菜单(macOS)。非 macOS 没有对应的 iced 浮层,保持空操作
+    /// (与之前一致,该回退路径只要求能编译)。
+    fn open_search_menu(&self, pid: i64) -> Task<Msg> {
+        #[cfg(target_os = "macos")]
+        {
+            if !self.states.contains_key(&pid) {
+                return Task::none();
+            }
+            let at = crate::CURRENT_CURSOR.get();
+            let items = super::conversations_search_menu::menu_items(
+                pid,
+                self.search_draft(pid).is_empty(),
+            );
+            match byteui::native_menu::show(items, (at.x, at.y)) {
+                Some(message) => Task::done(message),
+                None => Task::none(),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = pid;
+            Task::none()
+        }
+    }
+
+    /// 执行菜单动作。整框语义:剪切/复制作用于整个搜索词,粘贴追加到末尾,全选精确。
+    pub fn search_edit(
+        &mut self,
+        pid: i64,
+        edit: super::conversations_search_menu::SearchEdit,
+        project: Option<&ProjectInfo>,
+    ) -> Task<Msg> {
+        use super::conversations_search_menu::{SearchEdit, pasted_draft};
+        use dozer_panel_conversations::view::conversation_search_field_id as field;
+        use iced::widget::operation;
+        if !self.states.contains_key(&pid) {
+            return Task::none();
+        }
+        match edit {
+            SearchEdit::Copy => iced::clipboard::write(self.search_draft(pid).to_owned()),
+            SearchEdit::Cut => {
+                let copied = iced::clipboard::write(self.search_draft(pid).to_owned());
+                let cleared = self.update(pid, Message::SearchInput(String::new()), project);
+                Task::batch([copied, cleared, operation::focus(field())])
+            }
+            SearchEdit::SelectAll => {
+                Task::batch([operation::focus(field()), operation::select_all(field())])
+            }
+            SearchEdit::Paste => iced::clipboard::read()
+                .map(move |text| Msg::ConversationsSearchEdit(pid, SearchEdit::Pasted(text))),
+            SearchEdit::Pasted(None) => Task::none(),
+            SearchEdit::Pasted(Some(text)) => {
+                let next = pasted_draft(self.search_draft(pid), &text);
+                let updated = self.update(pid, Message::SearchInput(next), project);
+                Task::batch([
+                    updated,
+                    operation::focus(field()),
+                    operation::move_cursor_to_end(field()),
+                ])
+            }
+        }
     }
     fn update_library(
         &mut self,
@@ -458,6 +537,7 @@ impl ConversationsPanel {
     pub fn close_project(&mut self, pid: i64) {
         self.native.invalidate_project(pid);
         self.imports.remove(&pid);
+        self.search_drafts.remove(&pid);
         self.states.remove(&pid);
         self.displays.remove(&pid);
         self.dirty.remove(&pid);

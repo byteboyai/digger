@@ -145,6 +145,8 @@ pub enum Msg {
     /// 群聊原生页面的回传(IPC、构建结果、探针)。
     GroupChatNative(crate::adapters::group_chat_native::Event),
     ConversationsImport(i64, crate::adapters::conversations_import::ImportEvent),
+    /// 会话搜索框右键菜单的动作(整框语义,见 `conversations_search_menu`)。
+    ConversationsSearchEdit(i64, crate::adapters::conversations_search_menu::SearchEdit),
     ConversationsNoticeDismiss,
     ReviewNative(crate::adapters::review_native::Event),
     /// 待办原生 webview 的回传。
@@ -2505,6 +2507,15 @@ impl Product<Msg> for ProductShell {
                 let task = self.conversations.update(pid, message, project.as_ref());
                 let requests = self.run_conversation_requests();
                 Task::batch([task, requests])
+            }
+            Msg::ConversationsSearchEdit(pid, edit) => {
+                let project = self
+                    .projects
+                    .open_ids()
+                    .contains(&pid)
+                    .then(|| self.projects.project_by_id(pid))
+                    .flatten();
+                self.conversations.search_edit(pid, edit, project.as_ref())
             }
             Msg::ConversationsImport(pid, event) => {
                 if matches!(
