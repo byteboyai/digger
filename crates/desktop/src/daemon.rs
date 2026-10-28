@@ -435,7 +435,11 @@ mod tests {
                             }
                             Request::BackfillProjectTranscripts { .. } => {
                                 calls.lock().unwrap().push("transcript");
-                                Reply::BackfillDone { imported_files: 3, failed_total: 0, failures: vec![] }
+                                Reply::BackfillDone {
+                                    imported_files: 3,
+                                    failed_total: 0,
+                                    failures: vec![],
+                                }
                             }
                             other => panic!("unexpected {other:?}"),
                         };

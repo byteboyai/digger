@@ -8,6 +8,7 @@ use iced::widget::{column, row, text};
 use iced::{Element, Length};
 use std::cell::Cell;
 
+#[derive(Default)]
 pub struct GroupChatDisplay {
     list_on_left: Cell<bool>,
 }

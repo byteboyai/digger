@@ -2349,8 +2349,14 @@ fn import_failure_notice_lists_a_few_and_counts_the_rest() {
         report.record_failure(format!("/h/{i}.jsonl"), "损坏".into());
     }
     let text = import_failure_notice(&report).unwrap();
-    assert!(text.starts_with("有 7 个会话文件导入失败(已导入 3 个):"), "{text}");
-    assert!(text.contains("/h/0.jsonl — 损坏") && text.contains("/h/4.jsonl"), "{text}");
+    assert!(
+        text.starts_with("有 7 个会话文件导入失败(已导入 3 个):"),
+        "{text}"
+    );
+    assert!(
+        text.contains("/h/0.jsonl — 损坏") && text.contains("/h/4.jsonl"),
+        "{text}"
+    );
     assert!(!text.contains("/h/5.jsonl"), "只列前 5 个: {text}");
     assert!(text.ends_with("…另有 2 个"), "{text}");
 }

@@ -1258,11 +1258,17 @@ mod tests {
     struct RecordingTranscript(std::sync::Mutex<Vec<String>>);
 
     impl TranscriptService for RecordingTranscript {
-        fn delete_project_transcripts(&self, cwd: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
+        fn delete_project_transcripts(
+            &self,
+            cwd: String,
+        ) -> BoxFuture<'_, Result<u32, ServiceError>> {
             self.0.lock().unwrap().push(cwd);
             Box::pin(async { Ok(0) })
         }
-        fn backfill_project_transcripts(&self, _: String) -> BoxFuture<'_, Result<u32, ServiceError>> {
+        fn backfill_project_transcripts(
+            &self,
+            _: String,
+        ) -> BoxFuture<'_, Result<u32, ServiceError>> {
             Box::pin(async { Err(no_transcript()) })
         }
         fn submit_summary_batch(
@@ -1317,7 +1323,10 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert_eq!(*recorder.0.lock().unwrap(), [project.path.clone()]);
+        assert_eq!(
+            *recorder.0.lock().unwrap(),
+            std::slice::from_ref(&project.path)
+        );
         assert!(original.exists(), "只清副本,项目文件不动");
     }
 

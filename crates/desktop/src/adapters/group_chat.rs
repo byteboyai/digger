@@ -66,9 +66,7 @@ impl GroupChatPanel {
         }))
     }
     pub fn ensure_state(&mut self, project: &ProjectInfo) -> &mut WorkspaceState {
-        self.displays
-            .entry(project.id)
-            .or_insert_with(|| GroupChatDisplay::new());
+        self.displays.entry(project.id).or_default();
         self.states.entry(project.id).or_default()
     }
     pub fn state(&self, pid: i64) -> Option<&WorkspaceState> {
