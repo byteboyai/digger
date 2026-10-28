@@ -9,7 +9,7 @@
 | 探针 | 状态 | 对设计的影响 |
 |------|------|--------------|
 | S1 `file://` | ✅ **能用,不需要特殊加载路径** | Task 2 不必加 `loadFileURL` 分支;同目录子资源能加载;**页面不能 `fetch` 其它本地文件** |
-| S2 子视图键盘 | ⏳ **需要你手动试**(给出了运行说明) | 静态证据显示 ⌘ 组合键**不会**直达页面,很可能需要 Edit 菜单或脚本桥 |
+| S2 子视图键盘 | ✅ **已测:装一个标准 Edit 菜单即可,不需要注入任何脚本** | 打字、中文输入法本来就正常;⌘C/⌘V/⌘X 没有 Edit 菜单时**完全不生效**,装了就生效;⌘A 与 iced 输入框是否受影响还有两项待你确认 |
 | S3 权限 | ✅ **有隐患但目前够不着**;代理拒绝已验证可行 | 照计划装代理委托,当作纵深防御 |
 | S4 iced 焦点读取 | ✅ **标准 iced 下可用** | Task 6 的焦点桥按计划做 |
 | S5 层级 | ➖ 没做(已是项目既有定论) | — |
@@ -48,31 +48,29 @@
 - **销毁不立刻释放:** 全部销毁 1.5 秒后,WebContent 合计 RSS 几乎没变(1520800 → 1520736 KB)。WebKit 的进程是池化、延迟回收的。
 - 对设计的意义:创建很便宜,所以"切项目就销毁、切回来重建"没有性能问题;但不要指望销毁能立刻降内存。
 
-## S2:子视图里的键盘(未完成,需要你手动试)
+## S2:子视图里的键盘(实测,两遍对比)
 
-**静态证据(读 wry 源码):** 子 webview 的 `performKeyEquivalent:` 被 wry 显式覆盖为**恒返回 `NO`**(源码注释:为了让窗口菜单快捷键能触发,代价是"cmd+key 事件不会在 webview 里处理,JavaScript 也监听不到")。这解释了为什么 Dozer 要用 JS 桥处理 ⌘V、⌘F。推论:**在没有 Edit 菜单的情况下,⌘C/⌘V/⌘X/⌘A 很可能不会直达页面。**两条可能的出路:
-- **A.** 给应用装一个标准 Edit 菜单(Cut/Copy/Paste/Select All,目标为空,走响应链),让 ⌘ 组合键经菜单动作 `copy:`/`paste:` 等送给 first responder(WKWebView)——**零脚本**,最理想;
-- **B.** 注入一段带 nonce 的固定脚本做桥(Dozer 现状)——页面就能看到 `window.ipc`。
+做法:同一个探针,webview 里一个 `input`、一个 `textarea`,页面监听 `keydown`/`copy`/`paste`/`cut`/`compositionstart`/`compositionend`/`focus`,事件写进标题并由宿主原生标题回调打印;你在真实窗口里按固定顺序操作。第一遍**没有** Edit 菜单,第二遍装了标准 Edit 菜单(Cut/Copy/Paste/Select All,目标为空,走响应链)。
 
-**探针已经备好,需要你在真实窗口里试一次**(我没法替你打字和用输入法):
+| 事件(页面收到的次数) | 没有 Edit 菜单 | 有 Edit 菜单 |
+|------------------------|----------------|--------------|
+| `copy` | **0** | **2** |
+| `paste` | **0** | **4** |
+| `cut` | **0** | **2** |
+| `compositionend`(中文输入法提交) | 4 | 6 |
+| 带 ⌘ 的 `keydown`(如 `c+meta`) | 26 | 10 |
 
-```bash
-cd /Users/chrischiang/Projects/CoralProjects/byteboy/dozer/spike/browser-probe
-cargo run -- --interactive               # 先跑这个:没有 Edit 菜单
-cargo run -- --interactive --edit-menu   # 再跑这个:装了 Edit 菜单
-```
+**结论:**
+1. **打字与中文输入法本来就正常**,两遍都一样:拼音输入、选词、提交都有成对的 `compositionstart`/`compositionend`。不需要为输入法做任何事。
+2. **没有 Edit 菜单时,⌘C / ⌘V / ⌘X 在页面里完全不生效。** 页面能收到 `c+meta` 这类 `keydown`(所以更正我之前写的"JavaScript 也监听不到":那是读 wry 注释推出来的,**实测不对**),但编辑动作本身没有执行——`copy`/`paste`/`cut` 一个都没触发。这和 wry 的 `performKeyEquivalent:` 对子视图恒返回 `NO` 一致。
+3. **装了 Edit 菜单就好了**:`copy`/`paste`/`cut` 在 `input` 和 `textarea` 里都正常触发,而且是**零脚本**——⌘ 组合键走菜单 → 响应链 → first responder(WKWebView)。顺带的现象:装了菜单后,被菜单接管的组合键(⌘C/⌘V/⌘X)页面**不再收到** `c+meta` 这类 `keydown`(只收到单独的 `Meta`),而没绑菜单的(如 `⌘←`)页面仍能收到。
+4. **所以出路 A 成立,出路 B(注入带 nonce 的脚本桥)不需要。** 这对安全设计是好消息:浏览器子视图可以**完全不注入脚本、不装 IPC 处理器**,页面看不到 `window.ipc`。
 
-窗口里有一个 webview(页面是 `/tmp/browser-probe/keys.html`,有 `input` 和 `textarea`)和两个 iced 输入框。每次都按同样的顺序试,把终端里的 `PROBE page title EV:…` 行和你看到的现象告诉我:
+**还没确认的两项(日志看不出来,需要你告诉我):**
+- **⌘A(全选)** 不产生任何页面事件,日志无法区分。请确认:装了 Edit 菜单那遍,在 webview 的 `textarea` 里 ⌘A 是否真的全选了?
+- **Edit 菜单会不会抢走 iced 输入框的 ⌘ 组合键。** 菜单接管 ⌘C/⌘V/⌘X/⌘A 后,窗口底部那两个 **iced** 输入框里这些快捷键还能用吗?理论上不会有问题(first responder 是 winit 的视图,没有实现 `copy:` 等选择器时菜单项会被禁用、按键会落到 `keyDown`),但这是推论,没实测。
 
-1. 点进 webview 的 `input`,**打字**(英文)——能输入吗?
-2. 在 `textarea`(预填 `hello world`)里 **⌘A**——全选了吗?
-3. **⌘C**,再到 iced 输入框里 **⌘V**——粘贴出 `hello world` 了吗?(验证复制是否生效)
-4. 在 webview `input` 里 **⌘V**——能粘贴进来吗?
-5. 选中一段后 **⌘X**——文字被剪掉了吗?
-6. **中文输入法**:在 webview `input` 里用拼音输入并选词——候选框位置对吗?能提交吗?
-7. 点 webview 之后,再点 iced 输入框打字——焦点能回到 iced 吗?反过来呢?
-
-每一步各记两遍(没有 / 有 Edit 菜单),重点看第 2–5 步在两种模式下的差别。
+另外,Digger 自己没有安装任何主菜单(`setMainMenu` / `NSMenu::new` 在 Digger 代码里一处都没有),所以这个 Edit 菜单要由 Digger 新装。
 
 ## S5:层级与隐藏(没做)
 
@@ -82,5 +80,5 @@ cargo run -- --interactive --edit-menu   # 再跑这个:装了 Edit 菜单
 
 1. **Task 2** 不加 `file://` 特殊加载分支;新增:宿主在交给 wry 前对 URL 做百分号编码;新增"导航失败无回调"的宿主侧超时提示;媒体捕获代理委托(`objc2-web-kit` 依赖)。
 2. **Task 6** 的焦点桥按原设计做(S4 已验证 API)。
-3. **S2 未决:** Task 2 是否注入脚本、Task 6 是否装 Edit 菜单,等你的手动结果。
+3. **S2 已决:** 不注入任何脚本;Digger 新装一个标准 Edit 菜单(见下),并在验收清单里加"iced 输入框的 ⌘ 组合键不受影响"。
 4. **验收清单 I 区**补:`file://` 页面的相对资源、页面读不到其它本地文件、导航失败的提示、焦点点击时机。
