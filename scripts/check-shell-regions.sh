@@ -44,7 +44,10 @@ def norm_region(r):
     }
 
 bad = []
-for name in ["top_bar", "left_icon_rail", "right_icon_rail", "status_bar", "left_zone", "right_zone"]:
+for name in ["top_bar", "left_icon_rail", "right_icon_rail", "status_bar", "left_zone", "right_zone", "context_menu"]:
+    if name not in ours:
+        bad.append(f"{name}: byteui 没有这个区域(byteui 版本太旧?)")
+        continue
     a, b = norm_region(dozer["regions"][name]), norm_region(ours[name])
     for key in a:
         if a[key] != b[key]:
@@ -64,5 +67,5 @@ if bad:
     for line in bad:
         print("  " + line, file=sys.stderr)
     sys.exit(1)
-print("shell regions: ok(byteui 的 7 个外壳区域与 Dozer workspace.json 逐项一致)")
+print("shell regions: ok(byteui 的 8 个外壳区域与 Dozer workspace.json 逐项一致)")
 PY
