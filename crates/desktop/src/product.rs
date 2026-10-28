@@ -174,6 +174,9 @@ pub enum Msg {
     /// 浏览器面板可见时的 16ms 探针:推进悬停动画并问地址栏是否持有真实焦点。
     BrowserFocusFrame(i64),
     BrowserAddrFocused(i64, bytehost_core::request::RequestToken, bool),
+    /// 浏览器网页子视图池的回传(页面加载 / 标题 / 新窗口请求 / 导航无响应)。
+    BrowserNative(crate::adapters::browser_native::Event),
+    BrowserNoticeDismiss,
     /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
@@ -1177,8 +1180,20 @@ impl ProductShell {
                 std::time::Instant::now(),
             )
             .map(Msg::GroupChatNative);
+        let browser_task = self.browser.sync_native(
+            window,
+            crate::adapters::browser::NativeInputs {
+                project_id: (!closing)
+                    .then(|| self.projects.current_project_id())
+                    .flatten(),
+                content: content_of(&shell::browser_id()),
+                window_active: !closing && !self.window_minimized,
+                overlay_open: self.chat_overlay_open(),
+            },
+        );
         let preview_tasks = self.sync_preview_native(&rects, closing);
         Task::batch([
+            browser_task,
             chat_task,
             apps_task,
             usage_task,
@@ -2756,7 +2771,23 @@ impl Product<Msg> for ProductShell {
                     .contains(&pid)
                     .then(|| self.projects.project_by_id(pid))
                     .flatten();
-                self.browser.update(pid, message, project.as_ref())
+                let task = self.browser.update(pid, message, project.as_ref());
+                Task::batch([task, self.sync_native()])
+            }
+            Msg::BrowserNative(event) => {
+                let projects = &self.projects;
+                let task = self.browser.update_native(event, |pid| {
+                    projects
+                        .open_ids()
+                        .contains(&pid)
+                        .then(|| projects.project_by_id(pid))
+                        .flatten()
+                });
+                Task::batch([task, self.sync_native()])
+            }
+            Msg::BrowserNoticeDismiss => {
+                self.browser.dismiss_notice();
+                self.sync_native()
             }
             Msg::BrowserAddrEdit(pid, edit) => {
                 let project = self
@@ -2765,12 +2796,15 @@ impl Product<Msg> for ProductShell {
                     .contains(&pid)
                     .then(|| self.projects.project_by_id(pid))
                     .flatten();
-                self.browser.addr_edit(pid, edit, project.as_ref())
+                let task = self.browser.addr_edit(pid, edit, project.as_ref());
+                Task::batch([task, self.sync_native()])
             }
             Msg::BrowserFocusFrame(pid) => {
                 if self.browser_project() != Some(pid) {
                     return Task::none();
                 }
+                // 同一个 16ms 探针顺带检查"导航迟迟没有开始"(池只在这里被问,面板不可见时不问)。
+                self.browser.native.poll_stalled();
                 self.browser.focus_frame(pid)
             }
             Msg::BrowserAddrFocused(pid, token, focused) => {
@@ -3715,6 +3749,12 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let browser_native_task = match shell.browser.native.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (Msg::BrowserNative(event), rx))
+        })),
+        None => Task::none(),
+    };
     let browser_task = match shell.browser.take_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|(pid, m)| (Msg::Browser(pid, m), rx))
@@ -3775,6 +3815,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             group_chat_task,
             conversations_task,
             browser_task,
+            browser_native_task,
             conversations_import_task,
             review_native_task,
             group_chat_native_task,

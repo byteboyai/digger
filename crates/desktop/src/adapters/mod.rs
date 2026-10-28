@@ -45,6 +45,7 @@ pub mod preview_display;
 pub mod browser;
 pub mod browser_addr_menu;
 pub mod browser_display;
+pub mod browser_native;
 pub mod conversations;
 pub mod conversations_display;
 pub mod group_chat;

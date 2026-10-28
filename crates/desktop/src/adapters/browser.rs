@@ -6,19 +6,39 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bytehost_chrome::BodyArea;
+use bytehost_chrome::{BodyArea, Rect};
+use bytehost_core::LogicalRect;
+use bytehost_desktop::web_child::WebTabSpec;
 use dozer_model::ProjectInfo;
 use dozer_panel_browser::{Message, NavAction, State, addr_field_id};
 use dozer_services::BookmarkService;
-use iced::widget::{container, operation};
-use iced::{Border, Element, Length, Task};
+use iced::widget::{column, container, operation};
+use iced::{Border, Element, Length, Task, window};
 
 use super::browser_addr_menu::{AddrEdit, pasted_addr};
 use super::browser_display::DiggerBrowserDisplay;
+use super::browser_native::{self, BrowserNative, Desired, Outcome, Sidebar, webview_rect};
+use super::notice::NoticeBar;
 use crate::product::Msg;
 
 /// 收藏夹侧栏展开时网页区占的比例(v1 固定,分隔条不可拖,见 `browser_display`)。
 const BOOKMARKS_CONTENT_SPLIT: f32 = 0.72;
+
+/// 浏览器是单栏面板(没有配对规则),骨架给的 `mirrored` 恒为假:收藏夹在网页后面。
+/// 视图与网页几何共用这一个值,免得两边对"侧栏在哪"各算各的。
+const SIDEBAR_MIRRORED: bool = false;
+
+/// 本帧同步原生层需要的输入(都是产品壳算好的)。
+pub struct NativeInputs {
+    /// 当前项目;没有、或正在关闭时为 `None`(销毁全部网页)。
+    pub project_id: Option<i64>,
+    /// 面板内容矩形;面板没被选中时为 `None`(停放)。
+    pub content: Option<Rect>,
+    /// 窗口没最小化、没在关闭。
+    pub window_active: bool,
+    /// 有 iced 浮层会被网页盖住。
+    pub overlay_open: bool,
+}
 
 pub struct BrowserPanel {
     states: HashMap<i64, State>,
@@ -28,6 +48,9 @@ pub struct BrowserPanel {
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<(i64, Message)>>,
     nav: Vec<(i64, NavAction)>,
     display: DiggerBrowserDisplay,
+    pub native: BrowserNative,
+    /// 页面没响应 / 网址被挡这类一次性提示。显示在页签栏上方,所以占的高度要从网页矩形里扣掉。
+    pub notice: NoticeBar,
 }
 
 /// 地址栏真实焦点变化落到库状态上;返回「这一次要不要对地址栏做一次全选」。
@@ -67,6 +90,8 @@ impl BrowserPanel {
             rx: Some(rx),
             nav: vec![],
             display: DiggerBrowserDisplay,
+            native: BrowserNative::new(),
+            notice: NoticeBar::default(),
         }
     }
 
@@ -111,6 +136,121 @@ impl BrowserPanel {
     pub fn close_project(&mut self, pid: i64) {
         self.states.remove(&pid);
         self.nav.retain(|(id, _)| *id != pid);
+    }
+
+    pub fn dismiss_notice(&mut self) {
+        self.notice.dismiss();
+    }
+
+    /// 提示条占的高度(没有提示为 0)。网页矩形要整体下移这么多。
+    pub fn notice_height(&self) -> f32 {
+        if self.notice.is_some() {
+            byteui::theme::geometry::preview_chrome_top_px()
+        } else {
+            0.
+        }
+    }
+
+    /// 本帧期望的原生状态(纯函数,不碰窗口):几何、页签清单、停放条件都在这里算。
+    fn desired(&self, inputs: &NativeInputs) -> Desired {
+        let state = inputs.project_id.and_then(|pid| self.states.get(&pid));
+        let rect = match (state, inputs.content) {
+            (Some(state), Some(content)) => {
+                let sidebar = state.bookmarks_open().then_some(Sidebar {
+                    content_fraction: BOOKMARKS_CONTENT_SPLIT,
+                    mirrored: SIDEBAR_MIRRORED,
+                });
+                let r = webview_rect(
+                    content,
+                    self.display_padding(),
+                    self.notice_height(),
+                    sidebar,
+                );
+                LogicalRect {
+                    x: f64::from(r.x),
+                    y: f64::from(r.y),
+                    width: f64::from(r.w),
+                    height: f64::from(r.h),
+                }
+            }
+            // 骨架对"没有可用矩形"的约定占位;原生层见到它就不显示子视图。
+            _ => LogicalRect {
+                x: 0.,
+                y: 0.,
+                width: 1.,
+                height: 1.,
+            },
+        };
+        Desired {
+            // 项目还没建状态(面板从没激活过)等同没有项目:不建池。
+            project_id: state.and(inputs.project_id),
+            shown: inputs.content.is_some() && inputs.window_active,
+            overlay_open: inputs.overlay_open,
+            rect,
+            tabs: state
+                .map(|s| {
+                    s.desired_webviews()
+                        .into_iter()
+                        .map(|spec| WebTabSpec {
+                            id: spec.id,
+                            url: spec.url,
+                            visible: spec.visible,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// 取走排队的导航:只对"现在显示的项目"的激活页签执行,别的项目 / 没有页签的丢弃。
+    fn nav_targets(&mut self, project_id: Option<i64>) -> Vec<(usize, NavAction)> {
+        let active = project_id
+            .and_then(|pid| self.states.get(&pid))
+            .and_then(State::active_webview_id);
+        self.take_nav()
+            .into_iter()
+            .filter_map(|(pid, action)| {
+                (Some(pid) == project_id)
+                    .then_some(active)
+                    .flatten()
+                    .map(|tab| (tab, action))
+            })
+            .collect()
+    }
+
+    /// 让原生层收敛到库的页签清单,并执行排队的后退 / 前进 / 刷新。
+    pub fn sync_native(&mut self, window: window::Id, inputs: NativeInputs) -> Task<Msg> {
+        let desired = self.desired(&inputs);
+        let navs = self.nav_targets(desired.project_id);
+        let mut tasks = vec![self.native.sync(window, desired)];
+        for (tab, action) in navs {
+            tasks.push(self.native.nav(window, tab, action));
+        }
+        Task::batch(tasks).map(Msg::BrowserNative)
+    }
+
+    /// 处理原生层事件。库消息交给 `update`(`projects` 按项目 id 取项目信息),提示进提示条。
+    pub fn update_native(
+        &mut self,
+        event: browser_native::Event,
+        project_of: impl Fn(i64) -> Option<ProjectInfo>,
+    ) -> Task<Msg> {
+        match self.native.update(event) {
+            Some(Outcome::Lib(pid, message)) => {
+                let project = project_of(pid);
+                self.update(pid, message, project.as_ref())
+            }
+            Some(Outcome::Notice(text)) => {
+                self.notice.push(text);
+                Task::none()
+            }
+            None => Task::none(),
+        }
+    }
+
+    fn display_padding(&self) -> iced::Padding {
+        use dozer_panel_browser::BrowserDisplay;
+        self.display.region().padding
     }
 
     /// 取走后退 / 前进 / 刷新请求,交给原生层对对应项目的激活页签执行。
@@ -278,7 +418,7 @@ impl BrowserPanel {
         }
     }
 
-    pub fn view<'a>(&'a self, project: Option<&ProjectInfo>, area: &BodyArea) -> Element<'a, Msg> {
+    pub fn view<'a>(&'a self, project: Option<&ProjectInfo>, _area: &BodyArea) -> Element<'a, Msg> {
         let empty = || {
             container(iced::widget::Space::new())
                 .width(Length::Fill)
@@ -292,16 +432,26 @@ impl BrowserPanel {
             return empty();
         };
         let pid = project.id;
-        dozer_panel_browser::view(
+        let page: Element<'a, Msg> = dozer_panel_browser::view(
             &self.display,
             state,
             Some(pid),
             BOOKMARKS_CONTENT_SPLIT,
             Length::Fill,
             Border::default(),
-            area.mirrored,
+            SIDEBAR_MIRRORED,
         )
-        .map(move |message| Msg::Browser(pid, message))
+        .map(move |message| Msg::Browser(pid, message));
+        match self.notice.view(Msg::BrowserNoticeDismiss) {
+            Some(notice) => column![
+                container(notice)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(self.notice_height())),
+                page
+            ]
+            .into(),
+            None => page,
+        }
     }
 }
 
@@ -449,6 +599,149 @@ mod tests {
         // 同一条消息发给真正打开的项目 2 才生效。
         let _ = panel.update(2, Message::OpenUrl("https://z.com/".into()), Some(&closing));
         assert_eq!(panel.states[&2].tab_count(), 2);
+    }
+
+    fn inputs(project_id: Option<i64>, content: Option<Rect>) -> NativeInputs {
+        NativeInputs {
+            project_id,
+            content,
+            window_active: true,
+            overlay_open: false,
+        }
+    }
+
+    fn content() -> Rect {
+        Rect {
+            x: 100.,
+            y: 50.,
+            w: 500.,
+            h: 600.,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_native_geometry_follows_the_notice_and_the_open_sidebar() {
+        let mut panel = panel();
+        let p = project(1);
+        panel.ensure_state(&p);
+        let plain = panel.desired(&inputs(Some(1), Some(content())));
+        assert!(plain.shown);
+        panel.notice.push_quiet("页面没有响应");
+        let with_notice = panel.desired(&inputs(Some(1), Some(content())));
+        assert_eq!(
+            with_notice.rect.y,
+            plain.rect.y + f64::from(panel.notice_height())
+        );
+        assert!(panel.notice_height() > 0.);
+        panel.dismiss_notice();
+        let _ = panel.update(1, Message::BookmarksToggle, Some(&p));
+        let with_sidebar = panel.desired(&inputs(Some(1), Some(content())));
+        assert!(with_sidebar.rect.width < plain.rect.width);
+        assert_eq!(with_sidebar.rect.x, plain.rect.x, "侧栏在网页后面");
+    }
+
+    #[tokio::test]
+    async fn nothing_is_shown_without_content_a_project_state_or_an_active_window() {
+        let mut panel = panel();
+        let p = project(1);
+        // 项目没建状态:不建池。
+        assert_eq!(
+            panel.desired(&inputs(Some(1), Some(content()))).project_id,
+            None
+        );
+        panel.ensure_state(&p);
+        // 面板没被选中(没有内容矩形):停放。
+        let parked = panel.desired(&inputs(Some(1), None));
+        assert_eq!(parked.project_id, Some(1));
+        assert!(!parked.shown);
+        assert!(parked.rect.width <= 1. && parked.rect.height <= 1.);
+        // 窗口最小化 / 关闭中。
+        let mut minimized = inputs(Some(1), Some(content()));
+        minimized.window_active = false;
+        assert!(!panel.desired(&minimized).shown);
+        // 没有当前项目:销毁。
+        assert_eq!(
+            panel.desired(&inputs(None, Some(content()))).project_id,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn the_page_list_mirrors_the_librarys_tabs_with_only_the_active_one_visible() {
+        let mut panel = panel();
+        let p = project(1);
+        panel.ensure_state(&p);
+        let _ = panel.update(1, Message::OpenUrl("https://a.com/".into()), Some(&p));
+        let d = panel.desired(&inputs(Some(1), Some(content())));
+        assert_eq!(d.tabs.len(), 2);
+        assert_eq!(d.tabs.iter().filter(|t| t.visible).count(), 1);
+        assert!(d.tabs.last().unwrap().visible, "新开的页签是激活的");
+        assert_eq!(d.tabs.last().unwrap().url, "https://a.com/");
+    }
+
+    #[tokio::test]
+    async fn queued_navigation_only_reaches_the_shown_projects_active_tab() {
+        let mut panel = panel();
+        let (a, b) = (project(1), project(2));
+        panel.ensure_state(&a);
+        panel.ensure_state(&b);
+        let _ = panel.update(1, Message::Nav(NavAction::Back), Some(&a));
+        let _ = panel.update(2, Message::Nav(NavAction::Refresh), Some(&b));
+        let active = panel.states[&1].active_webview_id().unwrap();
+        assert_eq!(panel.nav_targets(Some(1)), vec![(active, NavAction::Back)]);
+        // 项目 2 的刷新随这一轮被丢弃,不会等到它被显示时再突然执行。
+        let _ = panel.update(2, Message::Nav(NavAction::Forward), Some(&b));
+        assert!(panel.nav_targets(None).is_empty());
+        assert!(panel.take_nav().is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_events_route_to_the_project_that_owns_the_generation() {
+        use bytehost_desktop::web_child::WebEvent;
+        let mut panel = panel();
+        let (a, b) = (project(1), project(2));
+        panel.ensure_state(&a);
+        panel.ensure_state(&b);
+        // 当前显示项目 2:迟到的项目 1 事件(旧一代)不得改任何状态。
+        let _ = panel
+            .native
+            .prepare(&panel.desired(&inputs(Some(1), Some(content()))));
+        let old = panel.native.generation_for_tests();
+        let _ = panel
+            .native
+            .prepare(&panel.desired(&inputs(Some(2), Some(content()))));
+        let tab = panel.states[&2].active_webview_id().unwrap();
+        let lookup = |pid| (pid == 2).then(|| project(2));
+        let _ = panel.update_native(
+            browser_native::Event::Web(WebEvent::PageLoaded {
+                generation: old,
+                id: tab,
+                url: "https://stale.com/".into(),
+            }),
+            lookup,
+        );
+        assert_eq!(displayed_addr(&panel.states[&2]), "about:blank");
+        let now = panel.native.generation_for_tests();
+        let _ = panel.update_native(
+            browser_native::Event::Web(WebEvent::PageLoaded {
+                generation: now,
+                id: tab,
+                url: "https://fresh.com/".into(),
+            }),
+            lookup,
+        );
+        assert_eq!(displayed_addr(&panel.states[&2]), "https://fresh.com/");
+        // 导航无响应:进提示条,不改页签。
+        let _ = panel.update_native(
+            browser_native::Event::Web(WebEvent::NavigationStalled {
+                generation: now,
+                id: tab,
+                url: "https://slow.com/".into(),
+            }),
+            lookup,
+        );
+        assert!(panel.notice.text().unwrap().contains("slow.com"));
+        assert_eq!(displayed_addr(&panel.states[&2]), "https://fresh.com/");
     }
 
     /// 只有收藏夹侧栏展开时才会向宿主要分隔条。
