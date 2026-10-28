@@ -12,6 +12,10 @@
    - **Opencode 仍不支持:** 无限制工具参数;配置里写 `webfetch: deny` 后联网仍成功;无「不落会话」开关;提示词只能走 argv。
    - Opencode 仍可加入群、发言时失败;是否在弹窗里隐藏属产品决定。
 
-## 仍然未决
+## 已解决(续)
 
 4. **跨仓库迁移(X1)。** 已于 2026-10-28 全部完成:页签部件、菜单弹层迁入 byteui 0.5.0;`native_host` 迁入 bytehost v0.4.14 的 `native_child`。`markdown/host.rs` 评估后不并入。
+
+## 仍然未决
+
+- **Opencode 仍不能在群聊发言**(见上面第 6 条):没有可在命令行层强制的禁联网 / 不落会话机制。重新评估的触发条件:上游提供能禁联网且实测生效的机制、能不落会话库、提示词有非 argv 通道。详见 `dozer/docs/superpowers/specs/2026-10-27-group-chat-agents-readonly-research.md`。
