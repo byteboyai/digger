@@ -1,34 +1,24 @@
 //! iced 自绘的上下文菜单浮层(S5b-1 Task 9)。
 //!
-//! byteui 的 `interaction::context_menu` 只负责"右键触发",没有菜单外框与
-//! 菜单项渲染;那部分在 Dozer 的 `chrome/menu.rs`。Digger 与 Dozer 共用同一套
-//! 视觉:外壳用 `context_menu` 区域(半透明 PANEL 底、1px 描边、圆角 9、内边距
-//! 8、项间距 1),菜单项为"图标 + 文字"、hover 切 `tab_hover` 底并左右内缩
-//! `menu_hover_inset`。度量全部取 `byteui::theme::geometry`,与 Dozer 同源。
+//! 菜单原语(项、分隔线、外框)、锚点钳制 `MenuAnchor`、按行渲染的 `view_rows` 与带遮罩的外框
+//! `overlay_shell` 已迁到 `byteui::interaction::menu`(X1,与 Dozer 共用;原先这里抄过一份 Dozer 的
+//! `chrome/menu.rs`)。外框度量来自 `byteui::theme::region::context_menu()`(不透明背景)。
+//!
+//! 本文件只剩 Digger 自己的两样:
+//! - [`MenuOverlay<M>`]:条目类型是文件库的 `dozer_panel_files::menu::MenuItem`,byteui 不能依赖
+//!   Dozer 库 crate,所以这一层留在这里;
+//! - 把产品 `Msg` 固定下来的薄包装 [`OverlayRow`] / [`view_rows`],调用点不用写泛型参数。
 
-use iced_widget::core::{Border, Color, Element, Length, Padding, Shadow, Vector};
-use iced_widget::{button, column, container, row, text};
+use iced_widget::core::{Element, Length};
 
 use crate::product::Msg;
 
+pub use byteui::interaction::menu::MenuAnchor;
+
 type El<'a> = Element<'a, Msg, iced_widget::Theme, iced_renderer::Renderer>;
 
-/// 弹出位置:左上角锚在 `(x, y)`,并钳制在窗口 `(w, h)` 内。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MenuAnchor {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl MenuAnchor {
-    /// 按菜单实际尺寸把锚点钳进窗口:右侧/下侧放不下时向左/上翻。
-    pub fn clamped(self, size: (f32, f32), window: (f32, f32)) -> Self {
-        let (menu_w, menu_h) = size;
-        let x = self.x.min((window.0 - menu_w).max(0.0)).max(0.0);
-        let y = self.y.min((window.1 - menu_h).max(0.0)).max(0.0);
-        Self { x, y }
-    }
-}
+/// 与具体面板无关的一行(Agent 选择器等复用同一套外框与行样式),消息类型固定为产品 `Msg`。
+pub type OverlayRow = byteui::interaction::menu::OverlayRow<Msg>;
 
 /// 一条菜单(条目已规整)。空 `items` 表示不弹——产品据此不出浮层。
 #[derive(Debug, Clone)]
@@ -44,53 +34,28 @@ impl<M> MenuOverlay<M> {
     }
 }
 
-/// 菜单外形尺寸:宽恒为 `menu_item_width`(与 Dozer 常宽菜单一致),高按条目数估算
-/// (项高 + 上下内边距 + 项间距),供 [`MenuAnchor::clamped`] 用。分隔线只占一条。
-#[allow(dead_code)] // 保留给需要预先量尺寸的调用方;菜单视图走 `rows_size`。
+/// 菜单外形尺寸:宽恒为 `menu_item_width`(与 Dozer 常宽菜单一致),高按条目数估算(分隔线只占一条),
+/// 供 [`MenuAnchor::clamped`] 用。
+#[allow(dead_code)] // 保留给需要预先量尺寸的调用方;菜单视图走 byteui 的 `rows_size`。
 pub fn menu_size<M>(items: &[dozer_panel_files::menu::MenuItem<M>]) -> (f32, f32) {
-    let region = region();
-    let row_h = row_height();
-    let gap = byteui::theme::geometry::menu_gap();
-    let width =
-        byteui::theme::geometry::menu_item_width() + region.padding.left + region.padding.right;
-    let mut height = region.padding.top + region.padding.bottom;
-    for item in items {
-        height += match item {
-            dozer_panel_files::menu::MenuItem::Entry { .. } => row_h + gap,
-            dozer_panel_files::menu::MenuItem::Separator => 1.0 + gap,
-        };
-    }
-    (width, height)
-}
-
-/// 单个菜单行的高度(上下内边距 + 一行图标/文字)。
-fn row_height() -> f32 {
-    let inset = byteui::theme::geometry::menu_hover_inset();
-    let pad_h = (byteui::theme::geometry::menu_pad_h() - inset).max(0.0);
-    let text_h = byteui::theme::font::label() as f32 * 1.2;
-    // 按钮上下 padding + 内容高度;左右 padding 不影响高度。
-    let _ = pad_h;
-    byteui::theme::geometry::menu_pad_v() * 2.0 + text_h
-}
-
-/// `context_menu` 区域样式(与 Dozer `theme::region::context_menu()` 同值):
-/// 背景取 `panel` + alpha 0xfa,描边 1px、圆角 9、内边距 8、项间距 1。
-fn region() -> byteui::theme::region::RegionStyle {
-    let scale = byteui::theme::icon_size::scale();
-    // 完全不透明:wgpu 线性混合下,alpha 0.98 仍会让底下的亮字透出约 15%(见测试)。
-    let mut bg = byteui::theme::color::current().panel;
-    bg.a = 1.0;
-    byteui::theme::region::RegionStyle {
-        background: Some(bg),
-        border: Some(Border {
-            color: byteui::theme::color::current().border,
-            width: 1.0,
-            radius: 9.0.into(),
-        }),
-        padding: Padding::new(8.0 * scale),
-        gap: 1.0 * scale,
-        margin: Padding::ZERO,
-    }
+    let rows: Vec<byteui::interaction::menu::OverlayRow<()>> = items
+        .iter()
+        .map(|item| match item {
+            dozer_panel_files::menu::MenuItem::Entry { .. } => {
+                byteui::interaction::menu::OverlayRow::Entry {
+                    icon: None,
+                    label: String::new(),
+                    enabled: true,
+                    msg: Box::new(()),
+                    tint: None,
+                }
+            }
+            dozer_panel_files::menu::MenuItem::Separator => {
+                byteui::interaction::menu::OverlayRow::Separator
+            }
+        })
+        .collect();
+    byteui::interaction::menu::rows_size(&rows)
 }
 
 /// 渲染菜单浮层:整窗铺满,右下对齐到锚点(钳制后)。`map` 把库消息转成产品消息。
@@ -130,240 +95,14 @@ pub fn view<'a, M: Clone + 'a>(
     view_rows(rows, overlay.anchor, window, on_dismiss)
 }
 
-/// 与具体面板无关的一行(Agent 选择器等复用同一套外框与行样式)。
-pub enum OverlayRow {
-    Entry {
-        icon: Option<byteui::interaction::icons::IconKind>,
-        label: String,
-        enabled: bool,
-        msg: Box<Msg>,
-        /// 图标自己的颜色(Agent 选择器用);`None` 跟随文字色。
-        tint: Option<Color>,
-    },
-    Separator,
-}
-
-/// 按已规整的行渲染浮层。空行表不弹(返回一层的空容器)。
+/// 按已规整的行渲染浮层。空行表不弹(返回一层的空容器)。委托给 byteui 的 `view_rows`。
 pub fn view_rows<'a>(
     rows: Vec<OverlayRow>,
     anchor: MenuAnchor,
     window: (f32, f32),
     on_dismiss: Msg,
 ) -> El<'a> {
-    if rows.is_empty() {
-        return iced_widget::container(iced_widget::Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
-    }
-    let region = region();
-    let (w, h) = rows_size(&rows);
-    let anchor = anchor.clamped((w, h), window);
-    let body: Vec<El<'a>> = rows
-        .into_iter()
-        .map(|row| match row {
-            OverlayRow::Entry {
-                icon,
-                label,
-                enabled,
-                msg,
-                tint,
-            } => {
-                let color = if enabled {
-                    byteui::theme::color::current().body
-                } else {
-                    byteui::theme::color::current().dim
-                };
-                item_row(
-                    icon_leading(icon, tint.unwrap_or(color)),
-                    label,
-                    color,
-                    enabled.then_some(*msg),
-                )
-            }
-            OverlayRow::Separator => separator(),
-        })
-        .collect();
-    let menu: El<'a> = container(column(body).spacing(region.gap))
-        .width(Length::Fixed(w))
-        .padding(region.padding)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
-            shadow: Shadow {
-                color: Color {
-                    a: 0.45,
-                    ..Color::BLACK
-                },
-                offset: Vector::new(0.0, 10.0),
-                blur_radius: 28.0,
-            },
-            ..container::Style::default()
-        })
-        .into();
-    // 点空白处关闭:整窗一记透明按下区,菜单自己叠在上面吞掉自己的点击。
-    let scrim: El<'a> = iced_widget::mouse_area(
-        container(iced_widget::Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .on_press(on_dismiss)
-    .into();
-    let positioned: El<'a> = container(menu)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: anchor.y,
-            left: anchor.x,
-            right: 0.0,
-            bottom: 0.0,
-        })
-        .into();
-    iced_widget::stack![scrim, positioned].into()
-}
-
-/// 菜单外框 + 整窗透明遮罩(溢出菜单等自带行的调用方复用同一视觉)。
-/// `content` 是已经拼好的菜单主体;`width` 用于右上/下边缘钳制。
-pub fn shell<'a>(content: El<'a>, anchor: MenuAnchor, width: f32, on_dismiss: Msg) -> El<'a> {
-    let region = region();
-    let menu: El<'a> = container(content)
-        .width(Length::Fixed(width))
-        .padding(region.padding)
-        .style(move |_t: &iced_widget::Theme| container::Style {
-            background: region.background.map(Into::into),
-            border: region.border.unwrap_or_default(),
-            shadow: Shadow {
-                color: Color {
-                    a: 0.45,
-                    ..Color::BLACK
-                },
-                offset: Vector::new(0.0, 10.0),
-                blur_radius: 28.0,
-            },
-            ..container::Style::default()
-        })
-        .into();
-    let scrim: El<'a> = iced_widget::mouse_area(
-        container(iced_widget::Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .on_press(on_dismiss)
-    .into();
-    let positioned: El<'a> = container(menu)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: anchor.y,
-            left: anchor.x,
-            right: 0.0,
-            bottom: 0.0,
-        })
-        .into();
-    iced_widget::stack![scrim, positioned].into()
-}
-
-/// 已规整行的外形尺寸(宽恒为 `menu_item_width` + 内边距;高按行数估算)。
-fn rows_size(rows: &[OverlayRow]) -> (f32, f32) {
-    let region = region();
-    let row_h = row_height();
-    let gap = byteui::theme::geometry::menu_gap();
-    let width =
-        byteui::theme::geometry::menu_item_width() + region.padding.left + region.padding.right;
-    let mut height = region.padding.top + region.padding.bottom;
-    for row in rows {
-        height += match row {
-            OverlayRow::Entry { .. } => row_h + gap,
-            OverlayRow::Separator => 1.0 + gap,
-        };
-    }
-    (width, height)
-}
-
-fn icon_leading<'a>(
-    icon: Option<byteui::interaction::icons::IconKind>,
-    color: Color,
-) -> Option<El<'a>> {
-    icon.map(|icon| byteui::interaction::icons::view(icon, byteui::theme::icon_size::row(), color))
-}
-
-/// 一条 1px 分隔线,左右内缩 `menu_pad_h`(与 Dozer 同一留白)。
-fn separator<'a>() -> El<'a> {
-    container(byteui::layout::divider::horizontal())
-        .width(Length::Fill)
-        .padding(Padding {
-            left: byteui::theme::geometry::menu_pad_h(),
-            right: byteui::theme::geometry::menu_pad_h(),
-            ..Padding::default()
-        })
-        .into()
-}
-
-/// 单个菜单项:透明底 + `base_color` 文字/图标;`msg` 为 `Some` 时挂点击并在
-/// hover/pressed 切 `tab_hover` 底(圆角 6,左右各内缩 `menu_hover_inset`)。
-/// `None` 为锁定项:不可点、不高亮。
-fn item_row<'a>(
-    leading: Option<El<'a>>,
-    label: String,
-    base_color: Color,
-    msg: Option<Msg>,
-) -> El<'a> {
-    let content = match leading {
-        Some(leading) => row![
-            leading,
-            text(label)
-                .size(byteui::theme::font::label())
-                .color(base_color)
-        ],
-        None => row![
-            text(label)
-                .size(byteui::theme::font::label())
-                .color(base_color)
-        ],
-    }
-    .spacing(byteui::theme::geometry::menu_gap())
-    .align_y(iced::Alignment::Center);
-    let inset = byteui::theme::geometry::menu_hover_inset();
-    let pad_h = (byteui::theme::geometry::menu_pad_h() - inset).max(0.0);
-    let enabled = msg.is_some();
-    let btn = button(content)
-        .width(Length::Fill)
-        .padding([byteui::theme::geometry::menu_pad_v(), pad_h])
-        .style(move |_t: &iced_widget::Theme, s: button::Status| {
-            let base = button::Style {
-                background: None,
-                text_color: base_color,
-                ..button::Style::default()
-            };
-            let hovered =
-                matches!(s, button::Status::Hovered) || matches!(s, button::Status::Pressed);
-            if enabled && hovered {
-                button::Style {
-                    background: Some(byteui::theme::color::current().tab_hover.into()),
-                    text_color: base_color,
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 6.0.into(),
-                    },
-                    ..base
-                }
-            } else {
-                base
-            }
-        });
-    let btn: El<'_> = match msg {
-        Some(msg) => btn.on_press(msg).into(),
-        None => btn.into(),
-    };
-    container(btn)
-        .width(Length::Fill)
-        .padding(Padding {
-            left: inset,
-            right: inset,
-            ..Padding::default()
-        })
-        .into()
+    byteui::interaction::menu::view_rows(rows, anchor, window, on_dismiss)
 }
 
 #[cfg(test)]
@@ -373,7 +112,9 @@ mod tests {
         // wgpu 在线性色彩空间里混合:alpha 0.98 让底下的内容留 2% 线性亮度,换算成屏幕
         // 上的 sRGB 观感约 15%,亮字和卡片边框就会"淡淡透出来"(溢出菜单盖在卡片列表上
         // 时实测如此)。菜单盖在别的内容上,背景必须不透明。
-        let bg = region().background.expect("菜单有背景色");
+        let bg = byteui::theme::region::context_menu()
+            .background
+            .expect("菜单有背景色");
         assert_eq!(bg.a, 1.0, "菜单背景 alpha 必须是 1.0,实际 {}", bg.a);
     }
 
