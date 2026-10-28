@@ -38,6 +38,7 @@ dozer-panel-usage.workspace = true
 # 同源 Todo 面板库(S3b-1):待办列表 + 分类树 + web 资源。
 dozer-panel-todo.workspace = true
 dozer-panel-conversations.workspace = true
+dozer-panel-browser.workspace = true
 dozer-panel-group-chat.workspace = true
 # 同源 Project 面板库(S5a):与其适配层一起接入「项目」面板。
 dozer-panel-project.workspace = true

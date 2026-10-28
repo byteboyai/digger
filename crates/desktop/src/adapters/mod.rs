@@ -42,6 +42,9 @@ pub mod todo_assets;
 /// 预览面板的 `PanelDisplay<Msg>` 实现(库视图反过来要的展示能力)。
 pub mod preview_display;
 
+pub mod browser;
+pub mod browser_addr_menu;
+pub mod browser_display;
 pub mod conversations;
 pub mod conversations_display;
 pub mod group_chat;

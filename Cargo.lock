@@ -1086,6 +1086,7 @@ dependencies = [
  "dozer-mcp",
  "dozer-model",
  "dozer-panel-agent",
+ "dozer-panel-browser",
  "dozer-panel-conversations",
  "dozer-panel-files",
  "dozer-panel-group-chat",
@@ -1374,6 +1375,23 @@ dependencies = [
  "iced_renderer",
  "iced_widget",
  "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "dozer-panel-browser"
+version = "0.1.0"
+source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-10-28e#3fb3e0da36f4e9e9f3eba29a45466daa976d844c"
+dependencies = [
+ "bytehost-core",
+ "byteui",
+ "dozer-i18n",
+ "dozer-model",
+ "dozer-panel-host",
+ "dozer-services",
+ "iced_renderer",
+ "iced_widget",
  "tokio",
  "tracing",
 ]

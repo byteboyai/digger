@@ -167,6 +167,13 @@ pub enum Msg {
     ProjectFocusFrame(i64),
     ConversationSearchFocusFrame(i64),
     ConversationSearchFocused(i64, bytehost_core::request::RequestToken, bool),
+    /// 浏览器面板的库消息(项目 id 是发起时的项目,迟到的异步结果靠它丢弃)。
+    Browser(i64, dozer_panel_browser::Message),
+    /// 地址栏右键菜单的动作(整框语义,见 `browser_addr_menu`)。
+    BrowserAddrEdit(i64, crate::adapters::browser_addr_menu::AddrEdit),
+    /// 浏览器面板可见时的 16ms 探针:推进悬停动画并问地址栏是否持有真实焦点。
+    BrowserFocusFrame(i64),
+    BrowserAddrFocused(i64, bytehost_core::request::RequestToken, bool),
     /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
@@ -235,6 +242,7 @@ pub struct ProductShell {
     /// 「待办」面板适配(S3b-1):按项目状态 + `diggerd` 的 TodoService。
     todo: crate::adapters::todo::TodoPanel,
     conversations: crate::adapters::conversations::ConversationsPanel,
+    browser: crate::adapters::browser::BrowserPanel,
     group_chat: crate::adapters::group_chat::GroupChatPanel,
     /// 「编辑器」面板:自包含的第一方面板(文本与协议在 `digger-editor`,这里只有宿主适配)。
     markdown: crate::markdown::MarkdownPanel,
@@ -543,6 +551,9 @@ impl ProductShell {
             summary,
             transcript,
         );
+        let browser = crate::adapters::browser::BrowserPanel::new(Arc::new(
+            dozer_client::Client::new(digger_paths::product().socket_path()),
+        ));
         let group_chat = crate::adapters::group_chat::GroupChatPanel::new(
             crate::daemon::Daemon::new().services(),
         );
@@ -595,6 +606,7 @@ impl ProductShell {
             files,
             agent: crate::adapters::agent::AgentPanel::new(),
             conversations,
+            browser,
             group_chat,
             term_style: crate::fonts::terminal_style(),
             preview: None,
@@ -777,6 +789,12 @@ impl ProductShell {
         if *panel == shell::group_chat_id() {
             return self.activate_group_chat_panel();
         }
+        if *panel == shell::browser_id() {
+            return match self.projects.current_project().cloned() {
+                Some(project) => self.browser.activate(&project),
+                None => Task::none(),
+            };
+        }
         if *panel == shell::todo_id() {
             self.activate_todo_panel();
         }
@@ -912,6 +930,7 @@ impl ProductShell {
         let _ = close;
         let _ = self.agent.close_project(project.id);
         self.conversations.close_project(project.id);
+        self.browser.close_project(project.id);
         self.group_chat.close_project(project.id);
         self.on_current_project_changed(before, before != Some(project.id));
         let (project, tx) = (project.clone(), self.delete_tx.clone());
@@ -1445,6 +1464,15 @@ impl ProductShell {
         (self.panel_visible(&shell::conversations_id())
             && !self.pane_collapsed(&shell::conversations_id())
             && self.agent.shell.status == crate::adapters::agent::Status::Ready
+            && !self.closing)
+            .then(|| self.projects.current_project_id())
+            .flatten()
+    }
+
+    /// 浏览器面板此刻可见(没收起、没被放大的另一侧盖住)时,它所属的当前项目;否则 `None`。
+    fn browser_project(&self) -> Option<i64> {
+        (self.panel_visible(&shell::browser_id())
+            && !self.pane_collapsed(&shell::browser_id())
             && !self.closing)
             .then(|| self.projects.current_project_id())
             .flatten()
@@ -2080,6 +2108,7 @@ impl ShellHost<Msg> for ProductShell {
             "digger.agent" => self.agent_view(area),
             "digger.conversations" => self.conversations_view(area),
             "digger.group_chat" => self.group_chat.view(self.projects.current_project(), area),
+            "digger.browser" => self.browser.view(self.projects.current_project(), area),
             _ => column![].into(),
         }
     }
@@ -2661,6 +2690,7 @@ impl Product<Msg> for ProductShell {
                     .filter(|id| !self.projects.open_ids().contains(id))
                 {
                     self.conversations.close_project(*id);
+                    self.browser.close_project(*id);
                     self.group_chat.close_project(*id);
                 }
                 if before != self.projects.current_project_id() {
@@ -2717,6 +2747,40 @@ impl Product<Msg> for ProductShell {
                     self.conversations.set_search_focused(pid, focused);
                 }
                 Task::none()
+            }
+            Msg::Browser(pid, message) => {
+                let pid = message.result_project().unwrap_or(pid);
+                let project = self
+                    .projects
+                    .open_ids()
+                    .contains(&pid)
+                    .then(|| self.projects.project_by_id(pid))
+                    .flatten();
+                self.browser.update(pid, message, project.as_ref())
+            }
+            Msg::BrowserAddrEdit(pid, edit) => {
+                let project = self
+                    .projects
+                    .open_ids()
+                    .contains(&pid)
+                    .then(|| self.projects.project_by_id(pid))
+                    .flatten();
+                self.browser.addr_edit(pid, edit, project.as_ref())
+            }
+            Msg::BrowserFocusFrame(pid) => {
+                if self.browser_project() != Some(pid) {
+                    return Task::none();
+                }
+                self.browser.focus_frame(pid)
+            }
+            Msg::BrowserAddrFocused(pid, token, focused) => {
+                let active = self.browser_project();
+                self.browser.reset_inactive_focus(active);
+                if active == Some(pid) && self.projects.open_ids().contains(&pid) {
+                    self.browser.on_addr_focused(pid, token, focused)
+                } else {
+                    Task::none()
+                }
             }
             Msg::ProjectFocusFrame(id) => {
                 let Some(project) = self
@@ -2834,6 +2898,7 @@ impl Product<Msg> for ProductShell {
                         .update(crate::projects::Message::Close(project_id));
                     let _ = self.agent.close_project(project_id);
                     self.conversations.close_project(project_id);
+                    self.browser.close_project(project_id);
                     self.group_chat.close_project(project_id);
                     self.on_current_project_changed(before, before != Some(project_id));
                     // 被删项目的布局文件不留孤儿。
@@ -3185,6 +3250,9 @@ struct NameFocusProbe(i64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ConversationSearchFocusProbe(i64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct BrowserFocusProbe(i64);
+
 /// 键盘事件是否该作为 Agent 输入投上去:`Captured` 的按键已被别处(输入框等)
 /// 消费,绝不能进终端;Agent 自己的浮层(选择器 / 关页签确认)打开时也不投。
 pub fn agent_key_message(
@@ -3341,6 +3409,23 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
             },
         ));
     }
+    if let Some(pid) = shell.browser_project() {
+        subs.push(Subscription::run_with(BrowserFocusProbe(pid), |probe| {
+            let pid = probe.0;
+            iced::stream::channel(
+                1,
+                move |mut out: iced::futures::channel::mpsc::Sender<Msg>| async move {
+                    use iced::futures::SinkExt;
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                        if out.send(Msg::BrowserFocusFrame(pid)).await.is_err() {
+                            break;
+                        }
+                    }
+                },
+            )
+        }));
+    }
     #[cfg(any(not(target_os = "macos"), test))]
     if let Some(pid) = shell.conversation_search_project()
         && shell
@@ -3488,6 +3573,9 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         .conversations
         .attach_handle(tokio::runtime::Handle::current());
     shell
+        .browser
+        .attach_handle(tokio::runtime::Handle::current());
+    shell
         .group_chat
         .attach_handle(tokio::runtime::Handle::current());
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
@@ -3627,6 +3715,12 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let browser_task = match shell.browser.take_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|(pid, m)| (Msg::Browser(pid, m), rx))
+        })),
+        None => Task::none(),
+    };
     let group_chat_native_task = match shell.group_chat.native.take_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv()
@@ -3680,6 +3774,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             agent_task,
             group_chat_task,
             conversations_task,
+            browser_task,
             conversations_import_task,
             review_native_task,
             group_chat_native_task,

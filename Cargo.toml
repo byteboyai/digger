@@ -53,6 +53,8 @@ dozer-panel-usage = { git = "https://github.com/byteboyai/dozer", tag = "libs-20
 dozer-panel-todo = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-28e" }
 # 同源会话面板库(S7b):列表、历史导入与审阅状态。
 dozer-panel-conversations = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-28e" }
+# 同源浏览器面板库:页签 / 地址栏 / 收藏夹状态机;网页由 bytehost web_child 的不可信子视图承载。
+dozer-panel-browser = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-28e" }
 dozer-panel-group-chat = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-28e" }
 # 同源 Project 面板库(S5a):状态 / 更新 / 视图;依赖闭包不含 dozer-app/client/core。
 dozer-panel-project = { git = "https://github.com/byteboyai/dozer", tag = "libs-2026-10-28e" }
