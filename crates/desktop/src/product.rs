@@ -793,6 +793,10 @@ impl ProductShell {
             return self.activate_group_chat_panel();
         }
         if *panel == shell::browser_id() {
+            // webview 子视图的 ⌘A/⌘C/⌘V/⌘X 要靠应用主菜单里的 Edit 菜单(wry 的子视图不处理 performKeyEquivalent,
+            // 探针实测);Digger 自己不装主菜单,所以第一次显示浏览器时装一个标准的。幂等、仅主线程。
+            #[cfg(target_os = "macos")]
+            bytehost_desktop::web_child::install_standard_edit_menu();
             return match self.projects.current_project().cloned() {
                 Some(project) => self.browser.activate(&project),
                 None => Task::none(),
@@ -886,6 +890,12 @@ impl ProductShell {
             .set_focus(self.projects.current_project_id());
         if self.panel_visible(&shell::group_chat_id()) {
             let _ = self.activate_group_chat_panel();
+        }
+        // 浏览器已经在显示时切项目:新项目要有自己的状态(否则面板是空白,直到重新切入面板)。
+        if self.panel_visible(&shell::browser_id())
+            && let Some(project) = self.projects.current_project().cloned()
+        {
+            let _ = self.browser.activate(&project);
         }
     }
 
@@ -5277,6 +5287,112 @@ mod tests {
                 .sessions()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn browser_is_registered_as_a_native_panel_without_surfaces() {
+        let shell = fresh("browser-catalog");
+        let entry = shell
+            .catalog
+            .get(&shell::browser_id())
+            .expect("browser registered");
+        assert_eq!(entry.title, "浏览器");
+        assert!(entry.surfaces.is_empty());
+    }
+
+    /// 面板被切入时建当前项目的状态;已经显示时切项目,新项目也立刻有状态(不是空白);
+    /// 关掉项目清理它的状态。
+    #[test]
+    fn browser_state_follows_the_visible_panel_and_the_current_project() {
+        use crate::projects::Message as P;
+        let dir = test_temp_dir("browser-project-follow");
+        for name in ["a", "b"] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+        }
+        let project = |id: i64, name: &str| dozer_model::ProjectInfo {
+            id,
+            path: dir.join(name).to_string_lossy().into_owned(),
+            name: name.into(),
+            last_active_ms: id as u64,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let (a, b) = (project(1, "a"), project(2, "b"));
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        send(
+            &mut shell,
+            Msg::Projects(P::Listed(Ok(crate::projects::Listing::scan(vec![
+                a.clone(),
+                b.clone(),
+            ])))),
+        );
+        shell.projects.add_tab_for_test(a.id);
+        shell.projects.add_tab_for_test(b.id);
+        send(&mut shell, Msg::Projects(P::Activate(a.id)));
+        assert!(shell.browser.state(a.id).is_none(), "面板没显示:不建状态");
+        press(&mut shell, &shell::browser_id());
+        assert!(shell.panel_visible(&shell::browser_id()));
+        assert!(
+            shell.browser.state(a.id).is_some(),
+            "切入面板:当前项目有状态"
+        );
+        assert!(shell.browser.state(b.id).is_none());
+        send(&mut shell, Msg::Projects(P::Activate(b.id)));
+        assert!(
+            shell.browser.state(b.id).is_some(),
+            "面板已显示时切项目:新项目立刻有状态"
+        );
+        // 项目 A 的页签保留(切回来还在),不因为切走就丢。
+        assert!(shell.browser.state(a.id).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `Msg::Browser` 按信封里的项目路由,不按此刻聚焦的项目:迟到的 A 的消息不能改到 B 身上。
+    #[test]
+    fn browser_messages_route_to_the_project_that_sent_them() {
+        let mut shell = fresh("browser-routing");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        shell.browser.attach_handle(rt.handle().clone());
+        let (a, b) = (info(1), info(2));
+        shell.browser.ensure_state(&a);
+        shell.browser.ensure_state(&b);
+        // 这两个项目没有真的打开(测试壳里没有项目页签):消息被丢弃,状态原样。
+        send(
+            &mut shell,
+            Msg::Browser(
+                1,
+                dozer_panel_browser::Message::OpenUrl("https://x.com/".into()),
+            ),
+        );
+        assert_eq!(shell.browser.state(1).unwrap().tab_count(), 1);
+        assert_eq!(shell.browser.state(2).unwrap().tab_count(), 1);
+    }
+
+    /// 关掉项目时,浏览器状态与排队的导航一并清掉。
+    #[test]
+    fn closing_a_project_clears_its_browser_state() {
+        let mut shell = fresh("browser-close");
+        let a = info(1);
+        shell.browser.ensure_state(&a);
+        shell.browser.close_project(a.id);
+        assert!(shell.browser.state(a.id).is_none());
+    }
+
+    /// 浏览器第一次显示时必须装 Edit 菜单(没有它 webview 里 ⌘A/⌘C/⌘V/⌘X 全不能用,探针实测)。
+    /// 装菜单要主线程 + 真实 NSApplication,测试里调不得;这里钉住调用没被删掉、且只在浏览器分支里。
+    #[test]
+    fn showing_the_browser_installs_the_edit_menu() {
+        let src = include_str!("product.rs");
+        let prod = &src[..src.find("#[cfg(test)]\nmod tests").expect("tests module")];
+        let branch_start = prod
+            .find("if *panel == shell::browser_id() {")
+            .expect("browser on_visible branch");
+        let branch = &prod[branch_start..branch_start + 900];
+        assert!(branch.contains("install_standard_edit_menu()"));
+        assert_eq!(prod.matches("install_standard_edit_menu()").count(), 1);
     }
 
     #[test]
