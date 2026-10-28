@@ -59,12 +59,19 @@ pub fn group_chat_id() -> PanelId {
     id("digger.group_chat")
 }
 
+/// 浏览器面板(共享 `dozer-panel-browser` 库,网页由 bytehost `web_child` 的不可信子视图承载):
+/// 落盘 id 发布即冻结,单栏、不配对。
+pub fn browser_id() -> PanelId {
+    id("digger.browser")
+}
+
 /// 产品的全部面板。落盘时清单里有而文件里没有的面板,会回到它的默认栏(新版本新增面板不会重置用户布局)。
 pub fn all_panels() -> Vec<PanelId> {
     vec![
         agent_id(),
         group_chat_id(),
         conversations_id(),
+        browser_id(),
         markdown_id(),
         info_id(),
         apps_id(),
@@ -88,6 +95,7 @@ pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
         "digger.agent" => ("Agent", IconKind::Brain),
         "digger.group_chat" => ("群聊", IconKind::SquareSparkles),
         "digger.conversations" => ("会话", IconKind::BotMessageSquare),
+        "digger.browser" => ("浏览器", IconKind::Globe),
         _ => return None,
     };
     Some(PanelMeta {
@@ -162,6 +170,7 @@ pub fn defaults() -> Defaults {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id(),
             ],
@@ -196,8 +205,10 @@ pub fn load_scoped(path: &Path, project: Option<&Path>) -> Loaded {
 
 fn load_file(path: &Path) -> Loaded {
     let json = std::fs::read_to_string(path).ok().map(|j| {
-        group_chat_never_collapsed(&group_chat_after_agent(&conversations_after_agent(
-            &agent_first_on_right(&files_after_project(&project_first_on_left(&j))),
+        browser_after_conversations(&group_chat_never_collapsed(&group_chat_after_agent(
+            &conversations_after_agent(&agent_first_on_right(&files_after_project(
+                &project_first_on_left(&j),
+            ))),
         )))
     });
     persist::load(
@@ -266,6 +277,39 @@ fn conversations_after_agent(json: &str) -> String {
     let at = right
         .iter()
         .position(|v| v.as_str() == Some(agent_id().as_str()))
+        .map_or(0, |i| i + 1);
+    right.insert(at, serde_json::Value::String(wire.as_str().to_owned()));
+    value.to_string()
+}
+
+/// 旧布局缺浏览器时放到右栏会话后面(没有会话就放最前);已放置(任一栏)则原样返回。
+/// 只改读入文本中的栏顺序,保留两侧的选中字段;不写盘,更高 schema 的保护仍由 `Loaded::may_save` 执行。
+/// 必须排在 `conversations_after_agent` 之后,这样"会话"一定已在右栏(或用户拖去了左栏)。
+fn browser_after_conversations(json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_owned();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return json.to_owned();
+    };
+    let wire = browser_id();
+    if ["left", "right"].iter().any(|side| {
+        object
+            .get(*side)
+            .and_then(|v| v.as_array())
+            .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(wire.as_str())))
+    }) {
+        return json.to_owned();
+    }
+    let right = object
+        .entry("right")
+        .or_insert_with(|| serde_json::json!([]));
+    let Some(right) = right.as_array_mut() else {
+        return json.to_owned();
+    };
+    let at = right
+        .iter()
+        .position(|v| v.as_str() == Some(conversations_id().as_str()))
         .map_or(0, |i| i + 1);
     right.insert(at, serde_json::Value::String(wire.as_str().to_owned()));
     value.to_string()
@@ -438,6 +482,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 id("digger.conversations"),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -457,6 +502,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 id("digger.conversations"),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -663,6 +709,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -694,6 +741,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id(),
                 project_id()
@@ -750,6 +798,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ],
@@ -798,6 +847,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -876,6 +926,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -1191,6 +1242,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -1256,6 +1308,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -1298,6 +1351,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -1317,6 +1371,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -1337,6 +1392,7 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
+                browser_id(),
                 apps_id(),
                 usage_id()
             ]
@@ -1388,5 +1444,91 @@ mod tests {
             },
         );
         assert!(rects.is_some());
+    }
+
+    #[test]
+    fn browser_panel_id_is_the_persisted_wire_name() {
+        let panel = browser_id();
+        assert_eq!(panel.as_str(), "digger.browser");
+        assert!(all_panels().contains(&panel));
+        let meta = meta(&panel).expect("registered browser metadata");
+        assert_eq!(meta.title, "浏览器");
+        assert_eq!(meta.icon, IconKind::Globe);
+    }
+
+    #[test]
+    fn the_default_layout_places_the_browser_after_conversations() {
+        let d = defaults();
+        assert_eq!(
+            d.rails[1],
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                browser_id(),
+                apps_id(),
+                usage_id()
+            ]
+        );
+        assert_eq!(d.selected, [markdown_id(), agent_id()]);
+    }
+
+    #[test]
+    fn an_old_file_without_the_browser_gets_it_after_conversations_and_keeps_selection() {
+        let (model, dir) = load_json(
+            "browser-old",
+            r#"{"left":["digger.project","digger.files","digger.markdown"],"right":["digger.agent","digger.group_chat","digger.conversations","digger.apps","digger.usage"],"selected_right":"digger.conversations"}"#,
+        );
+        assert_eq!(
+            model.rail(Side::Right),
+            [
+                agent_id(),
+                group_chat_id(),
+                conversations_id(),
+                browser_id(),
+                apps_id(),
+                usage_id()
+            ]
+        );
+        assert_eq!(model.selected(Side::Right), &conversations_id());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn browser_migration_is_idempotent() {
+        let once = browser_after_conversations(
+            r#"{"left":[],"right":["digger.agent","digger.conversations"]}"#,
+        );
+        assert_eq!(
+            once,
+            r#"{"left":[],"right":["digger.agent","digger.conversations","digger.browser"]}"#
+        );
+        assert_eq!(browser_after_conversations(&once), once);
+        // 已放在左栏(用户拖过去了)也不再动。
+        let on_left = r#"{"left":["digger.browser"],"right":["digger.agent"]}"#;
+        assert_eq!(browser_after_conversations(on_left), on_left);
+        // 不是对象 / 不是 JSON:原样返回。
+        assert_eq!(browser_after_conversations("[]"), "[]");
+        assert_eq!(browser_after_conversations("not json"), "not json");
+    }
+
+    #[test]
+    fn an_old_file_with_an_empty_right_rail_gets_the_browser_too() {
+        let (model, dir) = load_json(
+            "browser-empty",
+            r#"{"left":["digger.markdown"],"right":[]}"#,
+        );
+        let right = model.rail(Side::Right);
+        assert_eq!(right[0], agent_id());
+        let pos = |p: PanelId| right.iter().position(|x| *x == p).unwrap();
+        assert_eq!(pos(browser_id()), pos(conversations_id()) + 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 与 `digger.markdown`/`digger.info`/`digger.apps` 同类:单栏、不配对;所在侧由 `defaults()` 与迁移决定。
+    #[test]
+    fn browser_has_no_pair_rules_like_markdown() {
+        assert!(rules(&browser_id()).is_none());
+        assert!(rules(&markdown_id()).is_none());
     }
 }

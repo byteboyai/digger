@@ -494,6 +494,7 @@ impl ProductShell {
             (shell::agent_id(), "Agent"),
             (shell::group_chat_id(), "群聊"),
             (shell::conversations_id(), "会话"),
+            (shell::browser_id(), "浏览器"),
         ] {
             catalog
                 .register(CatalogEntry {
@@ -5148,7 +5149,7 @@ mod tests {
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 10);
+        assert_eq!(shell.catalog.len(), 11);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
