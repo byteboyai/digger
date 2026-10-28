@@ -14,4 +14,4 @@
 
 ## 仍然未决
 
-4. **跨仓库迁移(X1)。** 阶段 A(页签部件、菜单弹层迁入 byteui 0.5.0)已于 2026-10-28 完成;阶段 B(`native_host`/wry 样板迁入 bytehost)未做,单独排期。
+4. **跨仓库迁移(X1)。** 已于 2026-10-28 全部完成:页签部件、菜单弹层迁入 byteui 0.5.0;`native_host` 迁入 bytehost v0.4.14 的 `native_child`。`markdown/host.rs` 评估后不并入。

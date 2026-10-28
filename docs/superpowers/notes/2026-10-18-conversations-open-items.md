@@ -28,4 +28,4 @@ Dozer 新增 `BackfillReport`/`BackfillFailure` 与 `TranscriptService::backfill
 
 ### 3. 跨仓库迁移(X1)
 
-**阶段 A 已完成(2026-10-28):** 页签部件、菜单弹层已迁入 byteui 0.5.0(Digger 的 `agent_tabs.rs`、`tab_chrome.rs`、`menu_overlay.rs` 缩成接线)。**阶段 B 未做:** `native_host.rs`(可信原生子 webview 执行器)及 `review_native` 等四个使用方、`markdown/host.rs` 迁入 `bytehost-desktop`,单独排期。计划:`dozer/docs/superpowers/plans/2026-10-28-x1-cross-repo-migration.md`。
+**X1 已完成(2026-10-28):** 阶段 A——页签部件、菜单弹层迁入 byteui 0.5.0(Digger 的 `agent_tabs.rs`、`tab_chrome.rs`、`menu_overlay.rs` 缩成接线);阶段 B——可信原生子 webview 执行器 `native_host.rs` 迁入 `bytehost_desktop::native_child`(bytehost v0.4.14),四个原生面板改为消费。`markdown/host.rs` 评估后不并入。计划与结果:`dozer/docs/superpowers/plans/2026-10-28-x1-cross-repo-migration.md`。**待人工验证:** 见该计划的验收清单。

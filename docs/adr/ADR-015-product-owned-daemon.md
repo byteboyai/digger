@@ -108,7 +108,7 @@ Agent 面板与会话也走这条产品自有守护进程:面板的会话服务�
 
 - 关项目页签 = kill 该项目全部会话;关窗口只 detach(会话随 `diggerd` 存活);退出前等在途 kill(3 秒上限)。
 - `digger-hook` 与 `dozer-hook` 各自写自己产品的配置条目,同机并存不互相覆盖。
-- 页签部件与菜单弹层原先是 Digger 侧的临时复制(`agent_tabs.rs`、`menu_overlay.rs`、`tab_chrome.rs`);**2026-10-28 已迁入 byteui 0.5.0**(`interaction::panel_tabs`、`interaction::menu`、`feedback::tooltip`、`theme::region::context_menu`),Dozer 与 Digger 共用,这三个文件缩成库显示参数到 byteui 部件的接线。可见变化:菜单背景统一不透明;预览页签提示气泡改为 byteui 统一样式;Agent 溢出下拉的宽高上限不再随 UI 缩放(与 Dozer 一致,scale=1 时不变)。可信原生子 webview 执行器(`native_host.rs`)尚未迁入 bytehost(X1 阶段 B)。
+- 页签部件与菜单弹层原先是 Digger 侧的临时复制(`agent_tabs.rs`、`menu_overlay.rs`、`tab_chrome.rs`);**2026-10-28 已迁入 byteui 0.5.0**(`interaction::panel_tabs`、`interaction::menu`、`feedback::tooltip`、`theme::region::context_menu`),Dozer 与 Digger 共用,这三个文件缩成库显示参数到 byteui 部件的接线。可见变化:菜单背景统一不透明;预览页签提示气泡改为 byteui 统一样式;Agent 溢出下拉的宽高上限不再随 UI 缩放(与 Dozer 一致,scale=1 时不变)。可信原生子 webview 执行器(原 `native_host.rs`)**同日迁入 bytehost v0.4.14 的 `bytehost_desktop::native_child`**(X1 阶段 B),usage/todo/group_chat/review 四个原生面板改为消费;`markdown/host.rs` 评估后不并入(HTML 载入 + IPC + `about:blank` 导航 + 剪贴板开,模型与设置都不同)。
 
 ## 会话面板
 
