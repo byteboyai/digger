@@ -13,6 +13,7 @@
 - [ADR-011: Embedding bytehost as the Application Host](docs/adr/ADR-011-bytehost-app-host-embedding.md)
 - [ADR-012: Markdown Text as the Authoritative Chapter Content](docs/adr/ADR-012-markdown-text-as-authoritative-content.md)
 - [ADR-013: A First-Party Markdown Panel from the md-engine Spike](docs/adr/ADR-013-markdown-panel-from-md-engine-spike.md)
+- [ADR-016: Browser Panel and the Untrusted-Content Webview](docs/adr/ADR-016-browser-panel-untrusted-content.md)(视图画廊:`cargo run -p digger-desktop --example browser_gallery -- --list`)
 - [S1 窗口骨架:共享 bytehost-chrome](docs/superpowers/specs/2026-10-14-window-shell-design.md)
 - [S2 用量面板接入"列表 | 内容"配对](docs/superpowers/specs/2026-10-15-usage-pair-design.md)
 - Engine spike: `spike/md-engine` (CodeMirror 6 vs ProseMirror under ADR-012)
