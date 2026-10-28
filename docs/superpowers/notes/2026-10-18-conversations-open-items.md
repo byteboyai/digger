@@ -28,4 +28,4 @@ Dozer 新增 `BackfillReport`/`BackfillFailure` 与 `TranscriptService::backfill
 
 ### 3. 跨仓库迁移(X1)
 
-页签部件(`agent_tabs.rs`)、菜单弹层(`menu_overlay.rs`)和 `review_native` / `native_host` 的 wry 样板迁入 byteui / bytehost。涉及两个仓库发版与双方重钉,单独排期。
+**阶段 A 已完成(2026-10-28):** 页签部件、菜单弹层已迁入 byteui 0.5.0(Digger 的 `agent_tabs.rs`、`tab_chrome.rs`、`menu_overlay.rs` 缩成接线)。**阶段 B 未做:** `native_host.rs`(可信原生子 webview 执行器)及 `review_native` 等四个使用方、`markdown/host.rs` 迁入 `bytehost-desktop`,单独排期。计划:`dozer/docs/superpowers/plans/2026-10-28-x1-cross-repo-migration.md`。

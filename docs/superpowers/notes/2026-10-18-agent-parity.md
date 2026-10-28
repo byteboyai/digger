@@ -51,4 +51,4 @@ Dozer 侧:用 `/Applications/Dozer AI Coder.app` 的**副本** `/private/tmp/Par
 - **守护进程不可用**:Dozer 是底部 toast「与 dozerd 的连接中断,正在重连…」+ 页签内容被标「[会话已结束]」;Digger 是面板内整块原因 + 重试。这是 S6d-2 既定的产品措辞/壳,不是页签差异。
 - **Agent 面板底部**:Dozer 有「Agent 上下文 · 0 项」与「修改历史」;Digger 一期没有,属于后续面板内容。
 - **Dozer 截图局限**:Orca 对 Dozer 自绘按钮的坐标点击只能 hover(提示气泡出现)不能触发;因此 overflow/picker/confirm/notice 四项未对照,没有编造。
-- **技术债**:页签部件(`agent_tabs.rs`)与菜单弹层(`menu_overlay.rs`)仍是 Digger 里临时复制的一份,应迁入 byteui。
+- **技术债(已解决,2026-10-28)**:页签部件与菜单弹层已迁入 byteui 0.5.0,Digger 的 `agent_tabs.rs`、`tab_chrome.rs`、`menu_overlay.rs` 缩成接线。见 ADR-015 与 `dozer/docs/superpowers/plans/2026-10-28-x1-cross-repo-migration.md`。

@@ -14,4 +14,4 @@
 
 ## 仍然未决
 
-4. **跨仓库迁移(X1)。** 页签部件、菜单弹层、`native_host`/wry 样板迁入 byteui/bytehost 共用,单独排期。
+4. **跨仓库迁移(X1)。** 阶段 A(页签部件、菜单弹层迁入 byteui 0.5.0)已于 2026-10-28 完成;阶段 B(`native_host`/wry 样板迁入 bytehost)未做,单独排期。
