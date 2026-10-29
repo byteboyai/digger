@@ -177,6 +177,8 @@ pub enum Msg {
     /// 浏览器网页子视图池的回传(页面加载 / 标题 / 新窗口请求 / 导航无响应)。
     BrowserNative(crate::adapters::browser_native::Event),
     BrowserNoticeDismiss,
+    /// 应用主菜单里的「Find…」(⌘F)被触发(菜单项只在浏览器的 webview 有焦点时启用):打开当前项目的浏览器查找条。
+    BrowserFindShortcut,
     /// 「项目」面板的库消息(共享 `dozer-panel-project` 库)。
     /// 库消息不带项目 id;路由到哪个项目见 `ProjectPanel::resolve_project`。
     Project(dozer_panel_project::Message),
@@ -796,7 +798,15 @@ impl ProductShell {
             // webview 子视图的 ⌘A/⌘C/⌘V/⌘X 要靠应用主菜单里的 Edit 菜单(wry 的子视图不处理 performKeyEquivalent,
             // 探针实测);Digger 自己不装主菜单,所以第一次显示浏览器时装一个标准的。幂等、仅主线程。
             #[cfg(target_os = "macos")]
-            bytehost_desktop::web_child::install_standard_edit_menu();
+            {
+                bytehost_desktop::web_child::install_standard_edit_menu();
+                // ⌘F:Edit 菜单里的 Find…,只在浏览器池里的 webview 有焦点时启用。回调在 AppKit 里跑,拿不到 `&mut`
+                // 面板,所以只往通道里送一个信号,由 `Msg::BrowserFindShortcut` 在更新里处理。
+                let find = self.browser.find_shortcut_sender();
+                bytehost_desktop::web_child::install_find_shortcut(move || {
+                    let _ = find.send(());
+                });
+            }
             return match self.projects.current_project().cloned() {
                 Some(project) => self.browser.activate(&project),
                 None => Task::none(),
@@ -2795,6 +2805,12 @@ impl Product<Msg> for ProductShell {
                 });
                 Task::batch([task, self.sync_native()])
             }
+            Msg::BrowserFindShortcut => {
+                if let Some(pid) = self.browser_project() {
+                    self.browser.open_find(pid);
+                }
+                self.sync_native()
+            }
             Msg::BrowserNoticeDismiss => {
                 self.browser.dismiss_notice();
                 self.sync_native()
@@ -3765,6 +3781,12 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         })),
         None => Task::none(),
     };
+    let browser_find_task = match shell.browser.take_find_shortcut_receiver() {
+        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|()| (Msg::BrowserFindShortcut, rx))
+        })),
+        None => Task::none(),
+    };
     let browser_task = match shell.browser.take_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|(pid, m)| (Msg::Browser(pid, m), rx))
@@ -3825,6 +3847,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             group_chat_task,
             conversations_task,
             browser_task,
+            browser_find_task,
             browser_native_task,
             conversations_import_task,
             review_native_task,
@@ -5379,6 +5402,21 @@ mod tests {
         shell.browser.ensure_state(&a);
         shell.browser.close_project(a.id);
         assert!(shell.browser.state(a.id).is_none());
+    }
+
+    /// ⌘F:启动时装一次菜单项;信号通道接进事件流;更新里打开当前项目的查找条并同步原生层。
+    #[test]
+    fn the_find_shortcut_is_installed_once_and_handled() {
+        let src = include_str!("product.rs");
+        let prod = &src[..src.find("#[cfg(test)]\nmod tests").expect("tests module")];
+        assert_eq!(prod.matches("install_find_shortcut(").count(), 1);
+        for required in [
+            "take_find_shortcut_receiver()",
+            "Msg::BrowserFindShortcut",
+            "self.browser.open_find(pid)",
+        ] {
+            assert!(prod.contains(required), "缺少 {required}");
+        }
     }
 
     /// 浏览器第一次显示时必须装 Edit 菜单(没有它 webview 里 ⌘A/⌘C/⌘V/⌘X 全不能用,探针实测)。

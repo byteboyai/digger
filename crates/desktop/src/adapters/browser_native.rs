@@ -222,6 +222,24 @@ impl BrowserNative {
         self.pool.nav(id, self.generation, tab, nav, Event::Synced)
     }
 
+    /// 在激活页签的页面里查找(命中即选中并滚动过去,恒回绕);结果稍后作为 `WebEvent::FindResult` 回来。
+    pub fn find(&self, id: window::Id, tab: usize, query: String, backwards: bool) -> Task<Event> {
+        if self.live.is_none() {
+            return Task::none();
+        }
+        self.pool
+            .find_task(id, self.generation, tab, query, backwards, Event::Synced)
+    }
+
+    /// 关掉查找条 / 清空查找词:清掉页面里的命中选区。
+    pub fn clear_find(&self, id: window::Id, tab: usize) -> Task<Event> {
+        if self.live.is_none() {
+            return Task::none();
+        }
+        self.pool
+            .clear_find_task(id, self.generation, tab, Event::Synced)
+    }
+
     /// 把等得太久的导航报出来(宿主的定时 tick 里调)。
     pub fn poll_stalled(&self) {
         self.pool.poll_stalled(std::time::Instant::now());
@@ -267,6 +285,14 @@ impl BrowserNative {
                     if generation == self.generation && allows_new_tab(&url) =>
                 {
                     Some(Outcome::Lib(pid, Message::OpenUrl(url)))
+                }
+                WebEvent::FindResult {
+                    generation,
+                    query,
+                    matched,
+                    ..
+                } if generation == self.generation => {
+                    Some(Outcome::Lib(pid, Message::FindResult(query, matched)))
                 }
                 WebEvent::NavigationStalled {
                     generation, url, ..
@@ -662,5 +688,26 @@ mod tests {
         n.update(Event::Probed(g, 1, probe(3)));
         n.update(Event::Probed(g - 1, 1, probe(99)));
         assert_eq!(n.last_probe().unwrap().handles, 3);
+    }
+
+    /// 查找结果带着当时的查找词回到库(库据此丢弃慢的旧结果);过期代号的结果丢掉。
+    #[test]
+    fn a_find_result_becomes_the_librarys_message_and_a_stale_one_is_dropped() {
+        let mut n = native();
+        n.prepare(&desired(Some(4), true, false));
+        let g = n.generation;
+        let result = |generation| {
+            Event::Web(WebEvent::FindResult {
+                generation,
+                id: 1,
+                query: "needle".into(),
+                matched: false,
+            })
+        };
+        is(
+            n.update(result(g)),
+            Some(Outcome::Lib(4, Message::FindResult("needle".into(), false))),
+        );
+        is(n.update(result(g - 1)), None);
     }
 }

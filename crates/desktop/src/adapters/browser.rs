@@ -10,7 +10,7 @@ use bytehost_chrome::{BodyArea, Rect};
 use bytehost_core::LogicalRect;
 use bytehost_desktop::web_child::WebTabSpec;
 use dozer_model::ProjectInfo;
-use dozer_panel_browser::{Message, NavAction, State, addr_field_id};
+use dozer_panel_browser::{FindRequest, Message, NavAction, State, addr_field_id};
 use dozer_services::BookmarkService;
 use iced::widget::{column, container, operation};
 use iced::{Border, Element, Length, Task, window};
@@ -49,6 +49,8 @@ pub struct BrowserPanel {
     nav: Vec<(i64, NavAction)>,
     display: DiggerBrowserDisplay,
     pub native: BrowserNative,
+    find_tx: tokio::sync::mpsc::UnboundedSender<()>,
+    find_rx: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
     /// 页面没响应 / 网址被挡这类一次性提示。显示在页签栏上方,所以占的高度要从网页矩形里扣掉。
     pub notice: NoticeBar,
 }
@@ -82,6 +84,7 @@ fn displayed_addr(state: &State) -> String {
 impl BrowserPanel {
     pub fn new(service: Arc<dyn BookmarkService>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (find_tx, find_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             states: HashMap::new(),
             service,
@@ -91,6 +94,8 @@ impl BrowserPanel {
             nav: vec![],
             display: DiggerBrowserDisplay,
             native: BrowserNative::new(),
+            find_tx,
+            find_rx: Some(find_rx),
             notice: NoticeBar::default(),
         }
     }
@@ -160,10 +165,16 @@ impl BrowserPanel {
                     content_fraction: BOOKMARKS_CONTENT_SPLIT,
                     mirrored: SIDEBAR_MIRRORED,
                 });
+                // 提示条在页签栏上方,查找条在地址栏下方:都要让网页再往下。
+                let find_extra = if state.find_open() {
+                    dozer_panel_browser::find_bar_extra_px(self.display_gap())
+                } else {
+                    0.
+                };
                 let r = webview_rect(
                     content,
                     self.display_padding(),
-                    self.notice_height(),
+                    self.notice_height() + find_extra,
                     sidebar,
                 );
                 LogicalRect {
@@ -221,12 +232,61 @@ impl BrowserPanel {
     /// 让原生层收敛到库的页签清单,并执行排队的后退 / 前进 / 刷新。
     pub fn sync_native(&mut self, window: window::Id, inputs: NativeInputs) -> Task<Msg> {
         let desired = self.desired(&inputs);
-        let navs = self.nav_targets(desired.project_id);
+        let project_id = desired.project_id;
+        let navs = self.nav_targets(project_id);
+        let finds = self.find_targets(project_id);
         let mut tasks = vec![self.native.sync(window, desired)];
         for (tab, action) in navs {
             tasks.push(self.native.nav(window, tab, action));
         }
-        Task::batch(tasks).map(Msg::BrowserNative)
+        for (tab, request) in finds {
+            tasks.push(match request {
+                FindRequest::Search { query, backwards } => {
+                    self.native.find(window, tab, query, backwards)
+                }
+                FindRequest::Clear => self.native.clear_find(window, tab),
+            });
+        }
+        let mut tasks = vec![Task::batch(tasks).map(Msg::BrowserNative)];
+        // 查找条刚打开:把焦点给输入框(真输入框这一帧才出现,所以放到 Task 里,在视图更新之后执行)。
+        if project_id.is_some_and(|pid| {
+            self.states
+                .get_mut(&pid)
+                .is_some_and(|s| s.take_find_focus_pending())
+        }) {
+            tasks.push(operation::focus(dozer_panel_browser::find_field_id()));
+        }
+        Task::batch(tasks)
+    }
+
+    /// 取走库里排队的查找动作:只对"现在显示的项目"的激活页签执行,别的项目 / 没有页签的丢弃。
+    fn find_targets(&mut self, project_id: Option<i64>) -> Vec<(usize, FindRequest)> {
+        let Some(state) = project_id.and_then(|pid| self.states.get_mut(&pid)) else {
+            return Vec::new();
+        };
+        let requests = state.take_find_requests();
+        let Some(tab) = state.active_webview_id() else {
+            return Vec::new();
+        };
+        requests.into_iter().map(|r| (tab, r)).collect()
+    }
+
+    /// ⌘F:对当前显示的项目打开查找条。
+    pub fn open_find(&mut self, pid: i64) {
+        if let Some(state) = self.states.get_mut(&pid) {
+            state.open_find_bar();
+        }
+    }
+
+    /// 给 macOS 菜单项的回调用:⌘F 被按下时往这个通道里送一个信号(回调在 AppKit 里跑、拿不到 `&mut` 面板)。
+    pub fn find_shortcut_sender(&self) -> tokio::sync::mpsc::UnboundedSender<()> {
+        self.find_tx.clone()
+    }
+
+    pub fn take_find_shortcut_receiver(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<()>> {
+        self.find_rx.take()
     }
 
     /// 处理原生层事件。库消息交给 `update`(`projects` 按项目 id 取项目信息),提示进提示条。
@@ -251,6 +311,11 @@ impl BrowserPanel {
     fn display_padding(&self) -> iced::Padding {
         use dozer_panel_browser::BrowserDisplay;
         self.display.region().padding
+    }
+
+    fn display_gap(&self) -> f32 {
+        use dozer_panel_browser::BrowserDisplay;
+        self.display.region().gap
     }
 
     /// 取走后退 / 前进 / 刷新请求,交给原生层对对应项目的激活页签执行。
@@ -799,5 +864,92 @@ mod tests {
         let _ = panel.update(1, Message::BookmarksToggle, Some(&p));
         build(&panel);
         assert_eq!(display.0.get(), 1, "侧栏展开:恰好一条");
+    }
+
+    /// 查找条打开时网页整体下移同样的高度(查找行 + 留白 + gap),关掉就回到原位。
+    #[tokio::test]
+    async fn the_native_geometry_makes_room_for_the_find_bar() {
+        let mut panel = panel();
+        let p = project(1);
+        panel.ensure_state(&p);
+        let closed = panel.desired(&inputs(Some(1), Some(content())));
+        let _ = panel.update(1, Message::FindOpen, Some(&p));
+        let open = panel.desired(&inputs(Some(1), Some(content())));
+        let extra = f64::from(dozer_panel_browser::find_bar_extra_px(panel.display_gap()));
+        assert!(extra > 0.);
+        assert_eq!(open.rect.y, closed.rect.y + extra);
+        assert_eq!(open.rect.height, closed.rect.height - extra);
+        assert_eq!(open.rect.x, closed.rect.x);
+        assert_eq!(open.rect.width, closed.rect.width);
+        let _ = panel.update(1, Message::FindClose, Some(&p));
+        assert_eq!(
+            panel.desired(&inputs(Some(1), Some(content()))).rect,
+            closed.rect
+        );
+    }
+
+    /// 查找请求只对"现在显示的项目"的激活页签执行;别的项目的请求留在它自己的发件箱里,不丢也不串。
+    #[tokio::test]
+    async fn find_requests_reach_only_the_shown_projects_active_tab() {
+        let mut panel = panel();
+        let (a, b) = (project(1), project(2));
+        panel.ensure_state(&a);
+        panel.ensure_state(&b);
+        for (pid, p) in [(1, &a), (2, &b)] {
+            let _ = panel.update(pid, Message::FindOpen, Some(p));
+            let _ = panel.update(pid, Message::FindInput(format!("q{pid}")), Some(p));
+        }
+        let active = panel.states[&1].active_webview_id().unwrap();
+        let got = panel.find_targets(Some(1));
+        assert_eq!(
+            got,
+            vec![(
+                active,
+                FindRequest::Search {
+                    query: "q1".into(),
+                    backwards: false
+                }
+            )]
+        );
+        assert!(panel.find_targets(Some(1)).is_empty(), "取走即清空");
+        assert!(
+            !panel
+                .states
+                .get_mut(&2)
+                .unwrap()
+                .take_find_requests()
+                .is_empty(),
+            "项目 2 的请求还在它自己的发件箱里"
+        );
+        assert!(panel.find_targets(None).is_empty());
+    }
+
+    /// 打开查找条要请输入框拿焦点;`sync_native` 取走这个一次性标志(变成一个 Task)。
+    #[tokio::test]
+    async fn opening_the_bar_hands_the_focus_request_to_the_next_sync_exactly_once() {
+        let mut panel = panel();
+        let p = project(1);
+        panel.ensure_state(&p);
+        panel.open_find(1);
+        assert!(panel.states[&1].find_open());
+        let window = iced::window::Id::unique();
+        let _ = panel.sync_native(window, inputs(Some(1), Some(content())));
+        assert!(
+            !panel.states.get_mut(&1).unwrap().take_find_focus_pending(),
+            "sync_native 已经取走了焦点请求"
+        );
+        // 再同步一次:没有新的请求,不会重复聚焦。
+        let _ = panel.sync_native(window, inputs(Some(1), Some(content())));
+        assert!(!panel.states.get_mut(&1).unwrap().take_find_focus_pending());
+    }
+
+    /// ⌘F 的回调只往通道里送信号(AppKit 里拿不到 `&mut` 面板);信号能被收到。
+    #[tokio::test]
+    async fn the_find_shortcut_signal_reaches_the_receiver() {
+        let mut panel = panel();
+        let mut rx = panel.take_find_shortcut_receiver().expect("receiver");
+        assert!(panel.take_find_shortcut_receiver().is_none(), "只能取一次");
+        panel.find_shortcut_sender().send(()).unwrap();
+        assert_eq!(rx.recv().await, Some(()));
     }
 }
