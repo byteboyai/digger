@@ -1,0 +1,42 @@
+name: Consumer check
+
+# Digger 的第一个 CI(bytehost 优化 Tier5 Task2/3)。**当前仓库没有远端**,
+# 这份 workflow 只随本地分支提交,等配好 remote 并推到默认分支后才会生效。
+# 刻意不跑全量测试:先用编译 + 依赖门禁守住"业务层不许直连宿主层"。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  consumer-check:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout digger
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets
+
+      - name: 业务层宿主依赖门禁
+        run: bash scripts/check-host-deps.sh
+
+      - name: 共享库钉版守卫
+        run: bash scripts/check-shared-deps.sh --offline
