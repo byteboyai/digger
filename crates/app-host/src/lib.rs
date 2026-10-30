@@ -8,8 +8,9 @@
 //! 职责(规格 §5.3 / §6.1):
 //! - **执行器**([`effects::Executor`]):把状态机吐出的 `Effect` 翻成对 [`AppHostApi`] 的
 //!   异步调用,结果包成带回信身份的消息回喂状态机。启动应用服务异步执行,不阻塞窗口。
-//! - **订阅闭环**([`subscription`]):`Changed`/`Resync` 合并刷新,`Disconnected` 按共享退避
-//!   规则重订阅并回退到轮询。
+//! - **订阅闭环**([`effects::Executor::subscribe`]):`Changed`/`Resync` 合并刷新,
+//!   `Disconnected` 按共享退避规则重订阅并回退到轮询。信号分类只有
+//!   [`effects::ChangeKind`] 一份(Tier2 Task4)。
 //! - **身份与失效**([`request`]):列表 / launch URL / 日志结果都带 scope 与 request 身份;
 //!   卸载、面板关闭、generation 递增使旧的 UI 结果失效——但**写操作仍由服务完成**,不受影响。
 //! - **单一服务 + 取消令牌**([`service::HostService`]):一个数据根一个服务所有者;退出时先
@@ -24,7 +25,6 @@ pub mod effects;
 pub mod port;
 pub mod request;
 pub mod service;
-pub mod subscription;
 pub mod testing;
 pub mod trust;
 

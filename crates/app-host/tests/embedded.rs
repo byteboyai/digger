@@ -25,7 +25,6 @@ use digger_app_host::AppKeyId;
 use digger_app_host::effects::{Executor, InstallDetail, Outcome, ReplySink};
 use digger_app_host::request::{PanelInstanceId, RequestKey, RequestTable, ScopeId};
 use digger_app_host::service::{HostService, ShutdownOutcome};
-use digger_app_host::subscription::change_to_message;
 use digger_app_host::testing::{FakeHost, summary};
 
 /// 把后台回信收进一个通道,测试可以 `recv().await` / `try_recv()`。
@@ -468,23 +467,36 @@ fn connection_lost_and_restored_are_left_to_the_composition_root() {
     assert!(rx.try_recv().is_err(), "不产生任何后台回信");
 }
 
+/// 生产路径:推送的变更必须经 `Executor::subscribe` 的真实订阅循环翻成
+/// `Outcome::Changed`(组合根唯一消费的订阅信号)。此前测的是只存在于测试里的
+/// `subscription::change_to_message` 适配路径(Tier2 Task4 已删)。
 #[test]
-fn a_pushed_change_reaches_the_state_machine_as_a_refresh() {
+fn a_pushed_change_reaches_the_sink_as_a_refresh() {
     let rt = rt();
     let _g = rt.enter();
     let fake = FakeHost::new();
-    fake.on_list(vec![]);
-    let mut rx = rt.block_on(fake.subscribe()).expect("订阅成功");
-    let mut panel = PanelState::<AppKeyId>::default();
-    // 空转面板:直接吸收一条推送的变更,应立即发起一次刷新。
-    fake.push_change(AppChange::Resync);
-    let change = rt.block_on(rx.recv()).expect("收到变更");
-    let msg = change_to_message(change);
-    assert_eq!(
-        panel.update(msg, Instant::now(), &[]),
-        vec![PanelEffect::FetchList],
-        "推送的变更转成消息后触发一次刷新"
+    let requests = Arc::new(RequestTable::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink: Arc<dyn ReplySink> = Arc::new(ChannelSink(tx));
+    let host = HostService::with_api(fake, None);
+    let api = host.api();
+    let exec = Executor::new(host.api(), requests, sink, host.cancel_token());
+    exec.subscribe();
+    assert!(
+        matches!(rt.block_on(rx.recv()), Some(Outcome::Changed)),
+        "订阅建立后先刷一次"
     );
+    for change in [
+        AppChange::Resync,
+        AppChange::Changed(AppId::new("a").unwrap()),
+    ] {
+        let label = format!("{change:?}");
+        rt.block_on(api.read()).push_change(change);
+        assert!(
+            matches!(rt.block_on(rx.recv()), Some(Outcome::Changed)),
+            "{label} 必须翻成一次合并刷新"
+        );
+    }
 }
 
 /// 运行时的三条完成型 effect 各带回信身份与对应的 [`InstallAction`];探针带回探测列表。
