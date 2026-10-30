@@ -219,7 +219,12 @@ pub enum Msg {
     ZoomToggle,
     ShutdownFinished(Result<(), String>),
     ForceExit,
-    CloseRequested,
+    /// 系统关闭请求:带窗口 ID,主窗与设置窗走不同生命周期。
+    CloseRequested(window::Id),
+    /// 设置窗口的键盘事件(Esc)。只有非主窗会收到。
+    SettingsEscape(window::Id),
+    /// 设置窗口的产品消息。
+    Settings(crate::settings::Message),
     Exit,
 }
 
@@ -242,6 +247,8 @@ pub struct ProductShell {
     project_shell_blocked: Option<String>,
     /// 「应用」面板的组合根(状态机 + 执行器 + 内嵌应用服务)。
     apps: crate::apps::AppsState,
+    /// 设置窗口(共享导航状态 + 主题偏好显示状态)。
+    settings: crate::settings::State,
     /// 「用量」面板适配(共享 `dozer-panel-usage` 库 + 注入的真实用量服务)。
     usage: crate::adapters::usage::UsagePanel,
     /// 「待办」面板适配(S3b-1):按项目状态 + `diggerd` 的 TodoService。
@@ -315,6 +322,57 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 设置页里的一行普通文字(产品自己的提示 / 状态行)。
+fn text_line<'a>(label: impl Into<String>, tint: iced::Color) -> Element<'a, Msg> {
+    iced::widget::text(label.into())
+        .size(byteui::theme::font::label())
+        .color(tint)
+        .into()
+}
+
+/// 设置窗口的导航映射(`&'static` 函数指针,可安全借进返回的 `Element`)。
+fn settings_select(id: &bytehost_settings::PageId) -> Msg {
+    Msg::Settings(crate::settings::Message::Select(id.clone()))
+}
+
+fn settings_theme_selected(scheme: byteui::theme::color::ColorScheme) -> Msg {
+    Msg::Settings(crate::settings::Message::ThemeSelected(scheme))
+}
+
+fn settings_apps_install(message: bytehost_panel::install::Message) -> Msg {
+    Msg::Apps(crate::apps::Message::Install(message))
+}
+
+/// 应用行里的产品附加说明(运行时问题)。
+fn settings_app_notes<'a>(app: &bytehost_apps::proto::AppSummary) -> Vec<Element<'a, Msg>> {
+    match &app.issue {
+        Some(issue) => {
+            let (title, detail) = bytehost_panel::host::issue_texts(issue);
+            vec![text_line(format!("{title}:{detail}"), color::current().red)]
+        }
+        None => Vec::new(),
+    }
+}
+
+/// 应用行里的产品前置动作:非过渡态应用可以「打开」。
+fn settings_app_leading<'a>(app: &bytehost_apps::proto::AppSummary) -> Vec<Element<'a, Msg>> {
+    if app.observed.is_transient() {
+        return Vec::new();
+    }
+    vec![
+        iced::widget::button(
+            iced::widget::text("打开")
+                .size(byteui::theme::font::body())
+                .color(color::current().gold),
+        )
+        .padding([4, 12])
+        .on_press(Msg::Apps(crate::apps::Message::OpenApp(
+            app.id.as_str().to_owned(),
+        )))
+        .into(),
+    ]
 }
 
 fn logical(r: Rect) -> LogicalRect {
@@ -603,6 +661,7 @@ impl ProductShell {
             shell_save_blocked,
             project_shell_blocked: None,
             apps,
+            settings: crate::settings::State::new(),
             usage,
             todo,
             markdown,
@@ -1370,6 +1429,218 @@ impl ProductShell {
             .into()
     }
 
+    /// 共享设置页文案:Digger 本期没有 i18n,统一用共享层英文回退。
+    fn settings_text() -> bytehost_settings_ui::Text<'static> {
+        bytehost_settings_ui::Text::new(&crate::settings::shared_text)
+    }
+
+    /// 打开设置窗口(或激活已存在的窗口)。`target` 不可用时由注册表回退。
+    fn open_settings(&mut self, target: Option<bytehost_settings::PageId>) -> Task<Msg> {
+        self.settings.open(target.as_ref());
+        let activate = self.activate_settings_page();
+        if let Some(id) = self.settings.window {
+            return Task::batch([activate, iced::window::gain_focus(id)]);
+        }
+        let (id, open) = iced::window::open(crate::settings::window::settings_window());
+        self.settings.window = Some(id);
+        Task::batch([
+            activate,
+            open.map(move |_| Msg::Settings(crate::settings::Message::Opened(id))),
+        ])
+    }
+
+    /// 设置入口与面板入口使用同一个幂等启动流程，切页不另建服务或订阅。
+    fn activate_settings_page(&mut self) -> Task<Msg> {
+        if self
+            .settings
+            .page()
+            .is_some_and(|id| id.as_str() == bytehost_settings::APPS_ID)
+        {
+            self.apps
+                .update(crate::apps::Message::Opened)
+                .map(Msg::Apps)
+        } else {
+            Task::none()
+        }
+    }
+
+    fn close_settings(&mut self) -> Task<Msg> {
+        let Some(id) = self.settings.window.take() else {
+            return Task::none();
+        };
+        self.settings.core.close();
+        iced::window::close(id)
+    }
+
+    fn begin_exit(&mut self) -> Task<Msg> {
+        if self.closing {
+            return Task::none();
+        }
+        self.closing = true;
+        self.save_shell();
+        self.apps.prepare_shutdown();
+        // 关窗口只 detach:abort 转发,会话随 `diggerd` 存活。
+        self.agent.prepare_shutdown();
+        match self.settings.window.take() {
+            Some(id) => {
+                self.settings.core.close();
+                iced::window::close(id)
+            }
+            None => Task::none(),
+        }
+    }
+
+    fn update_settings(&mut self, msg: crate::settings::Message) -> Task<Msg> {
+        use crate::settings::Message;
+        match msg {
+            Message::Open(target) => self.open_settings(target),
+            Message::Close => self.close_settings(),
+            Message::Opened(id) => {
+                // 句柄已在 open_settings 登记；旧创建回包不能复活已关闭的窗口。
+                let _ = id;
+                Task::none()
+            }
+            Message::Select(id) => {
+                self.settings.select(&id);
+                self.activate_settings_page()
+            }
+            Message::Escape(id) => {
+                if self.settings.window == Some(id) {
+                    self.close_settings()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::ThemeSelected(scheme) => {
+                self.settings.theme_error = crate::settings::theme::select(scheme);
+                if let Some(preview) = self.preview.as_mut() {
+                    preview.reload_for_theme();
+                }
+                let review = self
+                    .window
+                    .map(|id| {
+                        self.conversations
+                            .native
+                            .sync_theme(id)
+                            .map(Msg::ReviewNative)
+                    })
+                    .unwrap_or_else(Task::none);
+                Task::batch([self.markdown.sync_theme().map(Msg::Markdown), review])
+            }
+        }
+    }
+
+    /// 设置窗口的内容(与主窗共用同一个产品状态,不复制任何业务状态)。
+    pub fn settings_view(&self) -> Element<'_, Msg> {
+        use bytehost_settings_ui::Shell;
+
+        let text = Self::settings_text();
+        let current = self.settings.page();
+        let is_apps = current.is_some_and(|id| id.as_str() == bytehost_settings::APPS_ID);
+
+        let content: Element<'_, Msg> = if is_apps {
+            self.settings_apps_view(text)
+        } else {
+            self.settings_theme_view(text)
+        };
+
+        bytehost_settings_ui::settings_shell(Shell {
+            pages: self.settings.registry().pages(),
+            current,
+            content,
+            on_select: &settings_select,
+            on_close: Msg::Settings(crate::settings::Message::Close),
+            on_close_hover: None,
+            close_hovered: false,
+            text,
+            scroll_content: !is_apps,
+            width: Length::Fill,
+        })
+    }
+
+    fn settings_theme_view<'a>(&'a self, text: bytehost_settings_ui::Text<'a>) -> Element<'a, Msg> {
+        let mut extra: Vec<Element<'_, Msg>> = Vec::new();
+        if let Some(reason) = self.settings.theme_error.as_deref() {
+            extra.push(text_line(
+                format!("Could not save the theme: {reason}. Pick a theme again to retry."),
+                color::current().red,
+            ));
+        }
+        if let Some(note) = self.settings.theme_notice.as_deref() {
+            extra.push(text_line(note.to_owned(), color::current().gold));
+        }
+        bytehost_settings_ui::theme_page(
+            color::current_scheme(),
+            &bytehost_settings_ui::theme::ALL,
+            text,
+            &settings_theme_selected,
+            extra,
+        )
+    }
+
+    fn settings_apps_view<'a>(&'a self, text: bytehost_settings_ui::Text<'a>) -> Element<'a, Msg> {
+        let tokens = color::current();
+        let mut extra_top: Vec<Element<'_, Msg>> = Vec::new();
+
+        if let crate::apps::Startup::Unavailable(reason) = self.apps.startup() {
+            extra_top.push(text_line(format!("应用服务不可用:{reason}"), tokens.red));
+            extra_top.push(
+                iced::widget::button("重试")
+                    .on_press(Msg::Apps(crate::apps::Message::RetryService))
+                    .into(),
+            );
+        } else if matches!(self.apps.startup(), crate::apps::Startup::Starting) {
+            extra_top.push(text_line("应用服务正在启动…", tokens.dim));
+        }
+
+        if let Some(notice) = self.apps.notice() {
+            let tint = match notice.level {
+                bytehost_panel::notice::NoticeLevel::Error => tokens.red,
+                bytehost_panel::notice::NoticeLevel::Warning => tokens.gold,
+                bytehost_panel::notice::NoticeLevel::Success => tokens.green,
+                bytehost_panel::notice::NoticeLevel::Info => tokens.cream,
+            };
+            extra_top.push(
+                iced::widget::row![
+                    text_line(notice.text.clone(), tint),
+                    iced::widget::button("关闭")
+                        .on_press(Msg::Apps(crate::apps::Message::DismissNotice)),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+        if self.apps.store_pending_count() > 0 {
+            extra_top.push(text_line(
+                format!("浏览器数据清理中：{} 项", self.apps.store_pending_count()),
+                tokens.dim,
+            ));
+        }
+        for (id, reason) in self.apps.store_failures() {
+            extra_top.push(
+                iced::widget::row![
+                    text_line(format!("{id} 浏览器数据未删除：{reason}"), tokens.red),
+                    iced::widget::button("重试清理")
+                        .on_press(Msg::Apps(crate::apps::Message::RetryCleanup(id.to_owned()))),
+                ]
+                .spacing(8)
+                .into(),
+            );
+        }
+
+        let mut view = bytehost_settings_ui::AppsView::new(
+            self.apps.flow(),
+            text,
+            &settings_apps_install,
+            &crate::apps::log_scroll_id,
+        );
+        view.extra_top = extra_top;
+        view.app_notes = Some(&settings_app_notes);
+        view.app_leading_actions = Some(&settings_app_leading);
+        bytehost_settings_ui::apps::view(view)
+    }
+
     fn usage_view(&self, area: &BodyArea) -> Element<'_, Msg> {
         let tokens = color::current();
         let body: Element<'_, Msg> = match self.usage_layout() {
@@ -2038,6 +2309,11 @@ impl ProductShell {
         self.window
     }
 
+    /// 这个原生窗口是不是设置窗。
+    pub fn is_settings_window(&self, id: window::Id) -> bool {
+        self.settings.window == Some(id)
+    }
+
     pub fn window_size(&self) -> (f32, f32) {
         self.shell.window()
     }
@@ -2083,10 +2359,30 @@ fn top_bar_slots<'a>(projects: &'a crate::projects::ProjectsState) -> TopBarSlot
     .spacing(6)
     .align_y(iced::Alignment::Center);
     let tabs = projects.tabs_view().map(Msg::Projects);
+    let settings = iced::widget::button(icons::view(IconKind::Settings, icon_size::row(), dim))
+        .padding(4)
+        .on_press(Msg::Settings(crate::settings::Message::Open(None)))
+        .style(|_t: &iced::Theme, status: iced::widget::button::Status| {
+            let colors = color::current();
+            iced::widget::button::Style {
+                background: match status {
+                    iced::widget::button::Status::Hovered
+                    | iced::widget::button::Status::Pressed => Some(
+                        iced::Color {
+                            a: 0.15,
+                            ..colors.gold
+                        }
+                        .into(),
+                    ),
+                    _ => None,
+                },
+                ..Default::default()
+            }
+        });
     TopBarSlots {
         title: title.into(),
         tabs,
-        right: iced::widget::Space::new().into(),
+        right: settings.into(),
     }
 }
 
@@ -2301,6 +2597,7 @@ impl Product<Msg> for ProductShell {
         match m {
             Msg::WindowReady(id, size) => {
                 self.window = Some(id);
+                crate::set_main_window(Some(id));
                 self.window_minimized = false;
                 let resized = self.on_shell(ShellMsg::Resized {
                     w: size.width,
@@ -2532,6 +2829,9 @@ impl Product<Msg> for ProductShell {
                 .window
                 .map(window::toggle_maximize)
                 .unwrap_or_else(Task::none),
+            Msg::Apps(crate::apps::Message::OpenSettings) => {
+                self.open_settings(Some(crate::settings::apps_page_id()))
+            }
             Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
             Msg::Usage(m) => {
                 // 库的 `update` 对这两条是 `unreachable!`(它们必须由宿主拦截):折叠转给骨架,悬停无事可做。
@@ -3081,17 +3381,24 @@ impl Product<Msg> for ProductShell {
                 }
             },
             Msg::ForceExit => iced::exit(),
-            Msg::CloseRequested | Msg::Exit => {
-                if self.closing {
-                    return Task::none();
+            Msg::CloseRequested(id) => {
+                if self.settings.window == Some(id) {
+                    self.close_settings()
+                } else if self.window == Some(id) {
+                    self.begin_exit()
+                } else {
+                    Task::none()
                 }
-                self.closing = true;
-                self.save_shell();
-                self.apps.prepare_shutdown();
-                // 关窗口只 detach:abort 转发,会话随 `diggerd` 存活。
-                self.agent.prepare_shutdown();
-                Task::none()
             }
+            Msg::SettingsEscape(id) => {
+                if self.settings.window == Some(id) {
+                    self.close_settings()
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::Settings(msg) => self.update_settings(msg),
+            Msg::Exit => self.begin_exit(),
         }
     }
 
@@ -3328,8 +3635,18 @@ pub fn agent_key_message(
 fn agent_event(
     event: iced::Event,
     status: iced::event::Status,
-    _id: iced::window::Id,
+    id: iced::window::Id,
 ) -> Option<Msg> {
+    // 设置窗只处理 Esc;其余鼠标 / 键盘事件不能进 Agent 终端。
+    if crate::is_secondary_window(id) {
+        return match event {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                ..
+            }) => Some(Msg::SettingsEscape(id)),
+            _ => None,
+        };
+    }
     match event {
         iced::Event::Keyboard(event) => {
             if crate::AGENT_KEYS_BLOCKED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -3366,9 +3683,12 @@ fn window_state_event(event: iced::Event, _: iced::event::Status, id: window::Id
 
 /// 订阅:窗口关闭请求、骨架需要的鼠标 / 缩放事件,以及仅在有动画时才开的 ~60fps 动画拍。
 pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
-    let events = iced::event::listen_with(|evt, _status, _id| {
+    let events = iced::event::listen_with(|evt, _status, id| {
         if let iced::Event::Window(window::Event::CloseRequested) = evt {
-            return Some(Msg::CloseRequested);
+            return Some(Msg::CloseRequested(id));
+        }
+        if crate::is_secondary_window(id) {
+            return None;
         }
         bytehost_chrome::map_event(&evt).map(Msg::Shell)
     });
@@ -3380,17 +3700,22 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
     // `view` 每帧写进进程级原子,供订阅工作线程读取。
     let agent_input = iced::event::listen_with(agent_event);
     // 左键按下 / 松开与修饰键:文件树的单击 / 拖拽 / 多选靠它们(库对这些消息的 `update` 不处理)。
-    let pointer = iced::event::listen_with(|evt, _status, _id| match evt {
-        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
-            Some(Msg::LeftButton(true))
+    let pointer = iced::event::listen_with(|evt, _status, id| {
+        if crate::is_secondary_window(id) {
+            return None;
         }
-        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-            Some(Msg::LeftButton(false))
+        match evt {
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                Some(Msg::LeftButton(true))
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                Some(Msg::LeftButton(false))
+            }
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+                Some(Msg::Modifiers(modifiers))
+            }
+            _ => None,
         }
-        iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
-            Some(Msg::Modifiers(modifiers))
-        }
-        _ => None,
     });
     let mut subs = vec![
         events,
@@ -3620,6 +3945,8 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     font::set_theme(font::FontTokens::byteboy2077());
 
     let mut shell = ProductShell::new();
+    // 用户上次选的主题(缺失 → 保持上面的默认值;损坏 → 回退并显示提示)。
+    shell.settings.load_theme();
     let size = default_window_size_for_boot();
     // 用量面板要 iced 运行时句柄在后台取数:`boot` 在 iced 运行时内执行,这里补挂。
     shell.usage.attach_handle(tokio::runtime::Handle::current());
@@ -3681,11 +4008,13 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         Some(rx) => iced::Task::stream(crate::adapters::usage::receiver_stream(rx).map(Msg::Usage)),
         None => Task::none(),
     };
-    let size_task = bytehost_desktop::panel::oldest_window().then(move |id| match id {
-        Some(id) => bytehost_desktop::panel::window_size(id)
-            .map(move |s| Msg::WindowReady(id, s.unwrap_or(size))),
-        None => Task::none(),
-    });
+    let size_task = {
+        // daemon 不自带初始窗口:boot 显式创建主窗,并把 ID 立刻记到产品态 / 事件路由表。
+        let (main_id, open) = iced::window::open(crate::settings::window::main_window(size));
+        crate::set_main_window(Some(main_id));
+        shell.window = Some(main_id);
+        open.map(move |_| Msg::WindowReady(main_id, size))
+    };
     let native_usage = match shell.usage.native.take_receiver() {
         Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|event| (Msg::NativeUsage(event), rx))
@@ -4196,6 +4525,51 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[tokio::test]
+    async fn settings_apps_start_the_existing_service_without_opening_the_panel() {
+        use crate::settings::{Message as S, apps_page_id};
+        for direct in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut shell = ProductShell::with_shell_path(dir.path().join("shell.json"));
+            shell.apps = crate::apps::AppsState::with_ledger_path(dir.path().join("cleanups.json"));
+            let mut rx = crate::apps::take_reply_receiver(&shell.apps.reply_receiver()).unwrap();
+            assert!(!shell.panel_visible(&shell::apps_id()));
+            let _ = shell.update_settings(S::Open(direct.then(apps_page_id)));
+            if !direct {
+                assert!(rx.try_recv().is_err(), "主题页不应启动应用服务");
+                let _ = shell.update_settings(S::Select(apps_page_id()));
+            }
+            // 第二次激活必须复用本次启动，不能再创建 AppService 或争抢同根锁。
+            let _ = shell.update_settings(S::Open(Some(apps_page_id())));
+            let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(outcome, digger_app_host::effects::Outcome::ServiceReady(..)),
+                "{outcome:?}"
+            );
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+                    .await
+                    .is_err()
+            );
+            let _ = shell
+                .apps
+                .update(crate::apps::Message::Outcome(Arc::new(outcome)));
+            shell.apps.prepare_shutdown();
+            shell.apps.shutdown().await.unwrap();
+        }
+    }
+
+    #[test]
+    fn a_late_settings_open_reply_does_not_resurrect_a_closed_window() {
+        let mut shell = fresh("settings-late-open");
+        let id = window::Id::unique();
+        let _ = shell.update_settings(crate::settings::Message::Opened(id));
+        assert!(!shell.settings.is_open());
     }
 
     fn test_temp_dir(tag: &str) -> std::path::PathBuf {

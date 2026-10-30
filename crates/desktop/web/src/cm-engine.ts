@@ -127,7 +127,9 @@ const livePreview = ViewPlugin.fromClass(
 );
 
 const theme = EditorView.theme({
-  "&": { height: "100%", fontSize: "17px" },
+  "&": { height: "100%", fontSize: "17px", backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--editor-fg)" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": { backgroundColor: "var(--editor-selection)" },
   ".cm-scroller": { fontFamily: '-apple-system, "PingFang SC", sans-serif', lineHeight: "1.8", padding: "24px 40px" },
   ".cm-content": { maxWidth: "720px", margin: "0 auto" },
   ".cm-h1": { fontSize: "1.6em", fontWeight: "700" },
@@ -135,10 +137,10 @@ const theme = EditorView.theme({
   ".cm-h3": { fontSize: "1.15em", fontWeight: "700" },
   ".cm-em": { fontStyle: "italic" },
   ".cm-strong": { fontWeight: "700" },
-  ".cm-icode": { fontFamily: "ui-monospace, monospace", background: "#eee" },
-  ".cm-link": { color: "#2a62c9", textDecoration: "underline" },
-  ".cm-footnote": { fontSize: "0.9em", color: "#555", borderLeft: "2px solid #ddd", paddingLeft: "10px" },
-  ".cm-quote": { borderLeft: "3px solid #bbb", paddingLeft: "10px", color: "#555" },
+  ".cm-icode": { fontFamily: "ui-monospace, monospace", background: "var(--editor-code)" },
+  ".cm-link": { color: "var(--editor-link)", textDecoration: "underline" },
+  ".cm-footnote": { fontSize: "0.9em", color: "var(--editor-muted)", borderLeft: "2px solid var(--editor-border)", paddingLeft: "10px" },
+  ".cm-quote": { borderLeft: "3px solid var(--editor-border)", paddingLeft: "10px", color: "var(--editor-muted)" },
 });
 
 export function createCm(post: (o: unknown) => void = () => {}): Engine {

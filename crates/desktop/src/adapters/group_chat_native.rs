@@ -17,7 +17,6 @@ use std::sync::{
 
 pub const SCHEME: &str = "digger-groupchat";
 pub const HOST: &str = "group-chat-content";
-const THEME: &str = "dark";
 /// Page URLs are short; reject anything longer before looking at it.
 const MAX_PAGE_URL_BYTES: usize = 2048;
 /// Larger than any post the library would accept (20 000 chars) plus JSON framing;
@@ -59,9 +58,9 @@ fn host_desired(d: &Desired, ready: bool) -> Option<native_child::Desired> {
         return None;
     }
     let pid = d.project_id?;
-    let spec = group_chat_webview_spec(false, ready, SCHEME, THEME)?;
+    let spec = group_chat_webview_spec(false, ready, SCHEME, crate::settings::theme::code())?;
     Some(native_child::Desired {
-        identity: format!("group-chat:{pid}"),
+        identity: format!("group-chat:{pid}:{}", crate::settings::theme::code()),
         url: spec.url,
         rect: LogicalRect {
             x: d.rect.x.max(0.),
@@ -177,6 +176,7 @@ impl GroupChatNative {
             && live.generation == self.epoch.load(Ordering::SeqCst)
             && desired.shown
             && desired.project_id == Some(live.project_id)
+            && host_desired(desired, false).is_some_and(|d| d.identity == live.desired.identity)
     }
     pub fn is_ready(&self) -> bool {
         self.live
@@ -230,7 +230,7 @@ impl GroupChatNative {
             .filter(|l| l.generation == self.epoch.load(Ordering::SeqCst));
         // Readiness belongs to the page that said it: a page for another project is a
         // new document and starts parked.
-        let ready = current.is_some_and(|l| l.ready && desired.project_id == Some(l.project_id));
+        let ready = current.is_some_and(|l| l.ready && self.is_available_for(desired));
         let target = host_desired(desired, ready);
         match (self.live.as_ref(), current) {
             // A stale child must be replaced, never reused.

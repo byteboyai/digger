@@ -26,6 +26,7 @@ pub struct Native {
     host: Host,
     epoch: Arc<AtomicU64>,
     live: bool,
+    theme: &'static str,
     ready: bool,
     last_probe: Option<Probe>,
     bounds: Option<LogicalRect>,
@@ -56,6 +57,7 @@ impl Native {
             surface: UsageSurface::new(2048, dispatch),
             epoch,
             live: false,
+            theme: crate::settings::theme::code(),
             ready: false,
             last_probe: None,
             bounds: None,
@@ -98,7 +100,7 @@ impl Native {
     fn desired(&self, rect: LogicalRect) -> native_child::Desired {
         native_child::Desired {
             identity: "usage".into(),
-            url: "digger-usage://localhost/host.html".into(),
+            url: format!("digger-usage://localhost/host.html?theme={}", self.theme),
             rect,
             scale: f64::from(byteui::theme::icon_size::scale()),
             visible: true,
@@ -113,6 +115,14 @@ impl Native {
         rect: LogicalRect,
         state: &WorkspaceState,
     ) -> Task<Event> {
+        // 主题属于文档身份；重建后重新握手与推送，不能沿用旧页面的去重状态。
+        let theme = crate::settings::theme::code();
+        if self.live && self.theme != theme {
+            self.theme = theme;
+            let destroy = self.sync(id, false, rect, state);
+            return destroy.chain(self.sync(id, visible, rect, state));
+        }
+        self.theme = theme;
         if !visible {
             if !self.live {
                 return Task::none();
@@ -203,5 +213,46 @@ impl Native {
             Event::Built,
             Event::Done,
         )
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+
+    #[test]
+    fn a_theme_change_rebuilds_the_document_and_waits_for_a_new_handshake() {
+        let mut native = Native::new();
+        native.live = true;
+        native.ready = true;
+        native.theme = if crate::settings::theme::code() == "dark" {
+            "light"
+        } else {
+            "dark"
+        };
+        let before = native.epoch.load(Ordering::SeqCst);
+        let rect = LogicalRect {
+            x: 0.,
+            y: 0.,
+            width: 300.,
+            height: 400.,
+        };
+        let _ = native.sync(window::Id::unique(), true, rect, &WorkspaceState::default());
+        assert!(native.epoch.load(Ordering::SeqCst) > before);
+        assert!(native.live);
+        assert!(!native.ready, "旧页面 ready 不能沿用到新主题文档");
+        assert!(
+            native
+                .desired(rect)
+                .url
+                .ends_with(crate::settings::theme::code())
+        );
+        let old_epoch = native.epoch.load(Ordering::SeqCst);
+        let _ = native.sync(window::Id::unique(), true, rect, &WorkspaceState::default());
+        assert_eq!(
+            native.epoch.load(Ordering::SeqCst),
+            old_epoch,
+            "未变主题不重复重建"
+        );
     }
 }

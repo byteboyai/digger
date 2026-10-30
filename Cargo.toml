@@ -37,6 +37,9 @@ bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.
 bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
 bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
 bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+# 共享设置状态 / 视图(产品中立;Digger 只在自己的 desktop 适配层消费)。
+bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
+bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.17" }
 
 # 组件库(Dozer 与 Digger 共用);iced 版本必须与 byteui 一致,一起升。
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.0" }

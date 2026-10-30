@@ -4,6 +4,7 @@ declare global {
     ipc: { postMessage(m: string): void };
     /** 宿主的初始化脚本在页面脚本之前注入 */
     __DIGGER__?: { readonly nonce: string; readonly mode: "app" | "selftest" };
+    __DIGGER_THEME__?: "dark" | "light";
   }
 }
 

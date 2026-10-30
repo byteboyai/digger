@@ -70,6 +70,12 @@ pub fn usage_ledger_path() -> PathBuf {
     config_dir().join("usage_ledger.json")
 }
 
+/// 主题偏好文件:采用 byteui 的 `{"scheme":"dark"|"light"}` 格式。
+/// Digger 自己的数据根,与 Dozer 的 `color-theme.json` 完全独立。
+pub fn color_theme_path() -> PathBuf {
+    config_dir().join("color-theme.json")
+}
+
 /// 日志目录。
 pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")
@@ -141,6 +147,16 @@ mod tests {
         assert!(
             socket.starts_with(&root),
             "socket {socket:?} should be under {root:?}"
+        );
+    }
+
+    #[test]
+    fn theme_file_is_digger_own_and_uses_the_shared_format_name() {
+        let path = color_theme_path();
+        assert!(path.starts_with(config_dir()));
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("color-theme.json")
         );
     }
 

@@ -222,6 +222,13 @@ impl PreviewHub {
         true
     }
 
+    /// 复用共享面板的主题重载，覆盖已打开但当前未选中的 web 页签。
+    pub fn reload_for_theme(&mut self) {
+        for state in [&mut self.files, &mut self.project].into_iter().flatten() {
+            state.pane.reload_all_webviews_for_theme();
+        }
+    }
+
     /// 当前项目变了:旧项目的两份状态整份丢掉(不常驻),新项目按需恢复页签。
     ///
     /// G-C1:切换**不是**删除。切走时:
@@ -882,6 +889,44 @@ mod tests {
                 .any(|t| matches!(&t.kind, TabKind::File(p) if *p == b))
         );
         assert!(!hub.close_file_tab(1, &a), "已经关了:再关是 no-op,不 panic");
+    }
+
+    #[test]
+    fn theme_reload_updates_both_preview_panes_and_inactive_file_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut hub = hub(dir.path());
+        let (project, _, _) = open_two(&mut hub, dir.path());
+        hub.open(
+            ViewerPanel::Project,
+            &project,
+            write(dir.path(), "c.rs"),
+            None,
+        );
+        let before: Vec<_> = [ViewerPanel::Files, ViewerPanel::Project]
+            .into_iter()
+            .flat_map(|panel| {
+                hub.state(panel, 1)
+                    .unwrap()
+                    .pane
+                    .tabs()
+                    .iter()
+                    .filter(|t| matches!(t.kind, TabKind::File(_)))
+                    .map(move |t| (panel, t.id, t.reload_nonce))
+            })
+            .collect();
+        assert_eq!(before.len(), 3);
+        hub.reload_for_theme();
+        for (panel, id, nonce) in before {
+            let tab = hub
+                .state(panel, 1)
+                .unwrap()
+                .pane
+                .tabs()
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap();
+            assert_eq!(tab.reload_nonce, nonce + 1);
+        }
     }
 
     #[test]

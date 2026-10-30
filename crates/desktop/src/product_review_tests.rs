@@ -240,7 +240,8 @@ fn collapsing_the_right_zone_or_maximizing_the_left_one_destroys_it() {
 fn window_closing_destroys_it_before_shutdown() {
     let (mut shell, _rt) = review_shell("review-close-window");
     loaded(&mut shell);
-    let task = host(&mut shell, Msg::CloseRequested);
+    let main = shell.window_id().expect("main window");
+    let task = host(&mut shell, Msg::CloseRequested(main));
     destroyed(&shell);
     assert!(shell.closing);
     use iced::futures::StreamExt;
@@ -508,7 +509,8 @@ fn window_queries_ignore_stale_replies_old_windows_and_closing_owners() {
     assert!(!shell.window_minimized);
     let query = host(&mut shell, Msg::Tick);
     let closing = answer_window_sample(query, &rt, Some(true), dimensions);
-    let _ = host(&mut shell, Msg::CloseRequested);
+    let main = shell.window_id().expect("main window");
+    let _ = host(&mut shell, Msg::CloseRequested(main));
     let _ = host(&mut shell, closing);
     assert!(!shell.window_minimized);
     assert!(shell.conversations.native.document_identity().is_none());
@@ -762,7 +764,8 @@ fn mapped_zero_resize_before_minimize_response_preserves_layout_and_close_json()
         );
         let _ = host(&mut shell, response);
         assert_eq!(size(&shell), dimensions);
-        let _ = host(&mut shell, Msg::CloseRequested);
+        let main = shell.window_id().expect("main window");
+        let _ = host(&mut shell, Msg::CloseRequested(main));
         let json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&shell.shell_path).unwrap()).unwrap();
         assert_eq!(json["window_width"], serde_json::json!(dimensions.width));

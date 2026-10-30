@@ -316,6 +316,18 @@ impl MarkdownPanel {
         })
     }
 
+    pub fn sync_theme(&self) -> Task<Message> {
+        let Some(id) = self.window.filter(|_| self.live) else {
+            return Task::none();
+        };
+        let generation = self.generation();
+        let theme = crate::settings::theme::code();
+        window::run(id, move |_| {
+            host::set_theme(generation, theme);
+            Message::Done
+        })
+    }
+
     /// 关闭面板:销毁 webview 并丢掉文档(退出时调用)。迟到的消息从此被 generation 挡掉。
     pub fn close(&mut self, id: window::Id) -> Task<Message> {
         if !self.live {

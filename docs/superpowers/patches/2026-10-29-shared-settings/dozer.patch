@@ -1,0 +1,11 @@
+diff --git a/crates/dozer-app/src/extensions/settings_apps_view.rs b/crates/dozer-app/src/extensions/settings_apps_view.rs
+--- a/crates/dozer-app/src/extensions/settings_apps_view.rs
++++ b/crates/dozer-app/src/extensions/settings_apps_view.rs
+@@ -21,6 +21,7 @@
+     with_locale(locale, || {
+         bytehost_settings_ui::apps::view(AppsView {
+             state,
++            locale: locale.to_owned(),
+             text: Text::new(&shared_text),
+             map: &|message| message,
+             log_scroll_id: &crate::extensions::app_logs::scroll_id,

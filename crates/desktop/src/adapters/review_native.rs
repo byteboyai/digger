@@ -154,6 +154,23 @@ impl Default for ReviewNative {
     }
 }
 impl ReviewNative {
+    /// 同一审阅文档直接换样式，保留滚动位置和已验证的加载身份。
+    pub fn sync_theme(&mut self, id: window::Id) -> Task<Event> {
+        let Some(live) = self.live.as_ref() else {
+            return Task::none();
+        };
+        self.host.sync(
+            id,
+            live.generation,
+            live.desired.clone(),
+            Some(crate::settings::theme::review_script()),
+            |generation, result| match result {
+                Ok(()) => Event::Done,
+                Err(error) => Event::Failed(generation, error),
+            },
+            Event::Done,
+        )
+    }
     pub fn new() -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let epoch = Arc::new(AtomicU64::new(0));
@@ -338,6 +355,7 @@ impl ReviewNative {
                 move |builder| {
                     let errors = tx.clone();
                     builder
+                        .with_initialization_script(crate::settings::theme::review_script())
                         .with_custom_protocol("digger-review".into(), move |_, request| {
                             let response = match serving.serve(request.uri().path()) {
                                 Ok(r) => r,

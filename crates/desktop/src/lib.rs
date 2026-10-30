@@ -13,6 +13,7 @@ pub mod paths;
 pub mod preview_assets;
 pub mod product;
 pub mod projects;
+pub mod settings;
 pub mod shell;
 
 // 下面这些 thread-local 是给 `PanelDisplay` / 事件订阅这类**拿不到
@@ -22,6 +23,25 @@ thread_local! {
     /// 最近一次已知的窗口逻辑尺寸:只给 `PanelDisplay` 这类拿不到 `ProductShell` 的展示适配器用。
     pub(crate) static CURRENT_WINDOW: std::cell::Cell<Option<(f32, f32)>> =
         const { std::cell::Cell::new(None) };
+}
+
+/// 主窗口 ID:订阅回调是无捕获函数指针,拿不到 `ProductShell`,用进程级记录区分
+/// 主窗与设置窗的事件。设置窗关闭不影响主窗布局。
+static MAIN_WINDOW: std::sync::Mutex<Option<iced::window::Id>> = std::sync::Mutex::new(None);
+
+pub(crate) fn set_main_window(id: Option<iced::window::Id>) {
+    if let Ok(mut slot) = MAIN_WINDOW.lock() {
+        *slot = id;
+    }
+}
+
+/// 已知存在主窗、且 `id` 不是它:设置窗等次级窗口。
+/// 主窗 ID 尚未知时返回 `false`(避免启动早期把所有事件都当次级窗口丢掉)。
+pub(crate) fn is_secondary_window(id: iced::window::Id) -> bool {
+    MAIN_WINDOW
+        .lock()
+        .map(|slot| slot.is_some_and(|main| main != id))
+        .unwrap_or(false)
 }
 
 // 下面两个是给**订阅回调**读的快照。订阅回调跑在 tokio 工作线程,`view` 跑在主线程,

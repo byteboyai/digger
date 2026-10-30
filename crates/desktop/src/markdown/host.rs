@@ -62,6 +62,10 @@ pub fn build(
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
         .with_navigation_handler(|url| url == "about:blank")
         .with_initialization_script(init_script(nonce, mode))
+        .with_initialization_script(format!(
+            "window.__DIGGER_THEME__ = {:?};",
+            crate::settings::theme::code()
+        ))
         .with_ipc_handler(move |request| {
             let _ = tx.send(Message::Page(generation, request.into_body()));
         })
@@ -92,6 +96,16 @@ pub fn set_bounds(generation: u64, rect: LogicalRect) {
 pub fn set_visible(generation: u64, visible: bool) {
     with(generation, |view| {
         let _ = view.set_visible(visible);
+    });
+}
+
+/// 仅更新样式，不重建文档或撤销栈；隐藏的编辑器也保留最新主题。
+pub fn set_theme(generation: u64, theme: &str) {
+    let theme = serde_json::to_string(theme).expect("theme serializes");
+    with(generation, |view| {
+        let _ = view.evaluate_script(&format!(
+            "window.__DIGGER_THEME__ = {theme}; document.documentElement?.setAttribute('data-theme', {theme});"
+        ));
     });
 }
 

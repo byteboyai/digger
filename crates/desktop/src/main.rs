@@ -2,49 +2,49 @@
 //!
 //! 组合根委托:`product::boot` 建产品壳并设主题,`Product::update`/`view`
 //! 经宿主泛型包装驱动(`HostMessage<M>` 证明产品消息不进入宿主 enum)。
+//!
+//! 使用 `iced::daemon` 而不是单窗 `application`:设置窗口需要独立的原生窗口,
+//! 内容仍由共享 `bytehost-settings-ui` 绘制。主窗在 `product::boot` 里显式打开。
 
 use digger_desktop::product::{self, Msg, ProductShell};
 use digger_desktop::{daemon, fonts};
 
 use bytehost_desktop::HostMessage;
-use iced::{Element, Task};
+use iced::{Element, window};
 
-fn boot() -> (ProductShell, Task<Msg>) {
+fn boot() -> (ProductShell, iced::Task<Msg>) {
     product::boot()
 }
 
-fn update(shell: &mut ProductShell, msg: Msg) -> Task<Msg> {
+fn update(shell: &mut ProductShell, msg: Msg) -> iced::Task<Msg> {
     // 窗口消息经宿主泛型包装交给产品;产品不直接处理宿主 enum。
     product::update_host(shell, HostMessage::Product(msg))
 }
 
-fn view(shell: &ProductShell) -> Element<'_, Msg> {
-    bytehost_desktop::Product::view(shell)
+fn view(shell: &ProductShell, id: window::Id) -> Element<'_, Msg> {
+    if shell.is_settings_window(id) {
+        shell.settings_view()
+    } else {
+        bytehost_desktop::Product::view(shell)
+    }
+}
+
+fn title(shell: &ProductShell, id: window::Id) -> String {
+    if shell.is_settings_window(id) {
+        "Digger Settings".to_owned()
+    } else {
+        "Digger".to_owned()
+    }
 }
 
 fn main() -> iced::Result {
     // 先于一切 `dozer_client::Client`:握手比对的是进程级产品身份。
     daemon::install_product();
     fonts::sanitize_font_db();
-    iced::application(boot, update, view)
+    iced::daemon(boot, update, view)
+        .title(title)
+        .subscription(product::subscription)
         .font(fonts::JETBRAINS_MONO)
         .font(dozer_panel_term::symbols::SYMBOLS_FONT_DATA)
-        .title("Digger")
-        .window(iced::window::Settings {
-            exit_on_close_request: false,
-            min_size: Some(iced::Size::new(
-                byteui::theme::geometry::min_window_width(),
-                byteui::theme::geometry::min_window_height(),
-            )),
-            // 与 Dozer 一致:透明标题栏 + 全尺寸内容视图,顶栏取代系统标题栏(红绿灯由 `bytehost-chrome` 摆进顶栏里)。
-            platform_specific: iced::window::settings::PlatformSpecific {
-                title_hidden: true,
-                titlebar_transparent: true,
-                fullsize_content_view: true,
-            },
-            ..Default::default()
-        })
-        .subscription(product::subscription)
-        .window_size(product::default_window_size_for_boot())
         .run()
 }

@@ -245,3 +245,20 @@ fn new_window_and_download_requests_are_denied_by_the_shared_executor() {
         wry::NewWindowResponse::Deny
     ));
 }
+
+#[test]
+fn an_old_theme_document_is_replaced_and_cannot_consume_new_payloads() {
+    let mut native = live_native(1, true);
+    native
+        .live
+        .as_mut()
+        .unwrap()
+        .desired
+        .identity
+        .push_str("-old-theme");
+    assert!(!native.is_available_for(&desired()));
+    assert_eq!(
+        plan_names(&native, &desired()),
+        ["Destroy", "Create", "Zoom", "Park"]
+    );
+}

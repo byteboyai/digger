@@ -4,6 +4,6 @@
 //! 实际实现全部由 `digger-paths` 提供。`PROJECTS_DB_FILE` 在 Task 8 改为 `digger.db`。
 
 pub use digger_paths::{
-    PROJECT_TABS_FILE, PROJECTS_DB_FILE, bytehost_root, config_dir, ensure_data_root, shell_path,
-    state_dir, usage_ledger_path,
+    PROJECT_TABS_FILE, PROJECTS_DB_FILE, bytehost_root, color_theme_path, config_dir,
+    ensure_data_root, shell_path, state_dir, usage_ledger_path,
 };

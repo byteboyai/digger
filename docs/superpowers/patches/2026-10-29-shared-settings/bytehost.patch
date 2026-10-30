@@ -1,0 +1,125 @@
+diff --git a/crates/bytehost-settings-ui/src/apps/mod.rs b/crates/bytehost-settings-ui/src/apps/mod.rs
+--- a/crates/bytehost-settings-ui/src/apps/mod.rs
++++ b/crates/bytehost-settings-ui/src/apps/mod.rs
+@@ -21,6 +21,8 @@
+ pub struct View<'a, M> {
+     pub state: &'a InstallFlowState,
+     pub text: Text<'a>,
++    /// 当前界面语言，用于解析应用标题；不与英文 fallback 混用。
++    pub locale: String,
+     /// 把共享消息映射为产品消息(原始 `install::Message` 不变)。
+     pub map: &'a dyn Fn(Message) -> M,
+     /// 产品日志滚动容器的稳定 `Id`。
+@@ -46,6 +48,7 @@
+         Self {
+             state,
+             text,
++            locale: "en".to_owned(),
+             map,
+             log_scroll_id,
+             extra_top: Vec::new(),
+@@ -61,6 +64,7 @@
+     let View {
+         state,
+         text,
++        locale,
+         map,
+         log_scroll_id,
+         extra_top,
+@@ -119,6 +123,7 @@
+                 col = col.push(rows::app_row(
+                     state,
+                     app,
++                    &locale,
+                     text,
+                     map,
+                     app_notes,
+diff --git a/crates/bytehost-settings-ui/src/apps/rows.rs b/crates/bytehost-settings-ui/src/apps/rows.rs
+--- a/crates/bytehost-settings-ui/src/apps/rows.rs
++++ b/crates/bytehost-settings-ui/src/apps/rows.rs
+@@ -134,9 +134,22 @@
+         .into()
+ }
+ 
++fn app_title<'a>(app: &'a AppSummary, locale: &str) -> &'a str {
++    app.display_i18n
++        .as_ref()
++        .and_then(|d| {
++            d.resolve_title(
++                &bytehost_apps::proto::DisplayTitleScope::Presentation,
++                locale,
++            )
++        })
++        .unwrap_or(app.name.as_str())
++}
++
+ pub(crate) fn app_row<'a, M: Clone + 'a>(
+     state: &'a State,
+     app: &'a AppSummary,
++    locale: &str,
+     text_: Text<'a>,
+     map: &'a dyn Fn(Message) -> M,
+     notes: Option<&'a dyn Fn(&AppSummary) -> Vec<Element<'a, M>>>,
+@@ -150,11 +163,7 @@
+         app.version,
+         observed_label(&app.observed)
+     );
+-    let title = app
+-        .display_i18n
+-        .as_ref()
+-        .and_then(|d| d.resolve_title(&bytehost_apps::proto::DisplayTitleScope::Presentation, "en"))
+-        .unwrap_or(app.name.as_str());
++    let title = app_title(app, locale);
+     let acting = state.is_acting(&id).is_some();
+ 
+     let mut head = row![
+@@ -269,9 +278,13 @@
+     let colors = color::current();
+     let view = plan_view(plan, running);
+     let mut col = column![
+-        text(text_.get("settings.apps.install_title", "Install app"))
+-            .size(byteui::theme::font::body())
+-            .color(colors.cream),
++        text(format!(
++            "{} {}",
++            text_.get("settings.apps.install_title", "Install app"),
++            view.title
++        ))
++        .size(byteui::theme::font::body())
++        .color(colors.cream),
+     ]
+     .spacing(6);
+     for notice in view.notices {
+@@ -433,6 +446,32 @@
+         assert!(!row_actions(&app, false, false).contains(&RowAction::Uninstall));
+     }
+ 
++    #[test]
++    fn application_titles_follow_ui_locale_and_keep_neutral_fallback() {
++        use bytehost_apps::proto::{AppDisplayI18n, AppDisplayTitle, DisplayTitleScope};
++        let mut app = summary(ObservedState::Running, None);
++        assert_eq!(super::app_title(&app, "zh-CN"), "Demo");
++        app.display_i18n = Some(AppDisplayI18n {
++            default_locale: "en".into(),
++            supported_locales: vec!["en".into(), "zh-CN".into()],
++            titles: vec![AppDisplayTitle {
++                scope: DisplayTitleScope::Presentation,
++                key: "title".into(),
++                fallback: "Notes fallback".into(),
++                values: [
++                    ("en".into(), "Notes".into()),
++                    ("zh-CN".into(), "笔记".into()),
++                ]
++                .into(),
++            }],
++            ..Default::default()
++        });
++        assert_eq!(super::app_title(&app, "en"), "Notes");
++        assert_eq!(super::app_title(&app, "zh-CN"), "笔记");
++        app.display_i18n.as_mut().unwrap().titles.clear();
++        assert_eq!(super::app_title(&app, "zh-CN"), "Demo");
++    }
++
+     fn probe(runtime: &str, managed: &[&str], installable: bool) -> RuntimeProbe {
+         RuntimeProbe {
+             runtime: runtime.into(),

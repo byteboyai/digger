@@ -15,11 +15,7 @@
 //! 后台结果经 [`ReplySink`] 投到一条 `tokio::sync::mpsc::UnboundedSender`,再由 [`subscription`]
 //! 把接收端接成 iced 订阅流回到窗口线程——与 `bytehost-desktop::dispatch` 的口径一致。
 
-mod actions;
-mod approval;
-mod logs;
 mod management;
-mod runtime;
 mod store;
 mod surface;
 
@@ -134,6 +130,8 @@ pub enum Message {
     RetryService,
     /// 用户关闭顶部提示条(复审 #8)。
     DismissNotice,
+    /// 从应用面板直达共享设置的应用页。
+    OpenSettings,
 }
 
 /// 「应用」面板的组合根状态。
@@ -193,7 +191,7 @@ impl AppsState {
 
     /// 构造并指定清除台账文件路径(生产传产品状态目录;测试传临时路径,避免碰真实用户数据)。
     #[cfg(test)]
-    fn with_ledger_path(ledger: PathBuf) -> Self {
+    pub(crate) fn with_ledger_path(ledger: PathBuf) -> Self {
         let root = ledger.with_extension("host");
         Self::with_paths(ledger, root)
     }
@@ -432,6 +430,8 @@ impl AppsState {
             }
             // 清除请求已提交(真实结果异步回);无操作。
             Message::StoreRemovalSubmitted => iced::Task::none(),
+            // 由产品组合根拦截并打开设置窗口,状态机无动作。
+            Message::OpenSettings => iced::Task::none(),
         };
         // 日志查看器展开/收到新内容后:排一拍刷新,并把新内容钉到底(一次性,消费即复位)。
         iced::Task::batch([task, self.log_scroll_task(), self.log_tick_task()])
@@ -975,6 +975,11 @@ impl AppsState {
     #[allow(dead_code)]
     pub fn store_failures(&self) -> Vec<(&str, &str)> {
         self.store.failures()
+    }
+
+    /// 仍在排队 / 重试中的数据存储清除数量;设置页展示进度。
+    pub fn store_pending_count(&self) -> usize {
+        self.store.pending_count()
     }
 
     /// 台账落到产品状态目录下(测试断言路径用)。

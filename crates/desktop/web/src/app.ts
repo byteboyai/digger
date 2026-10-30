@@ -3,8 +3,11 @@ import type { Engine } from "./engine";
 import { post } from "./bridge";
 
 export function baseStyle() {
+  document.documentElement.dataset.theme = window.__DIGGER_THEME__ ?? "light";
   const style = document.createElement("style");
-  style.textContent = `html,body{margin:0;height:100%;background:#fbfaf7;color:#1d1d1b}
+  style.textContent = `:root{--editor-bg:#fbfaf7;--editor-fg:#1d1d1b;--editor-code:#eee;--editor-link:#2a62c9;--editor-muted:#555;--editor-border:#bbb;--editor-selection:#cde0ff;color-scheme:light}
+  :root[data-theme="dark"]{--editor-bg:#161820;--editor-fg:#e6e1d5;--editor-code:#292c36;--editor-link:#9bb8ff;--editor-muted:#b0abb5;--editor-border:#51545e;--editor-selection:#3c4965;color-scheme:dark}
+  html,body{margin:0;height:100%;background:var(--editor-bg);color:var(--editor-fg)}
   #editor{height:100%;overflow:auto;font:17px/1.8 -apple-system,"PingFang SC",sans-serif}`;
   document.head.appendChild(style);
 }

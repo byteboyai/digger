@@ -169,7 +169,8 @@ fn window_closing_and_minimizing_destroy_it() {
     let (mut shell, _rt, _) = chat_shell("chat-close");
     ready(&mut shell);
     shell.group_chat.native.scheduled_actions.clear();
-    let _ = host(&mut shell, Msg::CloseRequested);
+    let main = shell.window_id().expect("main window");
+    let _ = host(&mut shell, Msg::CloseRequested(main));
     assert!(shell.closing);
     assert!(actions(&shell).contains(&"Destroy".into()));
     let (mut shell, _rt, _) = chat_shell("chat-minimize");
@@ -411,7 +412,8 @@ fn window_closing_waits_for_the_page_destruction_before_shutdown_finishes() {
     let (mut shell, rt, _) = chat_shell("chat-close-await");
     ready(&mut shell);
     shell.group_chat.native.scheduled_actions.clear();
-    let task = host(&mut shell, Msg::CloseRequested);
+    let main = shell.window_id().expect("main window");
+    let task = host(&mut shell, Msg::CloseRequested(main));
     assert!(actions(&shell).contains(&"Destroy".into()));
     let mut stream = iced_runtime::task::into_stream(task).unwrap();
     let mut pending_callbacks = vec![];

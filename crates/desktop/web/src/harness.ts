@@ -325,6 +325,25 @@ async function run(e: Engine) {
         lat.sort((x, y) => x - y);
         info(`T18 Rust round trip, ${reps * 14} blocks, ${(text.length / 1000).toFixed(0)}k chars`, `load+parse ${loadMs.toFixed(0)} ms | one-character edit → blocks back: median ${lat[6].toFixed(0)} ms, max ${lat[11].toFixed(0)} ms | ${r.blocks().length} blocks | hashes equal: ${r.rustHash() === r.editorHash()}`);
       }
+      // T24: changing only the theme must preserve the live document and its undo history.
+      await within(r.load("Theme test\n"), "theme load");
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const beforeThemeEdit = r.doc();
+      r.replace(r.doc().length, r.doc().length, "keep undo");
+      await within(r.settled(), "theme edit");
+      const themedDoc = r.doc(), themedVersion = r.version();
+      document.documentElement.dataset.theme = "dark";
+      await raf2();
+      const darkBg = getComputedStyle(document.body).backgroundColor;
+      document.documentElement.dataset.theme = "light";
+      await raf2();
+      const lightBg = getComputedStyle(document.body).backgroundColor;
+      const preserved = r.doc() === themedDoc && r.version() === themedVersion;
+      r.undo();
+      await within(r.settled(), "theme undo");
+      result("T24 live theme changes preserve document and undo history",
+        darkBg !== lightBg && preserved && r.doc() === beforeThemeEdit,
+        `dark=${darkBg}, light=${lightBg}, preserved=${preserved}, undo=${r.doc() === beforeThemeEdit}`);
       r.detach();
     }
 
