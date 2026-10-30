@@ -26,20 +26,20 @@ pulldown-cmark = { version = "0.13", default-features = false }
 similar = "2"
 
 # 共享桌面宿主契约:窗口壳、面板、Surface、布局、焦点(bytehost-desktop)。
-bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-core = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
 # 共享窗口骨架(S1)。
-bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
-bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-chrome = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
+bytehost-desktop = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
 # 应用 webview 的纯安全策略(origin/nonce/存储标识/数据存储清除排队);桌面宿主唯一真相。
-bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-webview = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
 
 # 应用宿主平台:注册表/生命周期、与传输无关的客户端 API、与界面框架无关的面板状态机。
-bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
-bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
-bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-apps = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
+bytehost-client = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
+bytehost-panel = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
 # 共享设置状态 / 视图(产品中立;Digger 只在自己的 desktop 适配层消费)。
-bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
-bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.18" }
+bytehost-settings = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
+bytehost-settings-ui = { git = "https://github.com/byteboyai/bytehost", tag = "v0.4.19" }
 
 # 组件库(Dozer 与 Digger 共用);iced 版本必须与 byteui 一致,一起升。
 byteui = { git = "https://github.com/byteboyai/byteui", tag = "v0.5.0" }
