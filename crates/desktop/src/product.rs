@@ -4191,7 +4191,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 mod tests {
     use super::*;
     use bytehost_chrome::Side;
-    use bytehost_desktop::SurfaceEvent;
+    use bytehost_desktop::HostSurfaceEvent;
 
     use dozer_services::{MemoryService, ProjectService};
     use std::sync::Arc;
@@ -6758,21 +6758,21 @@ mod tests {
 
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Created { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Created { slot }),
         );
         assert_eq!(shell.surface_callbacks, vec![slot], "Created 触发一次激活");
 
         shell.surface_callbacks.clear();
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Resumed { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Resumed { slot }),
         );
         assert_eq!(shell.surface_callbacks, vec![slot], "Resumed 触发一次激活");
 
         shell.surface_callbacks.clear();
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Hidden { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Hidden { slot }),
         );
         assert!(
             shell.surface_callbacks.is_empty(),
@@ -6782,7 +6782,7 @@ mod tests {
         shell.surface_callbacks.clear();
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Destroyed { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Destroyed { slot }),
         );
         assert_eq!(
             shell.surface_callbacks,
@@ -6794,7 +6794,7 @@ mod tests {
         shell.surface_callbacks.clear();
         let _ = Product::update(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Created { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Created { slot }),
         );
         assert!(
             shell.surface_callbacks.is_empty(),
