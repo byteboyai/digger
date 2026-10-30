@@ -22,7 +22,6 @@
 
 pub mod cleanups;
 pub mod effects;
-pub mod port;
 pub mod request;
 pub mod service;
 pub mod testing;
