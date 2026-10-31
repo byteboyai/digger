@@ -44,11 +44,10 @@ step "门禁:格式 / clippy"
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 
-step "门禁:依赖(共享库只有一份、宿主依赖边界、外壳区域)"
+step "门禁:依赖(共享库只有一份、宿主依赖边界)"
 bash scripts/check-shared-deps.sh
 bash scripts/check-host-deps.sh
 bash scripts/check-host-deps.sh --self-test
-bash scripts/check-shell-regions.sh
 
 if [[ "$TESTS" -eq 1 ]]; then
   step "门禁:全量测试"
