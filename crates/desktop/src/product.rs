@@ -4191,7 +4191,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 mod tests {
     use super::*;
     use bytehost_chrome::Side;
-    use bytehost_desktop::SurfaceEvent;
+    use bytehost_desktop::HostSurfaceEvent as SurfaceEvent;
 
     use dozer_services::{MemoryService, ProjectService};
     use std::sync::Arc;
