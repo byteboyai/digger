@@ -614,7 +614,6 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "byteui"
 version = "0.5.0"
-source = "git+https://github.com/byteboyai/byteui?tag=v0.5.0#1285b9ac362e6eeaf1d4fa8a9caef7fd3ee62bbc"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -1432,8 +1431,6 @@ name = "dozer-panel-files"
 version = "0.1.0"
 dependencies = [
  "bytegit",
- "bytehost-core",
- "bytehost-desktop",
  "byteui",
  "dozer-i18n",
  "dozer-model",
@@ -1470,6 +1467,7 @@ name = "dozer-panel-host"
 version = "0.1.0"
 dependencies = [
  "bytehost-core",
+ "bytehost-desktop",
  "dozer-model",
  "dozer-services",
  "tokio",
@@ -1499,7 +1497,6 @@ version = "0.1.0"
 dependencies = [
  "bytegit",
  "bytehost-core",
- "bytehost-desktop",
  "byteui",
  "dozer-i18n",
  "dozer-model",
@@ -1552,6 +1549,7 @@ dependencies = [
  "byteui",
  "dozer-i18n",
  "dozer-model",
+ "dozer-panel-host",
  "dozer-services",
  "iced_renderer",
  "iced_widget",

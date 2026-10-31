@@ -56,23 +56,11 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
         title: String,
         actions: Option<Element<'a, Msg>>,
     ) -> Element<'a, Msg> {
-        let tokens = byteui::theme::color::current();
-        let mut head = row![
-            icons::view(
-                icon,
-                byteui::theme::icon_size::row(),
-                tokens.tab_active_border
-            ),
-            text(title)
-                .size(byteui::theme::font::title())
-                .color(tokens.tab_active_border)
-        ]
-        .spacing(review_pane_style().padding.left)
-        .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
-        .align_y(iced::Alignment::Center);
-        if let Some(actions) = actions {
-            head = head.push(iced::widget::space::horizontal()).push(actions);
-        }
+        let head = byteui::layout::panel_heading::PanelHeading::new(icon, title)
+            .actions(actions)
+            .spacing(review_pane_style().padding.left)
+            .without_divider()
+            .into_element();
         column![head, self.tab_divider()]
             .spacing(review_pane_style().gap)
             .into()

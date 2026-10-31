@@ -53,6 +53,8 @@ pub struct BrowserPanel {
     find_rx: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
     /// 页面没响应 / 网址被挡这类一次性提示。显示在页签栏上方,所以占的高度要从网页矩形里扣掉。
     pub notice: NoticeBar,
+    /// 主窗口 id;原生右键菜单经 `window::run` 借用这扇窗口。
+    native_window: Option<window::Id>,
 }
 
 /// 地址栏真实焦点变化落到库状态上;返回「这一次要不要对地址栏做一次全选」。
@@ -97,6 +99,7 @@ impl BrowserPanel {
             find_tx,
             find_rx: Some(find_rx),
             notice: NoticeBar::default(),
+            native_window: None,
         }
     }
 
@@ -231,6 +234,7 @@ impl BrowserPanel {
 
     /// 让原生层收敛到库的页签清单,并执行排队的后退 / 前进 / 刷新。
     pub fn sync_native(&mut self, window: window::Id, inputs: NativeInputs) -> Task<Msg> {
+        self.native_window = Some(window);
         let desired = self.desired(&inputs);
         let project_id = desired.project_id;
         let navs = self.nav_targets(project_id);
@@ -427,10 +431,7 @@ impl BrowserPanel {
             };
             let at = crate::CURRENT_CURSOR.get();
             let items = super::browser_addr_menu::menu_items(pid, displayed_addr(state).is_empty());
-            match byteui::native_menu::show(items, (at.x, at.y)) {
-                Some(message) => Task::done(message),
-                None => Task::none(),
-            }
+            super::native_menu::show_task(self.native_window, items, (at.x, at.y), false)
         }
         #[cfg(not(target_os = "macos"))]
         {

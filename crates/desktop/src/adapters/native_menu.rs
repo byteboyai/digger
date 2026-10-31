@@ -8,6 +8,33 @@
 use byteui::native_menu::Item;
 use dozer_panel_files::menu::MenuItem;
 
+/// 在指定 iced 窗口上弹原生菜单，选中项作为 `Task` 投回产品 `update`。
+///
+/// `window::run` 把闭包调度到主线程并借出真实窗口句柄，菜单只在该闭包里同步
+/// 存活；窗口已关闭/不存在时返回 `None`，不会挂到其它窗口。`window = None`
+/// (窗口还没就绪)时什么也不做，迟到的选择不会串到别的窗口。
+pub fn show_task<Msg: Clone + Send + 'static>(
+    window: Option<iced::window::Id>,
+    items: Vec<Item<Msg>>,
+    at: (f32, f32),
+    align_no_icon_left: bool,
+) -> iced::Task<Msg> {
+    let Some(window) = window else {
+        return iced::Task::none();
+    };
+    iced::window::run(window, move |handle| {
+        if align_no_icon_left {
+            byteui::native_menu::show_align_no_icon_left_for_window(handle, items, at)
+        } else {
+            byteui::native_menu::show_for_window(handle, items, at)
+        }
+    })
+    .then(|selection| match selection {
+        Some(message) => iced::Task::done(message),
+        None => iced::Task::none(),
+    })
+}
+
 /// 文件库的菜单项 → 原生菜单项。顺序、`enabled`、`msg` 原样;文字色取主题 `body`
 /// (与 Dozer `app/update.rs::run_files_requests` 的转换一致)。
 pub fn to_native_items<Msg>(items: Vec<MenuItem<Msg>>) -> Vec<Item<Msg>> {

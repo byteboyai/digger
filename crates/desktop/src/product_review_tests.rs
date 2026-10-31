@@ -832,3 +832,17 @@ fn confirmed_minimize_preserves_normal_geometry_until_the_restore_sample() {
         "restore sample applies usable dimensions after clearing minimized state"
     );
 }
+
+#[test]
+fn animation_focus_is_scoped_to_the_main_window() {
+    let (mut shell, _rt) = review_shell("animation-focus-owner");
+    let id = shell.window.unwrap();
+    let other = window::Id::unique();
+    let _ = host(&mut shell, Msg::WindowAnimationFocus(other, false));
+    assert!(shell.animation_focused);
+    let _ = host(&mut shell, Msg::WindowAnimationFocus(id, false));
+    assert!(!shell.animation_focused);
+    assert!(!shell.window_minimized, "focus loss is not minimization");
+    let _ = host(&mut shell, Msg::WindowAnimationFocus(id, true));
+    assert!(shell.animation_focused);
+}

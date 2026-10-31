@@ -56,6 +56,9 @@ pub struct ConversationsPanel {
     /// 各项目搜索框当前的内容。库把它放在 crate 私有的 `search_draft` 里,宿主读不到,
     /// 所以在 `SearchInput` 经过时缓存一份,右键菜单的复制/剪切/粘贴靠它。
     search_drafts: HashMap<i64, String>,
+    /// 主窗口 id;原生菜单经 `window::run` 借用这扇窗口。窗口就绪前为 `None`,
+    /// 此时菜单请求直接丢弃(不回退到其它窗口)。
+    native_window: Option<iced::window::Id>,
 }
 
 /// 提示条里最多列出的失败文件数(完整数量写在开头);其余在日志里。
@@ -123,6 +126,7 @@ impl ConversationsPanel {
             dirty: HashSet::new(),
             requests: vec![],
             caps: ConversationsCapabilities::default(),
+            native_window: None,
         }
     }
     pub fn attach_handle(&mut self, handle: tokio::runtime::Handle) {
@@ -273,6 +277,7 @@ impl ConversationsPanel {
         rect: bytehost_core::LogicalRect,
         project_id: Option<i64>,
     ) -> Task<super::review_native::Event> {
+        self.native_window = Some(id);
         let state = project_id.and_then(|pid| self.states.get(&pid));
         let desired = self.desired_for_review(visible, rect, project_id);
         self.native
@@ -426,10 +431,7 @@ impl ConversationsPanel {
                 pid,
                 self.search_draft(pid).is_empty(),
             );
-            match byteui::native_menu::show(items, (at.x, at.y)) {
-                Some(message) => Task::done(message),
-                None => Task::none(),
-            }
+            super::native_menu::show_task(self.native_window, items, (at.x, at.y), false)
         }
         #[cfg(not(target_os = "macos"))]
         {

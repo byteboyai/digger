@@ -11,15 +11,21 @@ pub use byteui::theme::color::ColorScheme as Scheme;
 
 /// 第一方网页的主题参数；不向第三方应用注入宿主样式。
 pub fn code() -> &'static str {
-    match byteui::theme::color::current_scheme() {
+    match byteui::theme::color::current_snapshot().scheme {
         Scheme::Dark => "dark",
         Scheme::Light => "light",
     }
 }
 
 /// 审阅页面沿用共享 CSS 的变量名，通过产品 token 补齐其主题适配。
+/// 颜色与 `color-scheme` 取自**同一个** `ThemeSnapshot`，不会出现新颜色配旧方案。
 pub fn review_script() -> String {
-    let c = byteui::theme::color::current();
+    let snapshot = byteui::theme::color::current_snapshot();
+    let c = snapshot.colors;
+    let scheme = match snapshot.scheme {
+        Scheme::Dark => "dark",
+        Scheme::Light => "light",
+    };
     let css_color =
         |v: iced::Color| format!("rgb({:.0} {:.0} {:.0})", v.r * 255., v.g * 255., v.b * 255.);
     let mut css = String::from(":root{");
@@ -35,7 +41,7 @@ pub fn review_script() -> String {
     ] {
         css.push_str(&format!("--{name}:{};", css_color(value)));
     }
-    css.push_str(&format!("color-scheme:{};}}", code()));
+    css.push_str(&format!("color-scheme:{scheme};}}"));
     css.push_str(".msg.AiTurn .bubble .text{color:var(--cream)}");
     css.push_str(&format!(".md-table th,.md-code-block,code,.tool-call-row summary,.tool-call-row .input-json,.tool-result-row .body{{background:{};}}", css_color(c.card)));
     let css = serde_json::to_string(&css).expect("CSS serializes");

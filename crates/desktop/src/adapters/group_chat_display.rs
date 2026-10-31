@@ -4,8 +4,8 @@ use byteui::interaction::icons::{self, IconKind};
 use dozer_model::{AgentKind, LocalizedText};
 use dozer_panel_group_chat::Message;
 use dozer_panel_group_chat::adapter::{GroupChatPane, PaneStyle, PanelDisplay};
-use iced::widget::{column, row, text};
-use iced::{Element, Length};
+use iced::Element;
+use iced::widget::column;
 use std::cell::Cell;
 
 #[derive(Default)]
@@ -41,23 +41,10 @@ impl PanelDisplay<Message> for GroupChatDisplay {
         title: String,
         actions: Option<Element<'a, Message>>,
     ) -> Element<'a, Message> {
-        let tokens = byteui::theme::color::current();
-        let mut head = row![
-            icons::view(
-                icon,
-                byteui::theme::icon_size::row(),
-                tokens.tab_active_border
-            ),
-            text(title)
-                .size(byteui::theme::font::title())
-                .color(tokens.tab_active_border),
-        ]
-        .spacing(8)
-        .height(Length::Fixed(byteui::theme::geometry::tab_button_size()))
-        .align_y(iced::Alignment::Center);
-        if let Some(actions) = actions {
-            head = head.push(iced::widget::space::horizontal()).push(actions);
-        }
+        let head = byteui::layout::panel_heading::PanelHeading::new(icon, title)
+            .actions(actions)
+            .without_divider()
+            .into_element();
         column![head, byteui::layout::divider::horizontal()]
             .spacing(4)
             .into()

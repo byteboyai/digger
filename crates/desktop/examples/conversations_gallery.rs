@@ -243,8 +243,6 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
                     h: size.height,
                 },
             );
-            #[cfg(target_os = "macos")]
-            tasks.push(window::run(id, |w| byteui::native_menu::install_content_view(w)).discard());
             if gallery.state_name == "agent-filter-open" {
                 eprintln!(
                     "Gallery agent-filter-open: click the shared agent-filter control to open the actual native menu."
@@ -336,14 +334,14 @@ fn update(gallery: &mut Gallery, message: Msg) -> Task<Msg> {
                 present,
             } => {
                 #[cfg(target_os = "macos")]
-                if let Some(message) = byteui::native_menu::show(
+                tasks.push(digger_desktop::adapters::native_menu::show_task(
+                    gallery.window,
                     digger_desktop::adapters::native_menu::conversation_filter_items(
                         pid, current, &present,
                     ),
                     at,
-                ) {
-                    tasks.push(Task::done(message));
-                }
+                    false,
+                ));
                 #[cfg(not(target_os = "macos"))]
                 {
                     let _ = (at, current, present);

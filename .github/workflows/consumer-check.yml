@@ -32,8 +32,8 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
-      - name: cargo check --workspace --all-targets
-        run: cargo check --workspace --all-targets
+      - name: cargo check --locked --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
 
       - name: 业务层宿主依赖门禁
         run: bash scripts/check-host-deps.sh
