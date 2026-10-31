@@ -3934,6 +3934,43 @@ pub fn default_window_size_for_boot() -> Size {
     Size::new(w, h)
 }
 
+/// 把"后台接收端 → 持续 iced 流"的同型样板收成一份:发送方全部释放后流自然结束。
+fn boot_receiver_stream<T: Send + 'static>(
+    rx: tokio::sync::mpsc::UnboundedReceiver<T>,
+    wrap: impl Fn(T) -> Msg + Send + Sync + 'static,
+) -> Task<Msg> {
+    let wrap = std::sync::Arc::new(wrap);
+    Task::stream(iced::futures::stream::unfold(rx, move |mut rx| {
+        let wrap = wrap.clone();
+        async move { rx.recv().await.map(|value| (wrap(value), rx)) }
+    }))
+}
+
+/// 同上;接收端已经被取走(`None`)时返回空任务。
+fn boot_receiver_task<T: Send + 'static>(
+    rx: Option<tokio::sync::mpsc::UnboundedReceiver<T>>,
+    wrap: impl Fn(T) -> Msg + Send + Sync + 'static,
+) -> Task<Msg> {
+    match rx {
+        Some(rx) => boot_receiver_stream(rx, wrap),
+        None => Task::none(),
+    }
+}
+
+/// 启动时把当前 iced 运行时句柄挂到所有需要后台取数的面板上。
+/// `boot` 在 iced 运行时内执行;纯逻辑测试构造产品壳时不会走到这里。
+fn attach_all_handles(shell: &mut ProductShell) {
+    let handle = || tokio::runtime::Handle::current();
+    shell.usage.attach_handle(handle());
+    shell.project.attach_handle(handle());
+    shell.files.attach_handle(handle());
+    shell.agent.attach_handle(handle());
+    shell.todo.attach_handle(handle());
+    shell.conversations.attach_handle(handle());
+    shell.browser.attach_handle(handle());
+    shell.group_chat.attach_handle(handle());
+}
+
 /// 应用初始化:确保产品数据根、设置 ByteBoy2077 主题,异步取窗口尺寸。
 pub fn boot() -> (ProductShell, Task<Msg>) {
     if let Err(e) = paths::ensure_data_root() {
@@ -3949,22 +3986,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     shell.settings.load_theme();
     let size = default_window_size_for_boot();
     // 用量面板要 iced 运行时句柄在后台取数:`boot` 在 iced 运行时内执行,这里补挂。
-    shell.usage.attach_handle(tokio::runtime::Handle::current());
-    shell
-        .project
-        .attach_handle(tokio::runtime::Handle::current());
-    shell.files.attach_handle(tokio::runtime::Handle::current());
-    shell.agent.attach_handle(tokio::runtime::Handle::current());
-    shell.todo.attach_handle(tokio::runtime::Handle::current());
-    shell
-        .conversations
-        .attach_handle(tokio::runtime::Handle::current());
-    shell
-        .browser
-        .attach_handle(tokio::runtime::Handle::current());
-    shell
-        .group_chat
-        .attach_handle(tokio::runtime::Handle::current());
+    attach_all_handles(&mut shell);
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
     // 缺资源时宿主只会整块白屏:启动即点名报出,与 selftest 同一份名单。
@@ -3989,14 +4011,10 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         tokio::runtime::Handle::current(),
     ));
     shell.sync_preview_context(true);
-    let preview_cmds_task = match shell.take_preview_cmds_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv()
-                .await
-                .map(|(pid, cmds)| (Msg::PreviewCommandsFetched((pid, cmds)), rx))
-        })),
-        None => Task::none(),
-    };
+    let preview_cmds_task =
+        boot_receiver_task(shell.take_preview_cmds_receiver(), |(pid, cmds)| {
+            Msg::PreviewCommandsFetched((pid, cmds))
+        });
     // 应用面板后台结果回流:一次性流出接收端,持续到进程结束(与窗口尺寸任务并行)。
     use iced::futures::StreamExt;
     let reply_task = match crate::apps::take_reply_receiver(&shell.apps.reply_receiver()) {
@@ -4015,30 +4033,15 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         shell.window = Some(main_id);
         open.map(move |_| Msg::WindowReady(main_id, size))
     };
-    let native_usage = match shell.usage.native.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (Msg::NativeUsage(event), rx))
-        })),
-        None => Task::none(),
-    };
-    let todo_task = match shell.todo.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (Msg::Todo(event), rx))
-        })),
-        None => Task::none(),
-    };
-    let native_todo = match shell.todo.native.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (Msg::NativeTodo(event), rx))
-        })),
-        None => Task::none(),
-    };
-    let markdown_task = match shell.markdown.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (Msg::Markdown(event), rx))
-        })),
-        None => Task::none(),
-    };
+    let native_usage = boot_receiver_task(shell.usage.native.take_receiver(), |event| {
+        Msg::NativeUsage(event)
+    });
+    let todo_task = boot_receiver_task(shell.todo.take_receiver(), |event| Msg::Todo(event));
+    let native_todo = boot_receiver_task(shell.todo.native.take_receiver(), |event| {
+        Msg::NativeTodo(event)
+    });
+    let markdown_task =
+        boot_receiver_task(shell.markdown.take_receiver(), |event| Msg::Markdown(event));
     let lifecycle_task = if shell.lifecycle.is_some() {
         crate::lifecycle_selftest::Driver::first()
     } else {
@@ -4060,90 +4063,47 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         None => Task::none(),
     };
     // 预览原生页面回传(host IPC / 建页失败):每条转成产品消息,再按宿主分类。
-    let preview_native_task = match shell.preview.as_ref().map(|p| p.host().take_receiver()) {
-        Some(Some(rx)) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (Msg::PreviewEvent(event), rx))
-        })),
-        _ => Task::none(),
-    };
+    let preview_native_task = boot_receiver_task(
+        shell
+            .preview
+            .as_ref()
+            .and_then(|p| p.host().take_receiver()),
+        |event| Msg::PreviewEvent(event),
+    );
     // 文件系统监听的事件回流(当前项目的增删改 → 树与 git 着色跟进)。
-    let fs_task = match shell.files.take_fs_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|c| (Msg::FilesFsChanged(c), rx))
-        })),
-        None => Task::none(),
-    };
+    let fs_task = boot_receiver_task(shell.files.take_fs_receiver(), |c| Msg::FilesFsChanged(c));
     // 「删除项目」的后台结果回流(库的 `spawn_delete_project` 在结束回调里投递)。
-    let delete_task = match shell.take_delete_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            let next = rx.recv().await?;
-            Some((next, rx))
-        })),
-        None => Task::none(),
-    };
+    let delete_task = boot_receiver_task(shell.take_delete_receiver(), |next| next);
     // S6a:守护进程拉起。异步调 ensure,结果转成 Msg::AgentShell::Ensured。
     let daemon_task = daemon_ensure_task();
     // Agent 面板的后台回投(输出/状态/Attached/失败):一条持续到进程结束的 iced 流。
-    let agent_task = match shell.agent.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|(pid, m)| (Msg::Agent(pid, m), rx))
-        })),
-        None => Task::none(),
-    };
-    let group_chat_task = match shell.group_chat.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|m| (Msg::GroupChat(m), rx))
-        })),
-        None => Task::none(),
-    };
-    let conversations_task = match shell.conversations.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv()
-                .await
-                .map(|(pid, m)| (Msg::Conversations(pid, m), rx))
-        })),
-        None => Task::none(),
-    };
-    let browser_native_task = match shell.browser.native.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (Msg::BrowserNative(event), rx))
-        })),
-        None => Task::none(),
-    };
-    let browser_find_task = match shell.browser.take_find_shortcut_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|()| (Msg::BrowserFindShortcut, rx))
-        })),
-        None => Task::none(),
-    };
-    let browser_task = match shell.browser.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|(pid, m)| (Msg::Browser(pid, m), rx))
-        })),
-        None => Task::none(),
-    };
-    let group_chat_native_task = match shell.group_chat.native.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv()
-                .await
-                .map(|event| (Msg::GroupChatNative(event), rx))
-        })),
-        None => Task::none(),
-    };
-    let review_native_task = match shell.conversations.native.take_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (Msg::ReviewNative(event), rx))
-        })),
-        None => Task::none(),
-    };
-    let conversations_import_task = match shell.conversations.take_import_receiver() {
-        Some(rx) => Task::stream(iced::futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv()
-                .await
-                .map(|(pid, event)| (Msg::ConversationsImport(pid, event), rx))
-        })),
-        None => Task::none(),
-    };
+    let agent_task = boot_receiver_task(shell.agent.take_receiver(), |(pid, m)| Msg::Agent(pid, m));
+    let group_chat_task =
+        boot_receiver_task(shell.group_chat.take_receiver(), |m| Msg::GroupChat(m));
+    let conversations_task = boot_receiver_task(shell.conversations.take_receiver(), |(pid, m)| {
+        Msg::Conversations(pid, m)
+    });
+    let browser_native_task = boot_receiver_task(shell.browser.native.take_receiver(), |event| {
+        Msg::BrowserNative(event)
+    });
+    let browser_find_task = boot_receiver_task(shell.browser.take_find_shortcut_receiver(), |()| {
+        Msg::BrowserFindShortcut
+    });
+    let browser_task = boot_receiver_task(shell.browser.take_receiver(), |(pid, m)| {
+        Msg::Browser(pid, m)
+    });
+    let group_chat_native_task =
+        boot_receiver_task(shell.group_chat.native.take_receiver(), |event| {
+            Msg::GroupChatNative(event)
+        });
+    let review_native_task =
+        boot_receiver_task(shell.conversations.native.take_receiver(), |event| {
+            Msg::ReviewNative(event)
+        });
+    let conversations_import_task = boot_receiver_task(
+        shell.conversations.take_import_receiver(),
+        |(pid, event)| Msg::ConversationsImport(pid, event),
+    );
     // 启动时就可见的面板(例如默认右栏选中的用量)也要触发各自的"切入时动作"。
     let mut initial = Vec::new();
     for panel in shell::all_panels() {
@@ -4191,7 +4151,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 mod tests {
     use super::*;
     use bytehost_chrome::Side;
-    use bytehost_desktop::HostSurfaceEvent as SurfaceEvent;
+    use bytehost_desktop::HostSurfaceEvent;
 
     use dozer_services::{MemoryService, ProjectService};
     use std::sync::Arc;
@@ -6758,21 +6718,21 @@ mod tests {
 
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Created { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Created { slot }),
         );
         assert_eq!(shell.surface_callbacks, vec![slot], "Created 触发一次激活");
 
         shell.surface_callbacks.clear();
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Resumed { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Resumed { slot }),
         );
         assert_eq!(shell.surface_callbacks, vec![slot], "Resumed 触发一次激活");
 
         shell.surface_callbacks.clear();
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Hidden { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Hidden { slot }),
         );
         assert!(
             shell.surface_callbacks.is_empty(),
@@ -6782,7 +6742,7 @@ mod tests {
         shell.surface_callbacks.clear();
         let _ = update_host(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Destroyed { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Destroyed { slot }),
         );
         assert_eq!(
             shell.surface_callbacks,
@@ -6794,7 +6754,7 @@ mod tests {
         shell.surface_callbacks.clear();
         let _ = Product::update(
             &mut shell,
-            HostMessage::Surface(SurfaceEvent::Created { slot }),
+            HostMessage::Surface(HostSurfaceEvent::Created { slot }),
         );
         assert!(
             shell.surface_callbacks.is_empty(),

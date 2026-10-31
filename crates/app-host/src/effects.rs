@@ -597,6 +597,47 @@ impl<A: AppHostApi + Sync + 'static> Executor<A> {
     }
 }
 
+impl<A: AppHostApi + Sync + 'static> Executor<A> {
+    /// 实际订阅、断线重订阅；Changed/Resync 统一交给 UI 合并刷新。
+    pub fn subscribe(&self) {
+        let api = self.api.clone();
+        let sink = self.sink.clone();
+        let cancel = self.cancel.clone();
+        self.track(tokio::spawn(async move {
+            let mut attempt = 0usize;
+            while !cancel.is_cancelled() {
+                let result = api.read().await.subscribe().await;
+                if let Ok(mut rx) = result {
+                    attempt = 0;
+                    sink.send(Outcome::Changed);
+                    loop {
+                        if cancel.is_cancelled() {
+                            return;
+                        }
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {},
+                            change = rx.recv() => match change.map(|c| classify_change(&c)) {
+                                Some(ChangeKind::Refresh) => sink.send(Outcome::Changed),
+                                Some(ChangeKind::Disconnected) | None => break,
+                            }
+                        }
+                    }
+                }
+                let delays = bytehost_panel::host::RESUBSCRIBE_BACKOFF;
+                let delay = delays[attempt.min(delays.len() - 1)];
+                attempt = attempt.saturating_add(1);
+                let until = tokio::time::Instant::now() + delay;
+                while tokio::time::Instant::now() < until {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            }
+        }));
+    }
+}
+
 impl Executor<InProcess> {
     /// 异步建一个进程内应用服务并回喂 [`Outcome::ServiceReady`]。**不阻塞窗口**:
     /// 立即返回一个被 `tokio::spawn` 的后台任务;窗口照常先画出来。
@@ -660,41 +701,6 @@ impl Executor<InProcess> {
                 .map_err(|_| "退出收尾超过 45 秒，可选择强制退出".to_string())?
         }
     }
-
-    /// 实际订阅、断线重订阅；Changed/Resync 统一交给 UI 合并刷新。
-    pub fn subscribe(&self) {
-        let api = self.api.clone();
-        let sink = self.sink.clone();
-        let cancel = self.cancel.clone();
-        self.track(tokio::spawn(async move {
-            let mut attempt = 0usize;
-            while !cancel.is_cancelled() {
-                let result = api.read().await.subscribe().await;
-                if let Ok(mut rx) = result {
-                    attempt = 0;
-                    sink.send(Outcome::Changed);
-                    loop {
-                        if cancel.is_cancelled() { return; }
-                        tokio::select! {
-                            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {},
-                            change = rx.recv() => match change {
-                                Some(bytehost_client::AppChange::Changed(_)) | Some(bytehost_client::AppChange::Resync) => sink.send(Outcome::Changed),
-                                _ => break,
-                            }
-                        }
-                    }
-                }
-                let delays = bytehost_panel::host::RESUBSCRIBE_BACKOFF;
-                let delay = delays[attempt.min(delays.len()-1)];
-                attempt = attempt.saturating_add(1);
-                let until = tokio::time::Instant::now() + delay;
-                while tokio::time::Instant::now() < until {
-                    if cancel.is_cancelled() { return; }
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                }
-            }
-        }));
-    }
 }
 
 const GENESIS_ACTION: u64 = u64::MAX;
@@ -707,6 +713,28 @@ const PLAN_ACTION: u64 = u64::MAX - 6;
 const RUNTIME_PLAN_ACTION: u64 = u64::MAX - 7;
 const RUNTIME_INSTALL_ACTION: u64 = u64::MAX - 8;
 const RUNTIME_UNINSTALL_ACTION: u64 = u64::MAX - 9;
+
+/// 订阅失效信号的分类(唯一实现;`bytehost-panel` 的消息适配也用它)。
+///
+/// `Changed` 与 `Resync` 同义:都只是"去重拉一次列表"的失效信号;合并逻辑在状态机里
+/// (有在途则置 `dirty`)。`Disconnected` 是另一条路径:按共享退避重订阅。
+pub(crate) fn classify_change(change: &bytehost_client::AppChange) -> ChangeKind {
+    match change {
+        bytehost_client::AppChange::Changed(_) | bytehost_client::AppChange::Resync => {
+            ChangeKind::Refresh
+        }
+        bytehost_client::AppChange::Disconnected => ChangeKind::Disconnected,
+    }
+}
+
+/// 一条 [`bytehost_client::AppChange`] 对宿主的意义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    /// 去重拉一次列表(`Changed` / `Resync`)。
+    Refresh,
+    /// 订阅断了,按共享退避重订阅(`Disconnected`)。
+    Disconnected,
+}
 
 /// 一次"完成型" `Outcome::Install` 对应的安装流请求种类。
 ///
