@@ -617,7 +617,6 @@ impl ProjectPanel {
         };
         self.focus = Some(project.id);
         let path = PathBuf::from(&project.path);
-        self.refresh_git(project);
         self.refresh_disk_usage(project);
         let tx = self.tx.clone();
         let ctx = dozer_panel_host::ActivationCtx {
@@ -683,25 +682,11 @@ impl ProjectPanel {
         message.result_project().or(self.focus)
     }
 
-    /// 项目里的 git 快照(分支 / 脏标 / remote),后台跑完投回 `GitRefreshed`。
-    pub fn refresh_git(&self, project: &ProjectInfo) {
-        let Some(handle) = self.handle.clone() else {
-            return;
-        };
-        let project_id = project.id;
-        let repo_path = PathBuf::from(&project.path);
-        let tx = self.tx.clone();
-        handle.spawn(async move {
-            let snapshot = tokio::task::spawn_blocking({
-                let repo_path = repo_path.clone();
-                move || git_snapshot(&repo_path)
-            })
-            .await
-            .unwrap_or((None, false, Vec::new()));
-            let _ = tx.send(ProjectMessage::GitRefreshed(
-                project_id, snapshot.0, snapshot.1, snapshot.2,
-            ));
-        });
+    /// 应用共享 runtime 已验证 token 的组合快照(只对已有状态的项目)。
+    pub fn apply_snapshot(&mut self, project_id: i64, snapshot: dozer_panel_project::GitSnapshot) {
+        if let Some(state) = self.states.get_mut(&project_id) {
+            state.apply_git_snapshot(snapshot);
+        }
     }
 
     /// 项目的磁盘占用,后台跑完投回 `DiskUsageLoaded`。
@@ -982,6 +967,7 @@ fn agent_cache_dir(kind: &'static str, repo: &Path) -> PathBuf {
 }
 
 /// 项目的 git 快照:`(当前分支, 是否有改动, 去重后的 remote URL 列表)`。不是仓库时 `(None, false, [])`。
+#[cfg(test)]
 fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
     let repo = bytegit::Repo::discover_workdir(repo_path).ok();
     let branch = repo

@@ -156,8 +156,14 @@ pub enum Msg {
     TodoPoll,
     /// 「文件」面板的库消息(共享 `dozer-panel-files` 库)。
     Files(dozer_panel_files::Message),
-    /// 文件系统监听:当前项目的工作区有增删改,文件树与 git 着色要跟进。
+    /// 共享 GitRuntime 的事件(监听批次 / 已校验快照)。
+    GitRuntime(dozer_git_runtime::RuntimeEvent),
+    /// 非 Git 目录的旧式监听(只树刷新)。
     FilesFsChanged(crate::adapters::files::FsChange),
+    /// runtime 异步订阅完成,返回当前项目的 token。
+    GitSubscribed(i64, u64, dozer_git_runtime::SubscriptionToken),
+    /// Files 后台目录读取结果。
+    FilesTreeRefresh(i64, u64, u64, Vec<dozer_panel_files::fs::DirSnapshot>),
     /// 关掉「文件」面板的右键菜单 / 移动卡片 / 删除确认(点空白 / Esc)。
     FilesMenuDismiss,
     /// 「编辑器」面板的消息(ADR-013)。
@@ -266,6 +272,13 @@ pub struct ProductShell {
     project: crate::adapters::project::ProjectPanel,
     /// 「文件」面板适配(共享 `dozer-panel-files` 库;四项能力 Digger 一期全关)。
     files: crate::adapters::files::FilesPanel,
+    /// 进程内共享 GitRuntime 与当前项目订阅。
+    git_runtime: Option<dozer_git_runtime::GitRuntime>,
+    git_token: Option<dozer_git_runtime::SubscriptionToken>,
+    git_project: Option<i64>,
+    git_request: u64,
+    git_tx: tokio::sync::mpsc::UnboundedSender<Msg>,
+    git_rx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Msg>>>,
     agent: crate::adapters::agent::AgentPanel,
     /// 终端字体与尺寸(S6d-1 `fonts::terminal_style`):壳持有,Agent 展示适配与
     /// 网格换算都借它,免得每帧泄漏一份。
@@ -643,6 +656,8 @@ impl ProductShell {
         let files = crate::adapters::files::FilesPanel::new(
             data_dir.join(dozer_panel_files::external_apps::CONFIG_FILE),
         );
+        let (git_tx, git_rx) = tokio::sync::mpsc::unbounded_channel();
+        let git_rx = std::sync::Mutex::new(Some(git_rx));
         let (delete_tx, delete_rx) = tokio::sync::mpsc::unbounded_channel();
         let delete_rx = std::sync::Mutex::new(Some(delete_rx));
         let (preview_cmds_tx, preview_cmds_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -671,6 +686,12 @@ impl ProductShell {
             projects,
             project,
             files,
+            git_runtime: None,
+            git_token: None,
+            git_project: None,
+            git_request: 0,
+            git_tx,
+            git_rx,
             agent: crate::adapters::agent::AgentPanel::new(),
             conversations,
             browser,
@@ -916,6 +937,192 @@ impl ProductShell {
             .activate(&project, std::time::Instant::now())
     }
 
+    /// 当前项目切换时重建 runtime 订阅;关闭项目时退订。
+    fn sync_git_subscription(&mut self) {
+        let current = self.projects.current_project().cloned();
+        let current_id = current.as_ref().map(|p| p.id);
+        if self.git_project == current_id && self.git_token.is_some() {
+            return;
+        }
+        if let Some(runtime) = &self.git_runtime
+            && let Some(old) = self.git_token.take()
+        {
+            runtime.unsubscribe(&old);
+        }
+        self.git_project = current_id;
+        let Some(project) = current else {
+            return;
+        };
+        let Some(runtime) = self.git_runtime.clone() else {
+            return;
+        };
+        self.git_request = self.git_request.wrapping_add(1);
+        let request = self.git_request;
+        let tx = self.git_tx.clone();
+        let project_id = project.id;
+        let path = PathBuf::from(&project.path);
+        tokio::runtime::Handle::current().spawn(async move {
+            match runtime.subscribe(project_id, path, true).await {
+                Ok(token) => {
+                    let _ = tx.send(Msg::GitSubscribed(project_id, request, token));
+                }
+                Err(error) => {
+                    eprintln!("digger: git runtime 订阅失败: {error}"); // cli-output
+                }
+            }
+        });
+    }
+
+    /// 手动重验当前项目(面板切入时补齐可能错过的快照)。
+    fn request_git_refresh(&self) {
+        if let (Some(runtime), Some(token)) = (&self.git_runtime, &self.git_token) {
+            runtime.refresh_manual(token);
+        }
+    }
+
+    /// 普通目录 `.git` 创建/删除后的身份切换。
+    fn reconcile_git_mode(&mut self) {
+        let Some(project) = self.projects.current_project().cloned() else {
+            return;
+        };
+        let root = PathBuf::from(&project.path);
+        let is_repo = bytegit::Repo::discover_workdir(&root).is_ok();
+        match (is_repo, self.git_token.is_some()) {
+            (true, false) => {
+                self.files.stop_plain_watch();
+                self.git_project = None;
+                self.sync_git_subscription();
+            }
+            (false, true) => {
+                if let Some(runtime) = &self.git_runtime
+                    && let Some(token) = self.git_token.take()
+                {
+                    runtime.unsubscribe(&token);
+                }
+                self.git_project = None;
+                self.files.set_project(Some(&project));
+            }
+            _ => {}
+        }
+    }
+
+    fn on_git_runtime(&mut self, event: dozer_git_runtime::RuntimeEvent) {
+        match event {
+            dozer_git_runtime::RuntimeEvent::Snapshot { token, snapshot } => {
+                if self.git_token.as_ref() != Some(&token) {
+                    return;
+                }
+                // `.git` 重指向:旧身份的数据不能挂到新目录上,重新订阅当前路径。
+                if snapshot.identity_mismatch.is_some() {
+                    if let Some(runtime) = &self.git_runtime
+                        && let Some(old) = self.git_token.take()
+                    {
+                        runtime.unsubscribe(&old);
+                    }
+                    self.git_project = None;
+                    self.sync_git_subscription();
+                    return;
+                }
+                let Some(project) = self.projects.current_project().cloned() else {
+                    return;
+                };
+                if project.id != token.project_id {
+                    return;
+                }
+                let project_path = PathBuf::from(&project.path);
+                let statuses = snapshot
+                    .status
+                    .last()
+                    .map(|status| {
+                        dozer_panel_files::git_status::file_statuses_from_entries(
+                            &project_path,
+                            &snapshot.identity,
+                            status.entries.clone(),
+                        )
+                    })
+                    .unwrap_or_default();
+                let head = snapshot.head.last();
+                let info = dozer_panel_files::state::GitInfo {
+                    is_repo: true,
+                    current_branch: head.and_then(|head| head.branch.clone()),
+                    current_branch_has_commits: head.and_then(|head| head.commit).is_some(),
+                    branches: snapshot.branches.last().cloned().unwrap_or_default(),
+                };
+                self.files.apply_snapshot(project.id, statuses, info);
+
+                let dirty = snapshot.status.last().is_some_and(|status| status.dirty);
+                let mut seen = std::collections::HashSet::new();
+                let mut remotes = Vec::new();
+                for remote in snapshot.remotes.last().into_iter().flatten() {
+                    if seen.insert(remote.url.clone()) {
+                        remotes.push(remote.url.clone());
+                    }
+                }
+                self.project.apply_snapshot(
+                    project.id,
+                    dozer_panel_project::GitSnapshot {
+                        branch: head.and_then(|head| head.branch.clone()),
+                        dirty,
+                        remote_urls: remotes,
+                    },
+                );
+            }
+            dozer_git_runtime::RuntimeEvent::Watch { token, change } => {
+                if self.git_token.as_ref() != Some(&token) {
+                    return;
+                }
+                let Some(project) = self.projects.current_project().cloned() else {
+                    return;
+                };
+                if project.id != token.project_id {
+                    return;
+                }
+                let full = change
+                    .kinds
+                    .contains(bytegit::WorkspaceChangeKind::FULL_RESCAN);
+                if full {
+                    self.reconcile_git_mode();
+                }
+                let workdir = change.kinds.contains(bytegit::WorkspaceChangeKind::WORKDIR);
+                let root = PathBuf::from(&project.path);
+                let paths: Vec<PathBuf> = if full {
+                    Vec::new()
+                } else {
+                    change
+                        .paths
+                        .iter()
+                        .filter(|path| digger_path_visible(&root, path))
+                        .cloned()
+                        .collect()
+                };
+                if (workdir || full)
+                    && let Some(request) = self.files.begin_tree_refresh(&paths, full)
+                {
+                    self.spawn_files_tree_refresh(request);
+                }
+            }
+        }
+    }
+
+    fn spawn_files_tree_refresh(&self, request: dozer_panel_files::fs::TreeRefreshRequest) {
+        let Some(project_id) = self.projects.current_project_id() else {
+            return;
+        };
+        let owner = request.owner;
+        let generation = request.generation;
+        let tx = self.git_tx.clone();
+        tokio::runtime::Handle::current().spawn(async move {
+            let snapshots = tokio::task::spawn_blocking(move || {
+                dozer_panel_files::fs::read_dir_snapshots(&request)
+            })
+            .await
+            .unwrap_or_default();
+            let _ = tx.send(Msg::FilesTreeRefresh(
+                project_id, owner, generation, snapshots,
+            ));
+        });
+    }
+
     /// 当前项目从 `before` 换成了现在这个(页签点击 / 关闭 / 删除 / 列表修剪都走这里):
     /// 把**旧**项目的布局落到它自己的文件(`save_old`,已删除的项目不写),换上新项目的布局,
     /// 并让 Project 面板跟到新项目。当前项目没变时什么都不做。
@@ -969,6 +1176,7 @@ impl ProductShell {
         {
             let _ = self.browser.activate(&project);
         }
+        self.sync_git_subscription();
     }
 
     /// 把待办面板切到当前项目;面板可见时立即拉一次列表与分类。
@@ -988,6 +1196,7 @@ impl ProductShell {
             return;
         };
         self.project.activate(&project);
+        self.request_git_refresh();
     }
 
     /// 把「文件」面板的树根切到当前项目。没有项目时清空。
@@ -3013,10 +3222,41 @@ impl Product<Msg> for ProductShell {
             }
             Msg::FilesFsChanged(change) => {
                 if Some(change.project_id) == self.projects.current_project_id() {
+                    if change.refs_changed {
+                        self.reconcile_git_mode();
+                    }
                     self.files.fs_changed(&change)
                 } else {
                     Task::none()
                 }
+            }
+            Msg::GitRuntime(event) => {
+                self.on_git_runtime(event);
+                Task::none()
+            }
+            Msg::GitSubscribed(project_id, request, token) => {
+                if self.projects.current_project_id() == Some(project_id)
+                    && self.git_project == Some(project_id)
+                    && self.git_request == request
+                {
+                    if let Some(runtime) = &self.git_runtime {
+                        runtime.set_active(&token, true);
+                        // 首次快照可能早于 ready 被丢弃;确认后补一次。
+                        runtime.refresh_manual(&token);
+                    }
+                    self.git_token = Some(token);
+                } else if let Some(runtime) = &self.git_runtime {
+                    runtime.unsubscribe(&token);
+                }
+                Task::none()
+            }
+            Msg::FilesTreeRefresh(project_id, owner, generation, snapshots) => {
+                if self.projects.current_project_id() == Some(project_id)
+                    && let Some(next) = self.files.apply_tree_refresh(owner, generation, snapshots)
+                {
+                    self.spawn_files_tree_refresh(next);
+                }
+                Task::none()
             }
             Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
             Msg::Projects(m) => {
@@ -3958,6 +4198,14 @@ pub fn default_window_size_for_boot() -> Size {
 }
 
 /// 把"后台接收端 → 持续 iced 流"的同型样板收成一份:发送方全部释放后流自然结束。
+/// 树/预览只重读可见路径;Git 状态仍由 runtime 保守失效。
+fn digger_path_visible(root: &std::path::Path, path: &std::path::Path) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    !rel.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .any(|name| dozer_panel_files::fs::HIDDEN.contains(&name))
+}
+
 fn boot_receiver_stream<T: Send + 'static>(
     rx: tokio::sync::mpsc::UnboundedReceiver<T>,
     wrap: impl Fn(T) -> Msg + Send + Sync + 'static,
@@ -4010,6 +4258,18 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     let size = default_window_size_for_boot();
     // 用量面板要 iced 运行时句柄在后台取数:`boot` 在 iced 运行时内执行,这里补挂。
     attach_all_handles(&mut shell);
+    // 共享 GitRuntime:事件统一转成产品消息,订阅在项目切换时重建。
+    let (git_runtime, mut git_events) =
+        dozer_git_runtime::GitRuntime::start(dozer_git_runtime::RuntimeConfig::default());
+    shell.git_runtime = Some(git_runtime);
+    let git_tx = shell.git_tx.clone();
+    tokio::runtime::Handle::current().spawn(async move {
+        while let Some(event) = git_events.next().await {
+            if git_tx.send(Msg::GitRuntime(event)).is_err() {
+                break;
+            }
+        }
+    });
     // 预览状态层(S5b-2 P4):原生宿主只在真窗口里建,故不放在 `ProductShell::new()`
     // —— 纯逻辑测试构造产品壳时不该碰 webview。恢复页签放在这里(运行时已就绪)。
     // 缺资源时宿主只会整块白屏:启动即点名报出,与 selftest 同一份名单。
@@ -4093,8 +4353,10 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             .and_then(|p| p.host().take_receiver()),
         |event| Msg::PreviewEvent(event),
     );
-    // 文件系统监听的事件回流(当前项目的增删改 → 树与 git 着色跟进)。
+    // 非 Git 目录的旧式监听(只树刷新;Git 目录走 runtime)。
     let fs_task = boot_receiver_task(shell.files.take_fs_receiver(), |c| Msg::FilesFsChanged(c));
+    // GitRuntime 回投:订阅完成 / 监听批次 / 快照。
+    let git_task = boot_receiver_task(shell.git_rx.lock().unwrap().take(), |message| message);
     // 「删除项目」的后台结果回流(库的 `spawn_delete_project` 在结束回调里投递)。
     let delete_task = boot_receiver_task(shell.take_delete_receiver(), |next| next);
     // S6a:守护进程拉起。异步调 ensure,结果转成 Msg::AgentShell::Ensured。
@@ -4135,6 +4397,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         }
     }
     shell.visible_before = visible_panels(&shell);
+    shell.sync_git_subscription();
     let projects_task = shell.projects.refresh().map(Msg::Projects);
     (
         shell,
@@ -4151,6 +4414,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
             files_task,
             preview_task,
             preview_native_task,
+            git_task,
             fs_task,
             delete_task,
             lifecycle_task,
@@ -4173,6 +4437,23 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_paths_do_not_trigger_a_tree_reread_but_source_paths_do() {
+        let root = std::path::Path::new("/repo");
+        assert!(!digger_path_visible(
+            root,
+            std::path::Path::new("/repo/target/x")
+        ));
+        assert!(!digger_path_visible(
+            root,
+            std::path::Path::new("/repo/a/node_modules/y")
+        ));
+        assert!(digger_path_visible(
+            root,
+            std::path::Path::new("/repo/src/main.rs")
+        ));
+    }
     use bytehost_chrome::Side;
     use bytehost_desktop::HostSurfaceEvent;
 

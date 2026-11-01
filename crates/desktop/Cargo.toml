@@ -58,6 +58,7 @@ dozer-client.workspace = true
 # S6e:MCP 安装路径推导(与 digger-mcp 同一份库函数)。
 dozer-mcp.workspace = true
 bytegit.workspace = true
+dozer-git-runtime.workspace = true
 
 byteui.workspace = true
 

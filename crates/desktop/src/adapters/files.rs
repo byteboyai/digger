@@ -40,14 +40,12 @@ pub struct FilesPanel {
     tx: tokio::sync::mpsc::UnboundedSender<FilesMessage>,
     rx: Option<tokio::sync::mpsc::UnboundedReceiver<FilesMessage>>,
     window: WindowProbe,
-    /// 本项目的实时文件系统监听。失败(如 fd 耗尽)降级为"只在切项目时刷新"。
-    /// Drop 时自动停止。
-    watch: Option<bytegit::WatchHandle>,
-    /// 监听事件(具体变更路径)回流成一条 iced 流,由产品转成 `Msg::FsChanged`。
-    fs_tx: tokio::sync::mpsc::UnboundedSender<FsChange>,
-    fs_rx: Option<tokio::sync::mpsc::UnboundedReceiver<FsChange>>,
     /// 这台面板当前服务的项目 id:监听事件与后台结果都按它过滤,旧项目的迟到消息丢弃。
     project_id: Option<i64>,
+    /// 非 Git 目录没有 runtime 身份,保留旧 watch 只驱动树刷新。
+    plain_watch: Option<bytegit::WatchHandle>,
+    fs_tx: tokio::sync::mpsc::UnboundedSender<FsChange>,
+    fs_rx: Option<tokio::sync::mpsc::UnboundedReceiver<FsChange>>,
     /// iced 自绘的右键菜单(Digger 不认原生 NSMenu,`ShowNativeMenu` 一律落到这里)。
     menu: Option<crate::adapters::menu_overlay::MenuOverlay<FilesMessage>>,
     /// macOS:库排出的"弹菜单"请求不建 iced 浮层,留给产品弹原生 NSMenu(原生菜单浮在 wry
@@ -86,6 +84,8 @@ pub struct FsChange {
     pub project_id: i64,
     /// 工作区有改动(增删改文件)。
     pub workdir_changed: bool,
+    /// `.git` 引用类文件变化(创建/删除 `.git` 时用于身份升格)。
+    pub refs_changed: bool,
 }
 
 /// 窗口尺寸与光标位置:展示语义里拖拽幽灵胶囊要用,由产品每帧写回。
@@ -115,10 +115,10 @@ impl FilesPanel {
             tx,
             rx: Some(rx),
             window: WindowProbe::default(),
-            watch: None,
+            project_id: None,
+            plain_watch: None,
             fs_tx,
             fs_rx: Some(fs_rx),
-            project_id: None,
             menu: None,
             #[cfg(target_os = "macos")]
             native_menus: Vec::new(),
@@ -142,44 +142,24 @@ impl FilesPanel {
         self.window.cursor = cursor;
     }
 
-    /// 取走文件系统监听的事件接收端(组合根接成 iced 流;只该取一次)。
-    pub fn take_fs_receiver(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<FsChange>> {
-        self.fs_rx.take()
-    }
-
-    /// 一次工作区变更:重读已展开的目录,并重拉 git 文件状态(着色随之更新)。
-    /// 只有当前项目的事件才生效——切项目后旧项目的迟到事件直接丢弃。
-    pub fn fs_changed(&mut self, change: &FsChange) -> iced::Task<Msg> {
-        if self.project_id != Some(change.project_id) {
-            return iced::Task::none();
-        }
-        let Some(state) = self.state.as_mut() else {
-            return iced::Task::none();
-        };
-        if change.workdir_changed {
-            state.reload_tree_from_disk();
-        }
-        if let Some(root) = state.file_tree.as_ref().map(|t| t.root().to_path_buf()) {
-            self.refresh_git(change.project_id, root);
-        }
-        iced::Task::none()
-    }
-
     /// 树根跟随当前项目:换项目时丢弃旧树与旧监听、按新路径重建,并拉一次 git 文件状态。
     /// `None`(没有项目)时清空。目录已不存在时树为空,由视图显示空盒并在 `take_notices` 里
     /// 报一条错误提示(不 panic)。
     pub fn set_project(&mut self, project: Option<&ProjectInfo>) {
-        self.watch = None;
         let Some(project) = project else {
             self.state = None;
             self.project_id = None;
             return;
         };
         self.project_id = Some(project.id);
+        self.plain_watch = None;
         let root = PathBuf::from(&project.path);
         match &mut self.state {
             Some(state) => state.reset_for_project(FileTree::new(root.clone())),
             None => self.state = Some(WorkspaceState::new(FileTree::new(root.clone()))),
+        }
+        if bytegit::Repo::discover_workdir(&root).is_err() {
+            self.start_plain_watch(project.id, root.clone());
         }
         if let Some(state) = self.state.as_mut()
             && !root.is_dir()
@@ -189,43 +169,79 @@ impl FilesPanel {
                 format!("项目目录不存在:{}", root.display()),
             );
         }
-        self.start_watch(project.id, root.clone());
-        self.refresh_git(project.id, root);
     }
 
-    /// 启动本项目的文件系统监听。忽略名单与 Dozer 相同(文件树恒不显示的目录/文件名)。
-    fn start_watch(&mut self, project_id: i64, root: PathBuf) {
-        if !root.is_dir() {
-            return;
+    /// 升格为 runtime 订阅时停掉 plain watch。
+    pub fn stop_plain_watch(&mut self) {
+        self.plain_watch = None;
+    }
+
+    /// 取走非 Git 目录的监听事件接收端。
+    pub fn take_fs_receiver(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<FsChange>> {
+        self.fs_rx.take()
+    }
+
+    /// 非 Git 目录的旧式监听:只重读文件树,不产生 Git 查询。
+    pub fn fs_changed(&mut self, change: &FsChange) -> iced::Task<Msg> {
+        if self.project_id == Some(change.project_id)
+            && change.workdir_changed
+            && let Some(state) = self.state.as_mut()
+        {
+            state.reload_tree_from_disk();
         }
+        iced::Task::none()
+    }
+
+    fn start_plain_watch(&mut self, project_id: i64, root: PathBuf) {
         let tx = self.fs_tx.clone();
         let options = bytegit::WatchOptions::new(std::time::Duration::from_millis(300));
         match bytegit::watch(&root, options, move |changes| {
             let _ = tx.send(FsChange {
                 project_id,
                 workdir_changed: changes.workdir_changed,
+                refs_changed: changes.refs_changed,
             });
         }) {
-            Ok(handle) => self.watch = Some(handle),
-            Err(e) => eprintln!("digger: 文件监听启动失败: {e}"), // cli-output
+            Ok(handle) => self.plain_watch = Some(handle),
+            Err(e) => eprintln!("digger: 非 Git 目录监听启动失败: {e}"), // cli-output
         }
     }
 
-    /// 后台算一次本项目子树内的 git 文件状态,投回 `StatusesRefreshed`。
-    fn refresh_git(&self, project_id: i64, root: PathBuf) {
-        let Some(handle) = self.handle.clone() else {
-            return;
-        };
-        let tx = self.tx.clone();
-        handle.spawn(async move {
-            let statuses = tokio::task::spawn_blocking({
-                let root = root.clone();
-                move || dozer_panel_files::git_status::file_statuses(&root)
-            })
-            .await
-            .unwrap_or_default();
-            let _ = tx.send(FilesMessage::StatusesRefreshed(project_id, statuses));
-        });
+    /// 应用共享 runtime 已验证 token 的组合快照。
+    pub fn apply_snapshot(
+        &mut self,
+        project_id: i64,
+        statuses: std::collections::HashMap<PathBuf, dozer_panel_files::git_status::FileGitStatus>,
+        info: dozer_panel_files::state::GitInfo,
+    ) {
+        if self.project_id == Some(project_id)
+            && let Some(state) = self.state.as_mut()
+        {
+            state.apply_snapshot(statuses, info);
+        }
+    }
+
+    /// 交给宿主的后台目录刷新计划(不做磁盘 IO)。
+    pub fn begin_tree_refresh(
+        &mut self,
+        paths: &[PathBuf],
+        full: bool,
+    ) -> Option<dozer_panel_files::fs::TreeRefreshRequest> {
+        self.state
+            .as_mut()
+            .and_then(|state| state.begin_tree_refresh(paths, full))
+    }
+
+    /// 合并后台目录结果;返回下一轮计划。
+    pub fn apply_tree_refresh(
+        &mut self,
+        owner: u64,
+        generation: u64,
+        snapshots: Vec<dozer_panel_files::fs::DirSnapshot>,
+    ) -> Option<dozer_panel_files::fs::TreeRefreshRequest> {
+        self.state
+            .as_mut()
+            .and_then(|state| state.apply_tree_refresh(owner, generation, snapshots))
     }
 
     /// 处理一条库消息。`project_id` 是消息所属项目(注册表里已经没有时丢弃)。
