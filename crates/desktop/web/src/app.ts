@@ -16,5 +16,6 @@ export function startApp(e: Engine) {
   baseStyle();
   e.mount(document.getElementById("editor")!);
   window.addEventListener("error", (ev) => post({ t: "info", name: "page error", detail: ev.message }));
-  post({ t: "ready", engine: e.name });
+  if (e.rust) e.rust.start(e.name);
+  else post({ t: "ready", protocol: 2, engine: e.name });
 }

@@ -111,6 +111,44 @@ pub fn view(state: &AppsState) -> Element<'_, Message> {
         );
     }
 
+    for (run_id, title) in state.failed_usage() {
+        extra_top.push(
+            row![
+                text(format!("用量记录未持久化：{title}（{run_id}）"))
+                    .size(font::label())
+                    .color(tokens.red),
+                button(text("重试用量记录").size(font::label()).color(tokens.gold))
+                    .padding([4, 12])
+                    .on_press(Message::RetryUsage(run_id)),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into(),
+        );
+    }
+    if let Some(reason) = state.store_unavailable_reason() {
+        extra_top.push(
+            text(format!("浏览器数据清理台账不可读：{reason}"))
+                .size(font::label())
+                .color(tokens.red)
+                .into(),
+        );
+        extra_top.push(
+            text("为避免覆盖原文件，清理记录暂不可修改；请修复或恢复台账后重开应用面板。")
+                .size(font::label())
+                .color(tokens.dim)
+                .into(),
+        );
+    }
+    if state.store_dirty() {
+        let detail = state.store_last_error().unwrap_or("未知写入错误");
+        extra_top.push(
+            text(format!("清理意图尚未落盘，重启后可能不会继续：{detail}"))
+                .size(font::label())
+                .color(tokens.gold)
+                .into(),
+        );
+    }
     if state.store_pending_count() > 0 {
         extra_top.push(
             text(format!(

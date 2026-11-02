@@ -65,9 +65,14 @@ pub fn bytehost_root() -> PathBuf {
     config_dir().join("bytehost")
 }
 
-/// 任务完成用量账本文件(Task 20):`<config>/digger/usage_ledger.json`。
+/// 旧版任务完成用量账本文件(导入源):`<config>/digger/usage_ledger.json`。
 pub fn usage_ledger_path() -> PathBuf {
     config_dir().join("usage_ledger.json")
+}
+
+/// 任务完成用量账本(A8):独立 SQLite 库 `<state>/usage.sqlite3`。
+pub fn usage_db_path() -> PathBuf {
+    state_dir().join("usage.sqlite3")
 }
 
 /// 主题偏好文件:采用 byteui 的 `{"scheme":"dark"|"light"}` 格式。
@@ -256,6 +261,17 @@ mod tests {
         let l = logs_dir();
         assert_eq!(l.file_name().unwrap(), "logs");
         assert_eq!(l, state.join("logs"));
+    }
+
+    #[test]
+    fn usage_db_is_under_state_and_the_old_json_stays_an_import_source() {
+        let db = usage_db_path();
+        assert_eq!(db.file_name().unwrap(), "usage.sqlite3");
+        assert!(db.starts_with(state_dir()));
+        let old = usage_ledger_path();
+        assert_eq!(old.file_name().unwrap(), "usage_ledger.json");
+        assert!(old.starts_with(config_dir()));
+        assert_ne!(db, old);
     }
 
     #[test]

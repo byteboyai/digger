@@ -5,5 +5,5 @@
 
 pub use digger_paths::{
     PROJECT_TABS_FILE, PROJECTS_DB_FILE, bytehost_root, color_theme_path, config_dir,
-    ensure_data_root, shell_path, state_dir, usage_ledger_path,
+    ensure_data_root, shell_path, state_dir, usage_db_path, usage_ledger_path,
 };

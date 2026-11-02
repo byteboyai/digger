@@ -4,7 +4,9 @@
 //! 过期 base、未知消息这些规则都能在没有窗口的测试里验证。
 
 use crate::doc::{AgentError, AgentOp, Doc, Step};
-use crate::protocol::{Change, EditorInbound, EditorOutbound, Envelope};
+use crate::protocol::{
+    Change, EditorInbound, EditorOutbound, Envelope, ErrorCode, PROTOCOL_VERSION,
+};
 
 /// 运行模式。`Agent` / `Load` / 结果上报只在自检模式被接受;正常运行时页面不能按块 id 改写文档。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +55,23 @@ pub struct Bridge {
     nonce: String,
     /// 替身 Agent 已经做过的步数,写进它的文本里,让每次改写看得出区别
     stand_in_runs: usize,
+    /// 最近一次带 request ID 的提交 `(id, 内容指纹, 原回包)`:重复请求返回原结果,不再次应用。
+    last_request: Option<(u64, u64, EditorOutbound)>,
+    /// 已见过的最大 request ID:更旧的 ID 无法判断是否重复,拒绝而不猜测。
+    highest_request: u64,
+}
+
+fn fingerprint(raw: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    raw.hash(&mut h);
+    h.finish()
+}
+
+enum Gate {
+    Proceed,
+    Replay(EditorOutbound),
+    Reject(ErrorCode),
 }
 
 impl Bridge {
@@ -65,7 +84,37 @@ impl Bridge {
             mode,
             nonce: nonce.into(),
             stand_in_runs: 0,
+            last_request: None,
+            highest_request: 0,
         }
+    }
+
+    /// 同一 request ID 只应用一次;重复内容返回原回包,不同内容报协议错误。
+    fn gate(&self, id: Option<u64>, fp: u64) -> Gate {
+        let Some(id) = id else {
+            return Gate::Proceed;
+        };
+        if let Some((last_id, last_fp, reply)) = &self.last_request
+            && *last_id == id
+        {
+            return if *last_fp == fp {
+                Gate::Replay(reply.clone())
+            } else {
+                Gate::Reject(ErrorCode::DuplicateRequest)
+            };
+        }
+        if id < self.highest_request {
+            return Gate::Reject(ErrorCode::OutOfOrderRequest);
+        }
+        Gate::Proceed
+    }
+
+    fn remember(&mut self, id: Option<u64>, fp: u64, reply: &EditorOutbound) {
+        let Some(id) = id else {
+            return;
+        };
+        self.highest_request = self.highest_request.max(id);
+        self.last_request = Some((id, fp, reply.clone()));
     }
 
     pub fn doc(&self) -> &Doc {
@@ -103,8 +152,15 @@ impl Bridge {
         Some(self.doc.update_message(&patches.remove(0), "agent"))
     }
 
-    fn reject(&self, reason: impl Into<String>) -> Handled {
+    fn reject(
+        &self,
+        code: ErrorCode,
+        request_id: Option<u64>,
+        reason: impl Into<String>,
+    ) -> Handled {
         Handled::Reply(EditorOutbound::Reject {
+            code,
+            request_id,
             reason: reason.into(),
             version: Some(self.doc.version),
         })
@@ -114,30 +170,105 @@ impl Bridge {
     pub fn handle(&mut self, raw: &str) -> Handled {
         let Envelope { n, msg } = match serde_json::from_str::<Envelope>(raw) {
             Ok(env) => env,
-            Err(e) => return self.reject(format!("unparsable message: {e}")),
+            Err(e) => {
+                return self.reject(
+                    ErrorCode::MalformedChanges,
+                    None,
+                    format!("unparsable message: {e}"),
+                );
+            }
         };
         if n != self.nonce {
-            return self.reject("bad nonce");
+            return self.reject(ErrorCode::Unauthorized, None, "bad nonce");
         }
         if msg.selftest_only() && self.mode != Mode::SelfTest {
-            return self.reject("not accepted outside selftest");
+            return self.reject(
+                ErrorCode::Unauthorized,
+                None,
+                "not accepted outside selftest",
+            );
         }
         match msg {
-            EditorInbound::Ready { engine } => match self.mode {
-                Mode::Normal => Handled::Reply(self.doc.open_message()),
-                Mode::SelfTest => Handled::Report(Report::Ready {
-                    engine: engine.unwrap_or_default(),
-                }),
-            },
-            EditorInbound::Edit { base, changes } => {
+            EditorInbound::Ready { protocol, engine } => {
+                if protocol.unwrap_or(1) != PROTOCOL_VERSION {
+                    return self.reject(
+                        ErrorCode::UnsupportedProtocol,
+                        None,
+                        format!(
+                            "protocol {} is not supported (this build speaks {PROTOCOL_VERSION})",
+                            protocol.unwrap_or(1)
+                        ),
+                    );
+                }
+                match self.mode {
+                    Mode::Normal => Handled::Reply(self.doc.open_message()),
+                    Mode::SelfTest => Handled::Report(Report::Ready {
+                        engine: engine.unwrap_or_default(),
+                    }),
+                }
+            }
+            EditorInbound::Edit {
+                request_id,
+                base,
+                changes,
+            } => {
+                let fp = fingerprint(raw);
+                match self.gate(request_id, fp) {
+                    Gate::Replay(reply) => return Handled::Reply(reply),
+                    Gate::Reject(code) => {
+                        return self.reject(
+                            code,
+                            request_id,
+                            match code {
+                                ErrorCode::DuplicateRequest => {
+                                    "request id reused with different content"
+                                }
+                                _ => "request id is older than the last confirmed request",
+                            },
+                        );
+                    }
+                    Gate::Proceed => {}
+                }
                 let changes: Vec<(usize, usize, String)> = changes
                     .into_iter()
                     .map(|Change { from, to, insert }| (from, to, insert))
                     .collect();
                 match self.doc.edit(base, &changes) {
-                    Ok(()) => Handled::Reply(self.doc.blocks_message()),
-                    Err(e) => self.reject(format!("{e:?}")),
+                    Ok(()) => {
+                        let reply = self.doc.after_edit_message(request_id);
+                        self.remember(request_id, fp, &reply);
+                        Handled::Reply(reply)
+                    }
+                    Err(e) => {
+                        let code = match e {
+                            crate::doc::EditError::StaleBase { .. } => ErrorCode::StaleBase,
+                            crate::doc::EditError::BadPosition(_) => ErrorCode::BadPosition,
+                            crate::doc::EditError::Malformed(_) => ErrorCode::MalformedChanges,
+                        };
+                        let reply = EditorOutbound::Reject {
+                            code,
+                            request_id,
+                            reason: format!("{e:?}"),
+                            version: Some(self.doc.version),
+                        };
+                        // 重复投递同一请求时返回同一拒绝,而不是再次尝试应用。
+                        self.remember(request_id, fp, &reply);
+                        Handled::Reply(reply)
+                    }
                 }
+            }
+            EditorInbound::Snapshot { request_id } => {
+                let fp = fingerprint(raw);
+                match self.gate(request_id, fp) {
+                    Gate::Replay(reply) => return Handled::Reply(reply),
+                    Gate::Reject(code) => {
+                        return self.reject(code, request_id, "stale snapshot request id");
+                    }
+                    Gate::Proceed => {}
+                }
+                let reply = self.doc.snapshot_message(request_id);
+                self.remember(request_id, fp, &reply);
+                Handled::Reply(reply)
             }
             EditorInbound::Load { text } => {
                 self.doc.load(&text);
@@ -214,13 +345,14 @@ mod tests {
     #[test]
     fn ready_is_answered_with_the_whole_document() {
         let mut b = normal();
-        match reply(b.handle(&msg(json!({"t": "ready"})))) {
+        match reply(b.handle(&msg(json!({"t": "ready", "protocol": 2})))) {
             EditorOutbound::Open {
                 text,
                 version,
                 blocks,
                 len16,
                 hash,
+                ..
             } => {
                 assert_eq!(text, "# 标题\n\n第一段。\n\n第二段。\n");
                 assert_eq!(blocks.len(), 3);
@@ -249,7 +381,9 @@ mod tests {
         let v = b.doc().version;
         let h = b.handle(&msg(json!({"t": "edit", "base": v - 1, "changes": []})));
         match reply(h) {
-            EditorOutbound::Reject { reason, version } => {
+            EditorOutbound::Reject {
+                reason, version, ..
+            } => {
                 assert!(reason.contains("StaleBase"), "{reason}");
                 assert_eq!(version, Some(v));
             }
@@ -271,7 +405,10 @@ mod tests {
     fn a_message_without_or_with_the_wrong_nonce_is_refused() {
         let mut b = normal();
         let v = b.doc().version;
-        assert!(reason(b.handle(&json!({"t": "ready"}).to_string())).contains("unparsable"));
+        assert!(
+            reason(b.handle(&json!({"t": "ready", "protocol": 2}).to_string()))
+                .contains("unparsable")
+        );
         assert_eq!(reason(b.handle(&json!({"n": "other", "t": "edit", "base": v, "changes": [{"from": 0, "to": 0, "insert": "x"}]}).to_string())), "bad nonce");
         assert_eq!(b.doc().version, v, "a refused message changes nothing");
     }
@@ -280,7 +417,7 @@ mod tests {
     fn the_agent_hook_and_the_harness_reports_are_refused_in_normal_operation() {
         let mut b = normal();
         let before = b.doc().text.clone();
-        let id = match reply(b.handle(&msg(json!({"t": "ready"})))) {
+        let id = match reply(b.handle(&msg(json!({"t": "ready", "protocol": 2})))) {
             EditorOutbound::Open { blocks, .. } => blocks[1].id.clone(),
             other => panic!("{other:?}"),
         };
@@ -370,7 +507,7 @@ mod tests {
             Handled::Report(Report::Done)
         );
         assert_eq!(
-            b.handle(&msg(json!({"t": "ready", "engine": "cm"}))),
+            b.handle(&msg(json!({"t": "ready", "protocol": 2, "engine": "cm"}))),
             Handled::Report(Report::Ready {
                 engine: "cm".into()
             })
@@ -378,11 +515,130 @@ mod tests {
     }
 
     #[test]
+    fn request_ids_are_applied_once_and_duplicates_are_answered_from_cache() {
+        let mut b = normal();
+        let v = b.doc().version;
+        let first = msg(json!({"t": "edit", "request_id": 7, "base": v,
+            "changes": [{"from": 0, "to": 0, "insert": "x"}]}));
+        match reply(b.handle(&first)) {
+            EditorOutbound::Blocks {
+                request_id,
+                version,
+                ..
+            } => {
+                assert_eq!((request_id, version), (Some(7), v + 1));
+            }
+            other => panic!("{other:?}"),
+        }
+        let text = b.doc().text.clone();
+        // Same id and content: replay the original result, do not apply the change twice.
+        match reply(b.handle(&first)) {
+            EditorOutbound::Blocks {
+                request_id,
+                version,
+                ..
+            } => {
+                assert_eq!((request_id, version), (Some(7), v + 1));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(b.doc().text, text, "the edit is not applied twice");
+        assert_eq!(b.doc().version, v + 1);
+    }
+
+    #[test]
+    fn the_same_request_id_with_different_content_is_a_protocol_error() {
+        let mut b = normal();
+        let v = b.doc().version;
+        let first = msg(json!({"t": "edit", "request_id": 3, "base": v,
+            "changes": [{"from": 0, "to": 0, "insert": "x"}]}));
+        assert!(matches!(
+            reply(b.handle(&first)),
+            EditorOutbound::Blocks { .. }
+        ));
+        let text = b.doc().text.clone();
+        let different = msg(json!({"t": "edit", "request_id": 3, "base": v + 1,
+            "changes": [{"from": 0, "to": 0, "insert": "y"}]}));
+        match reply(b.handle(&different)) {
+            EditorOutbound::Reject {
+                code, request_id, ..
+            } => {
+                assert_eq!(code, ErrorCode::DuplicateRequest);
+                assert_eq!(request_id, Some(3));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(b.doc().text, text);
+    }
+
+    #[test]
+    fn an_older_request_id_is_refused_without_guessing() {
+        let mut b = normal();
+        let v = b.doc().version;
+        for (id, base) in [(5, v), (6, v + 1)] {
+            let m = msg(json!({"t": "edit", "request_id": id, "base": base,
+                "changes": [{"from": 0, "to": 0, "insert": "x"}]}));
+            assert!(matches!(reply(b.handle(&m)), EditorOutbound::Blocks { .. }));
+        }
+        let text = b.doc().text.clone();
+        let old = msg(json!({"t": "edit", "request_id": 5, "base": v + 2,
+            "changes": [{"from": 0, "to": 0, "insert": "z"}]}));
+        match reply(b.handle(&old)) {
+            EditorOutbound::Reject { code, .. } => {
+                assert_eq!(code, ErrorCode::OutOfOrderRequest);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(b.doc().text, text);
+    }
+
+    #[test]
+    fn a_read_only_snapshot_is_allowed_in_normal_mode_and_does_not_change_the_document() {
+        let mut b = normal();
+        b.handle(&msg(json!({"t": "edit", "request_id": 1, "base": 1,
+            "changes": [{"from": 0, "to": 0, "insert": "x"}]})));
+        let (text, version) = (b.doc().text.clone(), b.doc().version);
+        match reply(b.handle(&msg(json!({"t": "snapshot", "request_id": 2})))) {
+            EditorOutbound::Snapshot {
+                request_id,
+                text: snapshot,
+                version: got_version,
+                ..
+            } => {
+                assert_eq!(request_id, Some(2));
+                assert_eq!(snapshot, text);
+                assert_eq!(got_version, version);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!((b.doc().text.clone(), b.doc().version), (text, version));
+    }
+
+    #[test]
+    fn an_incompatible_protocol_stops_the_handshake() {
+        let mut b = normal();
+        match reply(b.handle(&msg(json!({"t": "ready", "protocol": 1})))) {
+            EditorOutbound::Reject { code, .. } => {
+                assert_eq!(code, ErrorCode::UnsupportedProtocol);
+            }
+            other => panic!("{other:?}"),
+        }
+        // A page that omits the version is an old page, not a new one.
+        match reply(b.handle(&msg(json!({"t": "ready"})))) {
+            EditorOutbound::Reject { code, .. } => {
+                assert_eq!(code, ErrorCode::UnsupportedProtocol);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn wire_format_is_the_one_the_spike_validated() {
         let mut b = normal();
-        let json = reply(b.handle(&msg(json!({"t": "ready"})))).to_json();
+        let json = reply(b.handle(&msg(json!({"t": "ready", "protocol": 2})))).to_json();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["t"], "open");
+        assert_eq!(v["protocol"], 2);
         for k in ["text", "version", "hash", "len16", "blocks"] {
             assert!(v.get(k).is_some(), "open.{k}");
         }

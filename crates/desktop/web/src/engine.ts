@@ -1,7 +1,9 @@
-import type { RBlock, TypedSelection } from "./rust-sync";
+import type { RBlock, SyncState, TypedSelection } from "./rust-sync";
 
 /** Block ranges that come from Rust (the authority) instead of the editor's own parser. */
 export interface RustApi {
+  /** Start the bounded production ready/open handshake. */
+  start(engine: string): void;
   load(text: string): Promise<void>;
   settled(): Promise<void>;
   blocks(): RBlock[];
@@ -26,6 +28,18 @@ export interface RustApi {
   composing(): boolean;
   /** an edit of ours is out / more are queued behind it */
   pending(): { inflight: boolean; queued: boolean };
+  /** explicit recovery state (opening / ready / sending / recovering / conflict / failed / closed) */
+  syncState(): SyncState;
+  /** after a conflict: the authoritative snapshot and the local draft, for display / export */
+  conflict(): { snapshotText: string; draft: string } | null;
+  /** explicit author choice: take Rust's text */
+  resolveWithSnapshot(): void;
+  /** explicit author choice: commit the local draft as a new edit */
+  commitDraft(): void;
+  /** visible terminal failure (recovery exhausted) with the draft kept */
+  failure(): { message: string; draft: string; retryable: boolean } | null;
+  /** manual retry after recovery exhausted */
+  retrySync(): void;
   /** log of composition and Agent-patch events (manual testing) */
   onEvent(cb: (line: string) => void): void;
   /** the author's Ctrl-Z */

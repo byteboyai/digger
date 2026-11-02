@@ -18,9 +18,15 @@ mod migrate;
 mod projects;
 mod runner;
 mod service;
+mod usage_db;
+mod usage_worker;
 
 pub use ledger::{CompletionEvent, TaskUsageRecord, UsageLedger, UsageLedgerError};
 pub use migrate::{MigrationOutcome, journal_mode, migrate_legacy_projects, set_wal_mode};
 pub use projects::ProjectHost;
-pub use runner::{Clock, RunningTask, RunningTasks, SystemClock, TaskOutcome, TaskRunner};
-pub use service::{LedgerUsageService, UnavailableUsageService};
+pub use runner::{
+    Clock, RunningTask, RunningTasks, SystemClock, TaskOutcome, TaskRunner, begin_run, complete_run,
+};
+pub use service::{LedgerUsageService, UnavailableUsageService, UsageDbService};
+pub use usage_db::{ImportOutcome, UsageDb, UsageDbError};
+pub use usage_worker::{SubmitError, UsageHandle, UsageWorker, spawn as spawn_usage_worker};

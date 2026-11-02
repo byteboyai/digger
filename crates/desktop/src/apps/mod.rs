@@ -52,9 +52,33 @@ use surface::{AppSurfaces, SurfaceAction};
 /// - `running` 是在途运行的登记簿,键是**派发请求的 ticket sequence**(同一动作的并发实例
 ///   各自唯一,不撞车)。
 /// - `scope_path` 是这些记录归属的作用域(Digger 一期用产品数据根,与面板查询路径对齐)。
+enum UsageSink {
+    /// 旧 JSON 账本(测试 / 小规模兼容路径;同步写入)。
+    Json(digger_store::TaskRunner),
+    /// SQLite 后台 worker(生产路径;提交不等待磁盘)。
+    Worker(digger_store::UsageHandle),
+}
+
+enum UsageFinish {
+    Done {
+        event: digger_store::CompletionEvent,
+        result: Result<bool, String>,
+    },
+    Pending {
+        event: digger_store::CompletionEvent,
+        rx: tokio::sync::oneshot::Receiver<Result<bool, String>>,
+    },
+}
+
 pub struct UsageRuntime {
-    runner: digger_store::TaskRunner,
+    sink: UsageSink,
+    clock: digger_store::SystemClock,
     running: digger_store::RunningTasks,
+    /// 已完成但尚未确认落盘的事件。重试只重新提交同一个事件(相同 run_id / 结束时刻 / 累计值),
+    /// 不会重新安装、停止或卸载任何应用。
+    failed: std::collections::BTreeMap<String, digger_store::CompletionEvent>,
+    /// Registered before submission, removed only after a durable acknowledgement is handled.
+    unconfirmed: std::collections::BTreeMap<String, digger_store::CompletionEvent>,
     scope_path: String,
     /// 本次进程启动的**运行命名空间**:账本按 `run_id` 幂等 upsert,而 `ticket.sequence`
     /// 每次启动从 0 重新计数。若 `run_id` 只由「动作标签 + sequence」拼成,重启后按相同顺序
@@ -69,10 +93,73 @@ impl UsageRuntime {
         scope_path: String,
     ) -> Self {
         Self {
-            runner: digger_store::TaskRunner::new(ledger),
+            sink: UsageSink::Json(digger_store::TaskRunner::new(ledger)),
+            clock: digger_store::SystemClock,
             running: digger_store::RunningTasks::new(),
+            failed: std::collections::BTreeMap::new(),
+            unconfirmed: std::collections::BTreeMap::new(),
             scope_path,
             boot_id: new_boot_id(),
+        }
+    }
+
+    pub fn new_db(handle: digger_store::UsageHandle, scope_path: String) -> Self {
+        Self {
+            sink: UsageSink::Worker(handle),
+            clock: digger_store::SystemClock,
+            running: digger_store::RunningTasks::new(),
+            failed: std::collections::BTreeMap::new(),
+            unconfirmed: std::collections::BTreeMap::new(),
+            scope_path,
+            boot_id: new_boot_id(),
+        }
+    }
+
+    fn begin(
+        &self,
+        run_id: String,
+        project_id: i64,
+        project_path: String,
+        agent: dozer_model::AgentKind,
+        title: String,
+    ) -> digger_store::RunningTask {
+        match &self.sink {
+            UsageSink::Json(runner) => runner.begin(run_id, project_id, project_path, agent, title),
+            UsageSink::Worker(_) => {
+                digger_store::begin_run(&self.clock, run_id, project_id, project_path, agent, title)
+            }
+        }
+    }
+
+    /// 结算一次运行。生产路径把完成事件投给后台 worker;结束时刻只在这里取一次。
+    fn finish(&mut self, key: u64) -> Option<UsageFinish> {
+        let run = self.running.take(key)?;
+        // 诚实原则:Digger 当前无 agent 运行时,真实操作不产生 token / 回合,如实记 0;
+        // `files_touched` 一期无从得知(操作由 app-host 执行,不回传文件清单),留空不伪造。
+        let event =
+            digger_store::complete_run(&self.clock, run, digger_store::TaskOutcome::default());
+        Some(self.submit(event))
+    }
+
+    /// 提交一个不可变完成事件。失败 / 异步失败都保留同一事件供 UI 重试。
+    fn submit(&mut self, event: digger_store::CompletionEvent) -> UsageFinish {
+        self.unconfirmed.insert(event.run_id.clone(), event.clone());
+        match &mut self.sink {
+            UsageSink::Json(runner) => {
+                let result = runner
+                    .ledger()
+                    .lock()
+                    .map_err(|_| "用量账本锁被污染".to_string())
+                    .and_then(|mut ledger| ledger.record(event.clone()).map_err(|e| e.to_string()));
+                UsageFinish::Done { event, result }
+            }
+            UsageSink::Worker(handle) => match handle.record(event.clone()) {
+                Ok(rx) => UsageFinish::Pending { event, rx },
+                Err(e) => UsageFinish::Done {
+                    event,
+                    result: Err(e.to_string()),
+                },
+            },
         }
     }
 }
@@ -122,6 +209,10 @@ pub enum Message {
     RetryCleanup(String),
     /// 一次浏览器数据存储清除的结果(窗口线程 `remove_data_store` 回调回传)。
     StoreRemovalResult(String, StoreRemovalOutcome),
+    /// 一次用量写入的确认结果(后台 worker 返回;失败必须可见,事件可原样重试)。
+    UsagePersisted(digger_store::CompletionEvent, Result<bool, String>),
+    /// 用户点「重试用量记录」:重试同一个完成事件,不重新执行业务操作。
+    RetryUsage(String),
     /// 一次清除请求已提交到窗口线程(真实结果随后经 [`Message::StoreRemovalResult`] 回);无需处理。
     StoreRemovalSubmitted,
     /// 用户点「重试」:应用服务此前启动失败(`Startup::Unavailable`),重新起一次。
@@ -244,6 +335,11 @@ impl AppsState {
         self.usage = Some(UsageRuntime::new(ledger, scope_path));
     }
 
+    /// 生产接法:把完成事件投给 SQLite 后台 worker,不在窗口线程写盘。
+    pub fn attach_usage_db(&mut self, handle: digger_store::UsageHandle, scope_path: String) {
+        self.usage = Some(UsageRuntime::new_db(handle, scope_path));
+    }
+
     /// 在派发一条**用户发起**的真实操作时登记一次任务运行(以请求 ticket sequence 为键)。
     /// 只对会产生真实副作用、且用户可感知的动作计数(见 [`is_user_invoked_action`])。
     fn begin_usage_for(&mut self, action: InstallAction, key: u64, title: String) {
@@ -259,7 +355,7 @@ impl AppsState {
             action_run_label(action),
             key
         );
-        let run = usage.runner.begin(
+        let run = usage.begin(
             run_id,
             1,
             usage.scope_path.clone(),
@@ -270,20 +366,101 @@ impl AppsState {
     }
 
     /// 一次真实操作完成:结算成用量记录(写账本)。无登记的键(非用户动作/未接线)则不动。
-    fn settle_usage_for(&mut self, key: u64) {
-        let Some(usage) = self.usage.as_mut() else {
-            return;
-        };
-        let Some(run) = usage.running.take(key) else {
-            return;
-        };
+    fn settle_usage_for(&mut self, key: u64) -> Option<iced::Task<Message>> {
+        let usage = self.usage.as_mut()?;
         // 诚实原则:Digger 当前无 agent 运行时,真实操作不产生 token / 回合,如实记 0;
         // `files_touched` 一期无从得知(操作由 app-host 执行,不回传文件清单),留空不伪造。
-        let outcome = digger_store::TaskOutcome::default();
-        if let Err(e) = usage.runner.finish(run, outcome) {
-            // 写账本失败(损坏/IO):不 panic,后进入面板时会以 Unavailable 呈现。
-            eprintln!("digger: 用量账本写入失败: {e}"); // cli-output
+        let finish = usage.finish(key)?;
+        self.handle_usage_finish(finish)
+    }
+
+    fn handle_usage_finish(&mut self, finish: UsageFinish) -> Option<iced::Task<Message>> {
+        match finish {
+            UsageFinish::Done { event, result } => {
+                self.complete_usage_submission(event, result);
+                None
+            }
+            UsageFinish::Pending { event, rx } => Some(iced::Task::perform(
+                async move {
+                    let result = match rx.await {
+                        Ok(result) => result,
+                        Err(_) => Err("用量后台服务已停止".to_string()),
+                    };
+                    (event, result)
+                },
+                |(event, result)| Message::UsagePersisted(event, result),
+            )),
         }
+    }
+
+    fn remember_failed_usage(&mut self, event: digger_store::CompletionEvent, error: &str) {
+        self.push_notice(
+            bytehost_panel::notice::NoticeLevel::Error,
+            format!(
+                "用量记录未持久化(run {}),可在提示条点「重试用量记录」;不会重新执行业务操作: {error}",
+                event.run_id
+            ),
+            format!("usage-persist:{}", event.run_id),
+        );
+        if let Some(usage) = self.usage.as_mut() {
+            usage
+                .unconfirmed
+                .insert(event.run_id.clone(), event.clone());
+            usage.failed.insert(event.run_id.clone(), event);
+        }
+    }
+
+    /// 重试一个此前失败的同一完成事件(相同 run_id / 结束时刻 / 累计值)。
+    fn retry_usage_for(&mut self, run_id: &str) -> Option<iced::Task<Message>> {
+        let usage = self.usage.as_mut()?;
+        let event = usage.failed.remove(run_id)?;
+        let finish = usage.submit(event);
+        self.handle_usage_finish(finish)
+    }
+
+    /// 尚未确认落盘的用量事件(`run_id`, 标题),供设置页 / 顶栏展示重试入口。
+    pub fn failed_usage(&self) -> Vec<(String, String)> {
+        self.usage
+            .as_ref()
+            .map(|u| {
+                u.failed
+                    .values()
+                    .map(|e| (e.run_id.clone(), e.title.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn complete_usage_submission(
+        &mut self,
+        event: digger_store::CompletionEvent,
+        result: Result<bool, String>,
+    ) {
+        match result {
+            Ok(_) => {
+                if let Some(usage) = self.usage.as_mut() {
+                    usage.failed.remove(&event.run_id);
+                    usage.unconfirmed.remove(&event.run_id);
+                }
+            }
+            Err(error) => self.remember_failed_usage(event, &error),
+        }
+    }
+
+    /// A drained worker does not imply all writes succeeded or their acknowledgements were handled.
+    /// Keep the immutable events until that fact is known before permitting a normal product exit.
+    pub fn usage_persistence_error(&self) -> Option<String> {
+        let usage = self.usage.as_ref()?;
+        if usage.unconfirmed.is_empty() && usage.running.is_empty() {
+            return None;
+        }
+        let failed = usage.failed.len();
+        let waiting = usage.unconfirmed.len().saturating_sub(failed);
+        let settling = usage.running.len();
+        Some(format!(
+            "还有 {} 条用量记录未确认落盘（{failed} 条失败，{waiting} 条等待确认，{settling} 条待结算）。强制退出可能丢失这些记录。",
+            usage.unconfirmed.len() + settling
+        ))
     }
 
     /// 供测试/诊断:当前在途的运行数(不接线时恒 0)。
@@ -385,7 +562,13 @@ impl AppsState {
             }
             Message::NativeOperationDone => iced::Task::none(),
             Message::RetryCleanup(id) => {
-                self.store.request(&id);
+                if let Err(e) = self.store.request(&id) {
+                    self.push_notice(
+                        bytehost_panel::notice::NoticeLevel::Error,
+                        format!("清理意图未落盘,重启后可能不会继续;可再次点「重试清理」: {e}"),
+                        "cleanup-persist".into(),
+                    );
+                }
                 iced::Task::none()
             }
             Message::Install(m) => {
@@ -410,7 +593,13 @@ impl AppsState {
             // 一次浏览器数据存储清除的结果:更新持久台账与内存重试队列;仍待重试的靠 `store_wake_task`
             // 到点再驱动,终态失败的留在台账里(设置页可见)。
             Message::StoreRemovalResult(app, outcome) => {
-                self.store.settle(&app, outcome, std::time::Instant::now());
+                if let Err(e) = self.store.settle(&app, outcome, std::time::Instant::now()) {
+                    self.push_notice(
+                        bytehost_panel::notice::NoticeLevel::Error,
+                        format!("浏览器数据清理结果未落盘,可重试: {e}"),
+                        "cleanup-settle".into(),
+                    );
+                }
                 iced::Task::none()
             }
             // 用户显式重试:仅在启动失败(`Unavailable`)时有效。复位 `opened` 并重新
@@ -430,6 +619,13 @@ impl AppsState {
             }
             // 清除请求已提交(真实结果异步回);无操作。
             Message::StoreRemovalSubmitted => iced::Task::none(),
+            Message::UsagePersisted(event, result) => {
+                self.complete_usage_submission(event, result);
+                iced::Task::none()
+            }
+            Message::RetryUsage(run_id) => self
+                .retry_usage_for(&run_id)
+                .unwrap_or_else(iced::Task::none),
             // 由产品组合根拦截并打开设置窗口,状态机无动作。
             Message::OpenSettings => iced::Task::none(),
         };
@@ -639,9 +835,13 @@ impl AppsState {
                 detail,
             } => {
                 if self.requests.accept(*ticket) {
-                    // 一次真实操作完成:结算它登记的任务运行(写用量账本),再翻成状态机消息。
-                    self.settle_usage_for(ticket.sequence);
-                    self.install_outcome(ticket.key, result.clone(), detail.clone())
+                    // 一次真实操作完成:结算它登记的任务运行(后台写用量账本),再翻成状态机消息。
+                    let usage = self.settle_usage_for(ticket.sequence);
+                    let install = self.install_outcome(ticket.key, result.clone(), detail.clone());
+                    match usage {
+                        Some(task) => iced::Task::batch([task, install]),
+                        None => install,
+                    }
                 } else {
                     iced::Task::none()
                 }
@@ -806,7 +1006,13 @@ impl AppsState {
                     // 再排一次浏览器数据存储清除(落盘台账 + 内存重试;失败留可见)。
                     if mode.is_some_and(store::purges_browser_data) {
                         self.native_actions.extend(self.surfaces.close(id.as_str()));
-                        self.store.request(id.as_str());
+                        if let Err(e) = self.store.request(id.as_str()) {
+                            self.push_notice(
+                                bytehost_panel::notice::NoticeLevel::Error,
+                                format!("清理待办未落盘,重启后仍可能需要清理: {e}"),
+                                "cleanup-request".into(),
+                            );
+                        }
                     }
                 }
                 // 卸载失败:模式已在上面取出,自然丢弃,不残留误导性的待清。
@@ -980,6 +1186,21 @@ impl AppsState {
     /// 仍在排队 / 重试中的数据存储清除数量;设置页展示进度。
     pub fn store_pending_count(&self) -> usize {
         self.store.pending_count()
+    }
+
+    /// 清理台账读不出来的原因(设置页展示;此时不允许覆盖原文件)。
+    pub fn store_unavailable_reason(&self) -> Option<&str> {
+        self.store.unavailable_reason()
+    }
+
+    /// 清理台账仍有未落盘的内存意图。
+    pub fn store_dirty(&self) -> bool {
+        self.store.dirty()
+    }
+
+    /// 最近一次清理台账持久化失败原文。
+    pub fn store_last_error(&self) -> Option<&str> {
+        self.store.last_error()
     }
 
     /// 台账落到产品状态目录下(测试断言路径用)。
@@ -1371,6 +1592,64 @@ mod tests {
         Arc::new(std::sync::Mutex::new(
             digger_store::UsageLedger::load(path).unwrap(),
         ))
+    }
+
+    #[test]
+    fn an_operation_waiting_for_its_completion_message_also_blocks_clean_exit() {
+        let path = usage_ledger_path("exit-outcome-pending");
+        let mut state = AppsState::with_ledger_path(temp_ledger("exit-outcome-pending"));
+        state.attach_usage(shared_ledger(&path), "/scope".into());
+        state.begin_usage_for(InstallAction::Install, 7, "operation".into());
+        assert!(
+            state
+                .usage_persistence_error()
+                .unwrap()
+                .contains("1 条待结算")
+        );
+        let _ = state.settle_usage_for(7);
+        assert!(state.usage_persistence_error().is_none());
+    }
+
+    #[test]
+    fn a_failed_usage_submission_keeps_the_exact_event_for_retry() {
+        let dir =
+            std::env::temp_dir().join(format!("digger-apps-usage-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let worker = digger_store::spawn_usage_worker(dir.join("state/usage.sqlite3"), 4).unwrap();
+        let handle = worker.handle();
+        let mut s = AppsState::with_ledger_path(dir.join("store_cleanups.json"));
+        s.attach_usage_db(handle, "/scope".into());
+        s.begin_usage_for(InstallAction::Install, 7, "安装应用 notes".into());
+        // Close the worker before the settle: the submission fails synchronously.
+        worker.shutdown().unwrap();
+        let _ = s.settle_usage_for(7);
+        let before = s
+            .usage
+            .as_ref()
+            .unwrap()
+            .failed
+            .values()
+            .next()
+            .cloned()
+            .expect("the failed event is retained");
+        assert_eq!(s.failed_usage().len(), 1);
+        assert_eq!(s.usage_in_flight(), 0);
+
+        // Retry must resubmit the same event (run_id, start/finish, counters) and must not
+        // create a new running task or re-run the business action.
+        let _ = s.retry_usage_for(&before.run_id);
+        assert_eq!(s.usage_in_flight(), 0);
+        let after = s
+            .usage
+            .as_ref()
+            .unwrap()
+            .failed
+            .get(&before.run_id)
+            .cloned()
+            .expect("still failed with the same run id");
+        assert_eq!(before, after);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 一次用户发起的真实操作(begin→settle)在账本里落一条记录,经**真实**

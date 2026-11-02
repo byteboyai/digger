@@ -40,7 +40,15 @@ impl ProjectHost {
     /// 迁移失败时返回 `Unavailable`,调用方显示"项目功能不可用:迁移失败 …",不静默回退。
     /// WAL 设置失败只记日志、不算迁移失败(尽力而为)。
     pub fn open_in(db_path: &Path, legacy_db: &Path) -> Result<Self, ServiceError> {
-        migrate_legacy_projects(legacy_db, db_path)?;
+        Self::open_in_with_outcome(db_path, legacy_db).map(|(host, _)| host)
+    }
+
+    /// 同 [`ProjectHost::open_in`],但把迁移结果一起交给调用方展示(归档待完成仍算成功)。
+    pub fn open_in_with_outcome(
+        db_path: &Path,
+        legacy_db: &Path,
+    ) -> Result<(Self, crate::MigrationOutcome), ServiceError> {
+        let outcome = migrate_legacy_projects(legacy_db, db_path)?;
 
         // 先于任何 store 连接设 WAL(切换需要独占);库文件还不存在时由它建出空库。
         if let Some(parent) = db_path.parent() {
@@ -50,7 +58,7 @@ impl ProjectHost {
             eprintln!("digger-store: 设 WAL 模式失败(已忽略): {e}");
         }
 
-        Self::open(db_path)
+        Ok((Self::open(db_path)?, outcome))
     }
 }
 

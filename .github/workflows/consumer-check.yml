@@ -1,8 +1,8 @@
 name: Consumer check
 
-# Digger 的第一个 CI(bytehost 优化 Tier5 Task2/3)。**当前仓库没有远端**,
-# 这份 workflow 只随本地分支提交,等配好 remote 并推到默认分支后才会生效。
-# 刻意不跑全量测试:先用编译 + 依赖门禁守住"业务层不许直连宿主层"。
+# Digger 的 PR 门禁:编译 + 依赖门禁 + 核心 Rust 行为测试 + 无窗口 web 同步测试与产物一致性。
+# 完整属性集 / Release 基准 / 图形自检在 slow-check.yml(定时或手动)。
+# 仓库没有远端时这份 workflow 只在本地分支提交,配置 remote 后生效。
 
 on:
   push:
@@ -20,6 +20,13 @@ jobs:
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal --component rustfmt
 
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/desktop/web/package-lock.json
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -35,8 +42,30 @@ jobs:
       - name: cargo check --locked --workspace --all-targets
         run: cargo check --locked --workspace --all-targets
 
+      - name: 核心 Rust 行为测试
+        run: cargo test --locked -p digger-editor -p digger-store -p digger-app-host -p digger-paths
+
       - name: 业务层宿主依赖门禁
         run: bash scripts/check-host-deps.sh
 
       - name: 共享库钉版守卫
         run: bash scripts/check-shared-deps.sh --offline
+
+      - name: Web 依赖安装
+        working-directory: crates/desktop/web
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript 检查
+        working-directory: crates/desktop/web
+        run: npm run check
+
+      - name: 无窗口同步状态机测试
+        working-directory: crates/desktop/web
+        run: npm test
+
+      - name: Parser fixtures 与生产 Rust parser 一致
+        working-directory: crates/desktop/web
+        run: npm run fixtures:check
+
+      - name: 嵌入页面与源码一致
+        run: bash scripts/build-editor-web.sh --check

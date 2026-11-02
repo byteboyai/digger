@@ -36,45 +36,13 @@ const USAGE_HEADER_HEIGHT: f32 = 80.0;
 /// 页签条宽度与项目 id 每帧随当前状态构造,见 [`preview_display`]。
 const PREVIEW_LOCALE: &str = "en";
 
-fn preview_display(
-    tab_bar_px: f32,
-    project_id: i64,
-    epoch: u64,
-) -> crate::adapters::preview_display::PreviewDisplay<'static> {
-    crate::adapters::preview_display::PreviewDisplay {
-        locale: PREVIEW_LOCALE,
-        tab_bar_px,
-        list_on_left: true,
-        project_id,
-        epoch,
-        hover: None,
-    }
-}
-
-/// 会弹右键菜单的库消息:库从 `last_right_click` 取锚点。
-fn opens_a_context_menu(message: &dozer_panel_files::Message) -> bool {
-    use dozer_panel_files::Message as F;
-    matches!(
-        message,
-        F::ContextMenuOpen { .. } | F::TabContextMenuOpen { .. }
-    )
-}
-
-/// Files 库的右键菜单浮层何时画:Files 面板可见,或 Project 面板可见(Project 面板里的预览页签右键
-/// 也走 Files 库的页签菜单)。只认 Files 可见时,Project 里右键会"页面被藏了、菜单没画"。
-fn files_menu_is_rendered(files_visible: bool, project_visible: bool) -> bool {
-    files_visible || project_visible
-}
-
-/// 页签数没变时悬停仍然有效;增减(含从无到有)后按下标寻址的悬停必须作废。
-fn hover_survives_tab_change(before: Option<usize>, after: Option<usize>) -> bool {
-    before == after
-}
-
-/// 预览页签条右侧三颗模式按钮的估算占宽(按钮边长 + 与页签组之间的间距,Dozer 同款)。
-const PREVIEW_CHROME_RESERVE_PX: f32 = 32.0 * 3.0 + 4.0 * 3.0;
-
 /// 产品消息。**不进入**宿主 enum(宿主只认 `HostMessage<M>`)。
+mod routing;
+mod subscriptions;
+
+pub(crate) use routing::*;
+pub use subscriptions::subscription;
+
 #[derive(Clone)]
 pub enum Msg {
     WindowReady(window::Id, Size),
@@ -327,239 +295,13 @@ pub struct ProductShell {
     )>,
     shutdown_started: bool,
     shutdown_error: Option<String>,
+    /// Backends can finish before the window has handled every usage acknowledgement.
+    shutdown_result: Option<Result<(), String>>,
+    /// SQLite 用量账本的后台 worker 所有者;退出时排空并 checkpoint。
+    usage_worker: Option<digger_store::UsageWorker>,
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
     #[cfg(test)]
     surface_callbacks: Vec<bytehost_desktop::SurfaceSlot>,
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-/// 设置页里的一行普通文字(产品自己的提示 / 状态行)。
-fn text_line<'a>(label: impl Into<String>, tint: iced::Color) -> Element<'a, Msg> {
-    iced::widget::text(label.into())
-        .size(byteui::theme::font::label())
-        .color(tint)
-        .into()
-}
-
-/// 设置窗口的导航映射(`&'static` 函数指针,可安全借进返回的 `Element`)。
-fn settings_select(id: &bytehost_settings::PageId) -> Msg {
-    Msg::Settings(crate::settings::Message::Select(id.clone()))
-}
-
-fn settings_theme_selected(scheme: byteui::theme::color::ColorScheme) -> Msg {
-    Msg::Settings(crate::settings::Message::ThemeSelected(scheme))
-}
-
-fn settings_apps_install(message: bytehost_panel::install::Message) -> Msg {
-    Msg::Apps(crate::apps::Message::Install(message))
-}
-
-/// 应用行里的产品附加说明(运行时问题)。
-fn settings_app_notes<'a>(app: &bytehost_apps::proto::AppSummary) -> Vec<Element<'a, Msg>> {
-    match &app.issue {
-        Some(issue) => {
-            let (title, detail) = bytehost_panel::host::issue_texts(issue);
-            vec![text_line(format!("{title}:{detail}"), color::current().red)]
-        }
-        None => Vec::new(),
-    }
-}
-
-/// 应用行里的产品前置动作:非过渡态应用可以「打开」。
-fn settings_app_leading<'a>(app: &bytehost_apps::proto::AppSummary) -> Vec<Element<'a, Msg>> {
-    if app.observed.is_transient() {
-        return Vec::new();
-    }
-    vec![
-        iced::widget::button(
-            iced::widget::text("打开")
-                .size(byteui::theme::font::body())
-                .color(color::current().gold),
-        )
-        .padding([4, 12])
-        .on_press(Msg::Apps(crate::apps::Message::OpenApp(
-            app.id.as_str().to_owned(),
-        )))
-        .into(),
-    ]
-}
-
-fn logical(r: Rect) -> LogicalRect {
-    LogicalRect {
-        x: r.x as f64,
-        y: r.y as f64,
-        width: r.w as f64,
-        height: r.h as f64,
-    }
-}
-
-/// 项目布局文件:`<root>/shell-projects/<id>.json`。生产里 `root` 是配置目录(`<config>/digger/shell-projects/`),
-/// 测试里跟着全局 `shell.json` 走,免得测试互相覆盖、也不碰真实配置目录。
-fn project_shell_path_of(root: &Path, id: i64) -> PathBuf {
-    root.join("shell-projects").join(format!("{id}.json"))
-}
-
-/// 配对预览块里原生 webview 的屏幕矩形。
-///
-/// 库的 `view::pane` 把**整块内容**(页签条 + 分隔线 + 正文)放进
-/// `container(content).padding(region.padding)`。所以:
-/// - top = `preview_chrome_top_px()`(38,已含页签条自身高度)+ 一个 padding;
-/// - bottom 只留一个 padding(不是两个);
-/// - 左右各一个 padding。
-///
-/// G-I2:旧实现底部又减了一个 `inset`,比 Dozer 的 `webview_geometry`
-/// (`y = 顶 + 38`, `h = 底 - y`)矮 8px,也与 iced 里正文容器的实际高度不符。
-fn preview_webview_rect(slot: Rect) -> Rect {
-    let inset = crate::adapters::preview_display::PreviewDisplay::content_padding();
-    let top = byteui::theme::geometry::preview_chrome_top_px() + inset;
-    Rect::new(
-        slot.x + inset,
-        slot.y + top,
-        (slot.w - inset * 2.0).max(1.0),
-        (slot.h - top).max(1.0),
-    )
-}
-
-fn review_native_rect(
-    shell: &ShellModel,
-    content: Rect,
-    collapsed: bool,
-    notice_height: f32,
-) -> Rect {
-    let mut block = if collapsed {
-        content
-    } else {
-        shell
-            .side_of(&shell::conversations_id())
-            .and_then(|side| shell::pair_rects(shell, side))
-            .map(|pair| pair.second)
-            .unwrap_or(content)
-    };
-    let notice_height = notice_height.min(block.h.max(0.));
-    block.y += notice_height;
-    block.h = (block.h - notice_height).max(0.);
-    crate::adapters::review_geometry::review_bounds(block, byteui::theme::icon_size::scale())
-}
-
-fn group_chat_native_rect(shell: &ShellModel, content: Rect, collapsed: bool) -> Rect {
-    let block = if collapsed {
-        content
-    } else {
-        shell
-            .side_of(&shell::group_chat_id())
-            .and_then(|side| shell::pair_rects(shell, side))
-            .map(|pair| pair.second)
-            .unwrap_or(content)
-    };
-    crate::adapters::group_chat_geometry::chat_bounds(block, byteui::theme::icon_size::scale())
-}
-
-/// 向下缩 `top` 像素(面板自己的头部占掉的高度)。
-fn below_header(r: Rect, top: f32) -> Rect {
-    Rect::new(r.x, r.y + top, r.w, (r.h - top).max(1.0))
-}
-
-/// 用量面板此刻怎么摆(Dozer `PanelKind::Usage` 分支的三态)。**`body()` 与 `sync_native()` 共用这一个判断**,
-/// 谁也不自己再算一遍,免得 body 已经是单栏、图表还停在分栏的位置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UsageLayout {
-    /// 加载中 / 还没数据:没有列表可拼,内容栏独占全宽。
-    ContentOnly,
-    /// 有数据、列表被收起:内容栏独占全宽,标题行里留"展开"按钮。
-    Collapsed,
-    /// 有数据且列表展开:内容 | 列表。
-    Paired,
-}
-
-/// 用量的原生图表只放在内容栏里:拼分栏时是配对的第二块(镜像与否由骨架几何给出),其余两种状态是整个面板内容区。
-fn usage_native_rect(layout: UsageLayout, content: Rect, pair: Option<PairRects>) -> Rect {
-    match (layout, pair) {
-        (UsageLayout::Paired, Some(p)) => p.second,
-        _ => content,
-    }
-}
-
-/// 待办 webview 的矩形:配对第二块(内容区)扣掉库视图为 iced 预留的顶部行
-/// 与底部新增输入。列表收起时内容区独占整块;整个面板不可见时由调用方传
-/// `visible=false` 销毁。
-fn todo_native_rect(content: Rect, pair: Option<PairRects>, add_input_h: f32) -> Rect {
-    let slot = pair.map(|p| p.second).unwrap_or(content);
-    let top = dozer_panel_todo::adapter::top_row_inner_h_px();
-    Rect::new(
-        slot.x,
-        slot.y + top,
-        slot.w,
-        (slot.h - top - add_input_h).max(1.0),
-    )
-}
-
-/// 本帧要把哪些预览页面放到哪:`sync_native` 的纯数据半段。
-///
-/// 只读骨架(选中的配对面板)与预览状态,顺便把两个面板的页签条可用宽度
-/// 写回 hub。与 `window::run` / `Task` 无关,所以能在无头测试里走真实接线
-/// (G-C3 的「宽度确实被 `sync_preview_native` 写回」、G-C5 的「关闭 / 无项目
-/// 时同步空清单」都靠它)。
-fn collect_preview_desired(
-    preview: &mut crate::adapters::preview::PreviewHub,
-    shell: &ShellModel,
-    rects: &bytehost_chrome::ShellRects,
-    project: &dozer_model::ProjectInfo,
-    overlay_open: bool,
-) -> Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> {
-    let mut desired: Vec<(dozer_panel_preview::PreviewWebviewSpec, LogicalRect)> = Vec::new();
-    let mut tab_bar = (0.0_f32, 0.0_f32);
-    for panel in [ViewerPanel::Files, ViewerPanel::Project] {
-        let id = match panel {
-            ViewerPanel::Project => shell::project_id(),
-            _ => shell::files_id(),
-        };
-        let Some(side) = shell.side_of(&id) else {
-            continue;
-        };
-        if shell.selected(side) != &id || rects.content(side).is_none() {
-            continue;
-        }
-        let Some(slot) = shell::pair_rects(shell, side).map(|p| p.second) else {
-            continue;
-        };
-        let rect = logical(preview_webview_rect(slot));
-        desired.extend(preview.desired(panel, project, |_| Some(rect)));
-        // 页签条可用宽度:预览块真实宽度减三颗按钮与间距(Dozer 同款估算)。
-        let avail = (slot.w - PREVIEW_CHROME_RESERVE_PX).max(0.0);
-        match panel {
-            ViewerPanel::Project => tab_bar.1 = avail,
-            _ => tab_bar.0 = avail,
-        }
-    }
-    preview.set_tab_bar_width(tab_bar.0, tab_bar.1);
-    hide_for_overlay(&mut desired, overlay_open);
-    desired
-}
-
-/// 有 iced 浮层(页签溢出菜单、Files 右键菜单 / 对话框、Project 删除确认卡)展开时,原生 webview
-/// 会盖在它上面。Dozer 的做法(`app_modal_open` / `tab_overflow_open` / `panel_popup_open`)是浮层开着
-/// 就把 webview 真隐藏、关掉再显示,而不是销毁:页签状态与页面都留着。这里同款:清单项保留,只把
-/// `visible` 与 `park_offscreen` 置假,`plan()` 产出 `Update { visible: false }`。
-fn hide_for_overlay(
-    desired: &mut [(
-        dozer_panel_preview::PreviewWebviewSpec,
-        bytehost_core::LogicalRect,
-    )],
-    overlay_open: bool,
-) {
-    if !overlay_open {
-        return;
-    }
-    for (spec, _) in desired.iter_mut() {
-        spec.visible = false;
-        spec.park_offscreen = false;
-    }
 }
 
 impl ProductShell {
@@ -609,13 +351,13 @@ impl ProductShell {
         // 写进下次启动就不再引用的临时文件,等于静默丢。改为:查询恒返回 Unavailable、**不接线**用量生产者(没有记录悄悄
         // 写走),原损坏文件保持原样。
         let scope_path = paths::config_dir();
-        let (usage_service, usage_ledger, boot_note) =
-            load_usage_ledger(paths::usage_ledger_path());
+        let (usage_service, usage_worker, usage_handle, boot_note) =
+            load_usage_db(paths::usage_db_path(), paths::usage_ledger_path());
 
         let mut apps = crate::apps::AppsState::new();
-        // 只有账本可用时才接用量生产者;损坏时**不接**,避免记录写进无引用的临时文件。
-        if let Some(ledger) = &usage_ledger {
-            apps.attach_usage(ledger.clone(), scope_path.to_string_lossy().to_string());
+        // 只有 SQLite 账本可用时才接用量生产者;损坏时**不接**,避免记录写进无引用的临时库。
+        if let Some(handle) = &usage_handle {
+            apps.attach_usage_db(handle.clone(), scope_path.to_string_lossy().to_string());
         }
         let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
         let todo_client = dozer_client::Client::new(digger_paths::product().socket_path());
@@ -719,6 +461,8 @@ impl ProductShell {
             preview_hover: crate::adapters::hover::HoverTracker::new(),
             shutdown_started: false,
             shutdown_error: None,
+            shutdown_result: None,
+            usage_worker: usage_worker,
             #[cfg(test)]
             surface_callbacks: Vec::new(),
         };
@@ -1702,6 +1446,33 @@ impl ProductShell {
         }
     }
 
+    fn finish_shutdown_if_safe(&mut self) -> Task<Msg> {
+        let Some(result) = &self.shutdown_result else {
+            return Task::none();
+        };
+        if let Some(usage_error) = self.apps.usage_persistence_error() {
+            self.shutdown_error = Some(match result {
+                Ok(()) => usage_error,
+                Err(error) => format!("{error}\n{usage_error}"),
+            });
+            return Task::none();
+        }
+        match result {
+            Err(error) => {
+                self.shutdown_error = Some(error.clone());
+                Task::none()
+            }
+            Ok(()) => {
+                self.shutdown_error = None;
+                if self.lifecycle.is_some() {
+                    Task::none()
+                } else {
+                    iced::exit()
+                }
+            }
+        }
+    }
+
     fn update_settings(&mut self, msg: crate::settings::Message) -> Task<Msg> {
         use crate::settings::Message;
         match msg {
@@ -1822,6 +1593,33 @@ impl ProductShell {
                 .align_y(iced::Alignment::Center)
                 .into(),
             );
+        }
+        for (run_id, title) in self.apps.failed_usage() {
+            extra_top.push(
+                iced::widget::row![
+                    text_line(format!("用量记录未持久化：{title}（{run_id}）"), tokens.red),
+                    iced::widget::button("重试用量记录")
+                        .on_press(Msg::Apps(crate::apps::Message::RetryUsage(run_id))),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+        if let Some(reason) = self.apps.store_unavailable_reason() {
+            extra_top.push(text_line(
+                format!("浏览器数据清理台账不可读：{reason}（不会覆盖原文件）"),
+                tokens.red,
+            ));
+        }
+        if self.apps.store_dirty() {
+            extra_top.push(text_line(
+                format!(
+                    "清理意图尚未落盘，重启后可能不会继续：{}",
+                    self.apps.store_last_error().unwrap_or("未知写入错误")
+                ),
+                tokens.gold,
+            ));
         }
         if self.apps.store_pending_count() > 0 {
             extra_top.push(text_line(
@@ -2559,44 +2357,6 @@ impl ProductShell {
 }
 
 /// 顶栏三个槽位:标题只是展示;页签行与"＋"由项目注册表状态(`projects`)画。
-fn top_bar_slots<'a>(projects: &'a crate::projects::ProjectsState) -> TopBarSlots<'a, Msg> {
-    let tokens = color::current();
-    let dim = tokens.dim;
-    let title = row![
-        icons::view(IconKind::Home, icon_size::home(), dim),
-        text("Digger").size(font::body()).color(dim),
-    ]
-    .spacing(6)
-    .align_y(iced::Alignment::Center);
-    let tabs = projects.tabs_view().map(Msg::Projects);
-    let settings = iced::widget::button(icons::view(IconKind::Settings, icon_size::row(), dim))
-        .padding(4)
-        .on_press(Msg::Settings(crate::settings::Message::Open(None)))
-        .style(|_t: &iced::Theme, status: iced::widget::button::Status| {
-            let colors = color::current();
-            iced::widget::button::Style {
-                background: match status {
-                    iced::widget::button::Status::Hovered
-                    | iced::widget::button::Status::Pressed => Some(
-                        iced::Color {
-                            a: 0.15,
-                            ..colors.gold
-                        }
-                        .into(),
-                    ),
-                    _ => None,
-                },
-                ..Default::default()
-            }
-        });
-    TopBarSlots {
-        title: title.into(),
-        tabs,
-        right: settings.into(),
-    }
-}
-
-/// 拉起/连接 `diggerd`(boot 与「重试」共用同一条路径)。
 fn daemon_ensure_task() -> Task<Msg> {
     daemon_ensure_shell_task().map(Msg::AgentShell)
 }
@@ -2674,27 +2434,49 @@ impl ShellHost<Msg> for ProductShell {
 /// - 成功 → 真账本 + [`LedgerUsageService`](digger_store::LedgerUsageService);
 /// - 损坏/读失败 → **不退回临时空账本**,日志查询恒 `Unavailable`,账本为 `None`(调用方据此
 ///   不接线用量生产者——没有记录会悄悄写进一个下次启动就不再引用的文件)。原文件保持原样。
-fn load_usage_ledger(
-    path: std::path::PathBuf,
+fn load_usage_db(
+    db_path: std::path::PathBuf,
+    legacy_json: std::path::PathBuf,
 ) -> (
     std::sync::Arc<dyn dozer_services::UsageService>,
-    Option<std::sync::Arc<std::sync::Mutex<digger_store::UsageLedger>>>,
+    Option<digger_store::UsageWorker>,
+    Option<digger_store::UsageHandle>,
     String,
 ) {
-    match digger_store::UsageLedger::load(path) {
-        Ok(ledger) => {
-            let ledger = std::sync::Arc::new(std::sync::Mutex::new(ledger));
-            let svc: std::sync::Arc<dyn dozer_services::UsageService> =
-                std::sync::Arc::new(digger_store::LedgerUsageService::new(ledger.clone()));
-            let note = "尚未打开 Project。可在「应用」页管理并运行应用。".to_string();
-            (svc, Some(ledger), note)
-        }
+    let unavailable = |note: String| {
+        let svc: std::sync::Arc<dyn dozer_services::UsageService> =
+            std::sync::Arc::new(digger_store::UnavailableUsageService::new(note.clone()));
+        (svc, None, None, note)
+    };
+    let mut db = match digger_store::UsageDb::open(&db_path) {
+        Ok(db) => db,
         Err(e) => {
-            let note = format!("用量账本载入失败,用量查询暂不可用(不会丢数据:原文件未改动): {e}");
-            let svc: std::sync::Arc<dyn dozer_services::UsageService> =
-                std::sync::Arc::new(digger_store::UnavailableUsageService::new(note.clone()));
-            (svc, None, note)
+            return unavailable(format!(
+                "用量库打开失败,用量查询暂不可用(不会丢数据:原文件未改动): {e}"
+            ));
         }
+    };
+    let mut note = "尚未打开 Project。可在「应用」页管理并运行应用。".to_string();
+    match db.import_legacy_json(&legacy_json) {
+        Ok(digger_store::ImportOutcome::ArchivePending { runs, error }) => {
+            note = format!("已导入 {runs} 条旧用量记录;旧文件归档待完成: {error}");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return unavailable(format!(
+                "旧用量账本导入失败,用量查询暂不可用(不会丢数据:旧文件未改动): {e}"
+            ));
+        }
+    }
+    drop(db);
+    match digger_store::spawn_usage_worker(&db_path, 256) {
+        Ok(worker) => {
+            let handle = worker.handle();
+            let svc: std::sync::Arc<dyn dozer_services::UsageService> =
+                std::sync::Arc::new(digger_store::UsageDbService::new(handle.clone()));
+            (svc, Some(worker), Some(handle), note)
+        }
+        Err(e) => unavailable(format!("用量后台服务启动失败,用量查询暂不可用: {e}")),
     }
 }
 
@@ -2724,73 +2506,6 @@ thread_local! {
 /// N1:`window::run(..)` 返回的 `Task` 必须**作为返回值交给 iced 运行时**。把它在 `async` 块里
 /// `let _ =` 构造后丢掉(此前的写法)不会发出任何窗口动作,页面永远建不出来。注入用 `chain`
 /// 排在同步之后,保证新建的句柄已经存在。
-fn native_preview_task(
-    window: window::Id,
-    host: crate::adapters::preview_native::Host,
-    desired: Vec<(
-        dozer_panel_preview::PreviewWebviewSpec,
-        bytehost_core::LogicalRect,
-    )>,
-    scripts: Vec<(usize, String)>,
-) -> Task<Msg> {
-    let injector = host.clone();
-    let sync = window::run(window, move |w| host.sync(w, &desired)).discard();
-    if scripts.is_empty() {
-        return sync;
-    }
-    let inject = window::run(window, move |_| {
-        for (webview_id, script) in scripts {
-            injector.push_script(webview_id, script);
-        }
-    })
-    .discard();
-    sync.chain(inject)
-}
-
-/// G-C5:预览原生页面该服务于哪个项目。正在关闭时**任何**项目都不服务,
-/// 调用方据此同步空清单销毁页面;`None` 项目同理。
-fn preview_project(
-    current: Option<&dozer_model::ProjectInfo>,
-    closing: bool,
-) -> Option<dozer_model::ProjectInfo> {
-    if closing {
-        return None;
-    }
-    current.cloned()
-}
-
-/// 把当前窗口的分栏状态交给只读的展示适配器(`PanelDisplay` 拿不到 `&ProductShell`)。
-fn publish_panes(panes: &bytehost_desktop::PaneStore) {
-    CURRENT_PANES.with(|p| *p.borrow_mut() = Some(panes.clone()));
-}
-
-/// 待办轮询只在面板真正可见且未在退出时订阅。
-fn group_chat_poll_active(shell: &ProductShell) -> bool {
-    !shell.closing
-        && shell
-            .group_chat
-            .poll_wanted(shell.panel_visible(&shell::group_chat_id()))
-}
-
-fn todo_poll_active(shell: &ProductShell) -> bool {
-    !shell.closing && shell.panel_visible(&shell::todo_id())
-}
-
-/// 每个已注册面板此刻的可见性(下标与 [`shell::all_panels`] 对齐)。
-fn preview_panel_visible(flags: &[bool]) -> bool {
-    [shell::files_id(), shell::project_id()]
-        .iter()
-        .filter_map(|id| shell::all_panels().iter().position(|p| p == id))
-        .any(|i| flags.get(i).copied().unwrap_or(false))
-}
-
-fn visible_panels(shell: &ProductShell) -> Vec<bool> {
-    shell::all_panels()
-        .iter()
-        .map(|p| shell.panel_visible(p))
-        .collect()
-}
-
 impl Default for ProductShell {
     fn default() -> Self {
         Self::new()
@@ -3048,7 +2763,15 @@ impl Product<Msg> for ProductShell {
             Msg::Apps(crate::apps::Message::OpenSettings) => {
                 self.open_settings(Some(crate::settings::apps_page_id()))
             }
-            Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
+            Msg::Apps(m) => {
+                let task = self.apps.update(m).map(Msg::Apps);
+                let finish = if self.closing {
+                    self.finish_shutdown_if_safe()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, finish])
+            }
             Msg::Usage(m) => {
                 // 库的 `update` 对这两条是 `unreachable!`(它们必须由宿主拦截):折叠转给骨架,悬停无事可做。
                 match m {
@@ -3618,15 +3341,10 @@ impl Product<Msg> for ProductShell {
                 self.lifecycle = Some(driver);
                 task
             }
-            Msg::ShutdownFinished(result) => match result {
-                // 生命周期自检要在关闭之后读句柄表,检查完自己退出
-                Ok(()) if self.lifecycle.is_some() => Task::none(),
-                Ok(()) => iced::exit(),
-                Err(error) => {
-                    self.shutdown_error = Some(error);
-                    Task::none()
-                }
-            },
+            Msg::ShutdownFinished(result) => {
+                self.shutdown_result = Some(result);
+                self.finish_shutdown_if_safe()
+            }
             Msg::ForceExit => iced::exit(),
             Msg::CloseRequested(id) => {
                 if self.settings.window == Some(id) {
@@ -3852,10 +3570,24 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
         shell.shutdown_started = true;
         let drain = shell.agent.drain_critical();
         let apps = shell.apps.shutdown();
+        let usage_worker = shell.usage_worker.take();
         Task::batch([task, native, grid]).chain(Task::perform(
             async move {
                 let (apps, ()) = tokio::join!(apps, drain);
-                apps
+                let usage = tokio::task::spawn_blocking(move || {
+                    usage_worker.map(digger_store::UsageWorker::shutdown)
+                })
+                .await;
+                let usage = match usage {
+                    Ok(Some(Err(e))) => Err(e),
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(format!("用量后台任务失败: {e}")),
+                };
+                match (apps, usage) {
+                    (Err(e), _) => Err(e),
+                    (Ok(()), Err(e)) => Err(format!("用量账本退出排空失败: {e}")),
+                    _ => Ok(()),
+                }
             },
             Msg::ShutdownFinished,
         ))
@@ -3945,225 +3677,6 @@ fn window_state_event(event: iced::Event, _: iced::event::Status, id: window::Id
 }
 
 /// 订阅:窗口关闭请求、骨架需要的鼠标 / 缩放事件,以及仅在有动画时才开的 ~60fps 动画拍。
-pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
-    let events = iced::event::listen_with(|evt, _status, id| {
-        if let iced::Event::Window(window::Event::CloseRequested) = evt {
-            return Some(Msg::CloseRequested(id));
-        }
-        if crate::is_secondary_window(id) {
-            return None;
-        }
-        bytehost_chrome::map_event(&evt).map(Msg::Shell)
-    });
-    if shell.closing {
-        return events;
-    }
-    // 终端输入:键盘只在未被控件消费时投;鼠标按下带最近一次光标位置;
-    // 拖入文件走窗口事件。`listen_with` 只收函数指针,光标与浮层状态由
-    // `view` 每帧写进进程级原子,供订阅工作线程读取。
-    let agent_input = iced::event::listen_with(agent_event);
-    // 左键按下 / 松开与修饰键:文件树的单击 / 拖拽 / 多选靠它们(库对这些消息的 `update` 不处理)。
-    let pointer = iced::event::listen_with(|evt, _status, id| {
-        if crate::is_secondary_window(id) {
-            return None;
-        }
-        match evt {
-            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
-                Some(Msg::LeftButton(true))
-            }
-            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-                Some(Msg::LeftButton(false))
-            }
-            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
-                Some(Msg::Modifiers(modifiers))
-            }
-            _ => None,
-        }
-    });
-    let mut subs = vec![
-        events,
-        pointer,
-        agent_input,
-        iced::event::listen_with(window_state_event),
-        iced::time::every(std::time::Duration::from_secs(1)).map(|_| Msg::Tick),
-    ];
-    // 页签拖拽中:在页签行外松手也要结束拖拽(行内松手由页签行自己的 `on_release` 管),
-    // 否则之后光标滑过页签行会接着重排并落盘。只在拖拽中订阅。
-    if shell.projects.is_dragging() {
-        subs.push(iced::event::listen_with(|evt, _status, _id| {
-            matches!(
-                evt,
-                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
-                    iced::mouse::Button::Left
-                ))
-            )
-            .then_some(Msg::Projects(crate::projects::Message::DragEnd))
-        }));
-    }
-    // 待办面板可见时每秒轮询一次(收起整个面板即停,省电)。
-    if todo_poll_active(shell) {
-        subs.push(iced::time::every(crate::adapters::todo::POLL_INTERVAL).map(|_| Msg::TodoPoll));
-    }
-    if group_chat_poll_active(shell) {
-        subs.push(
-            iced::time::every(std::time::Duration::from_millis(500)).map(|_| Msg::GroupChatTick),
-        );
-    }
-    // 名称编辑框的真焦点态只有渲染时(Operation)读得到:用一个 16ms 的订阅在帧与帧之间
-    // 把它取回来(同 Dozer 的 `CaptureNameEditFocus`,这里借订阅当逐帧钩子)。
-    if let Some(project) = shell.projects.current_project().map(|p| p.id)
-        && shell.panel_visible(&shell::project_id())
-    {
-        subs.push(iced::Subscription::run_with(
-            NameFocusProbe(project),
-            |probe| {
-                let project = probe.0;
-                iced::stream::channel(
-                    1,
-                    move |mut out: iced::futures::channel::mpsc::Sender<Msg>| async move {
-                        use iced::futures::SinkExt;
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-                            if out.send(Msg::ProjectFocusFrame(project)).await.is_err() {
-                                break;
-                            }
-                        }
-                    },
-                )
-            },
-        ));
-    }
-    if let Some(pid) = shell.conversation_search_project() {
-        subs.push(Subscription::run_with(
-            ConversationSearchFocusProbe(pid),
-            |probe| {
-                let pid = probe.0;
-                iced::stream::channel(
-                    1,
-                    move |mut out: iced::futures::channel::mpsc::Sender<Msg>| async move {
-                        use iced::futures::SinkExt;
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-                            if out
-                                .send(Msg::ConversationSearchFocusFrame(pid))
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    },
-                )
-            },
-        ));
-    }
-    if let Some(pid) = shell.browser_project() {
-        subs.push(Subscription::run_with(BrowserFocusProbe(pid), |probe| {
-            let pid = probe.0;
-            iced::stream::channel(
-                1,
-                move |mut out: iced::futures::channel::mpsc::Sender<Msg>| async move {
-                    use iced::futures::SinkExt;
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-                        if out.send(Msg::BrowserFocusFrame(pid)).await.is_err() {
-                            break;
-                        }
-                    }
-                },
-            )
-        }));
-    }
-    #[cfg(any(not(target_os = "macos"), test))]
-    if let Some(pid) = shell.conversation_search_project()
-        && shell
-            .conversations
-            .state(pid)
-            .is_some_and(|state| state.agent_picker_open())
-    {
-        subs.push(
-            iced::event::listen_with(|event, _, _| {
-                matches!(
-                    event,
-                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-                        ..
-                    })
-                )
-                .then_some(())
-            })
-            .with(pid)
-            .map(|(pid, ())| {
-                Msg::Conversations(pid, dozer_panel_conversations::Message::AgentFilterClose)
-            }),
-        );
-    }
-    // 新建群弹窗:Esc 取消(背景点击不关闭,保留草稿)。
-    if let Some(pid) = shell.projects.current_project().map(|p| p.id)
-        && shell
-            .group_chat
-            .state(pid)
-            .is_some_and(|state| state.new_group_dialog_open())
-    {
-        subs.push(
-            iced::event::listen_with(|evt, _status, _id| {
-                matches!(
-                    evt,
-                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-                        ..
-                    })
-                )
-                .then_some(())
-            })
-            .with(pid)
-            .map(|(pid, ())| {
-                Msg::GroupChat(dozer_panel_group_chat::Message::NewGroupDialogCancel(pid))
-            }),
-        );
-    }
-
-    // 右键菜单打开时订阅 Esc:关掉浮层(点空白走浮层自己的透明按下区)。
-    if shell.files.has_modal() || shell.files.menu().is_some() {
-        subs.push(iced::event::listen_with(|evt, _status, _id| {
-            matches!(
-                evt,
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-                    ..
-                })
-            )
-            .then_some(Msg::FilesMenuDismiss)
-        }));
-    }
-    // Agent 覆盖层(选择器 / 溢出下拉)或关页签确认打开时 Esc 关最上层。
-    let agent_confirm = shell
-        .projects
-        .current_project()
-        .and_then(|p| shell.agent.states.get(&p.id))
-        .is_some_and(|state| state.pending_close_tab.is_some());
-    if shell.agent.overlay_is_open() || agent_confirm {
-        subs.push(iced::event::listen_with(|evt, _status, _id| {
-            matches!(
-                evt,
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-                    ..
-                })
-            )
-            .then_some(Msg::AgentEscape)
-        }));
-    }
-    if shell.shell.animating() {
-        subs.push(
-            iced::time::every(std::time::Duration::from_millis(16))
-                .map(|_| Msg::Shell(ShellMsg::Tick)),
-        );
-    }
-    Subscription::batch(subs)
-}
-
-/// 面板内弹窗:整窗半透明遮罩 + 居中卡片。点遮罩关闭。
 fn centered_modal<'a>(card: Element<'a, Msg>, on_dismiss: Msg) -> Element<'a, Msg> {
     let scrim: Element<'a, Msg> = iced_widget::mouse_area(
         container(iced_widget::Space::new())
@@ -4855,6 +4368,109 @@ mod tests {
     /// 带独立落盘路径的壳:互不干扰,也不碰真实配置目录。
     fn fresh(tag: &str) -> ProductShell {
         ProductShell::with_shell_path(test_temp_dir(tag).join("shell.json"))
+    }
+
+    fn completed_usage_for_exit(run_id: &str) -> digger_store::CompletionEvent {
+        let clock = digger_store::SystemClock;
+        let run = digger_store::begin_run(
+            &clock,
+            run_id,
+            1,
+            "/scope",
+            dozer_model::AgentKind::Unknown,
+            "operation",
+        );
+        digger_store::complete_run(&clock, run, digger_store::TaskOutcome::default())
+    }
+
+    #[tokio::test]
+    async fn a_clean_worker_shutdown_does_not_discard_failed_usage() {
+        let mut shell = fresh("usage-exit-failed");
+        let worker = digger_store::spawn_usage_worker(
+            test_temp_dir("usage-exit-failed-db").join("usage.sqlite3"),
+            4,
+        )
+        .unwrap();
+        let handle = worker.handle();
+        shell.apps.attach_usage_db(handle.clone(), "/scope".into());
+        let mut event = completed_usage_for_exit("failed-before-exit");
+        event.tokens_in = u64::MAX;
+        let result = handle.record(event.clone()).unwrap().await.unwrap();
+        assert!(result.is_err());
+        let _ = shell
+            .apps
+            .update(crate::apps::Message::UsagePersisted(event, result));
+        tokio::task::spawn_blocking(move || worker.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        shell.closing = true;
+        let task = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::ShutdownFinished(Ok(()))),
+        );
+        assert!(
+            iced_runtime::task::into_stream(task).is_none(),
+            "a normal exit would drop the failed event"
+        );
+        assert_eq!(shell.apps.failed_usage().len(), 1);
+        assert!(
+            shell
+                .shutdown_error
+                .as_deref()
+                .unwrap()
+                .contains("未确认落盘")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_late_usage_acknowledgement_releases_an_otherwise_clean_exit() {
+        use iced::futures::StreamExt;
+        let mut shell = fresh("usage-exit-pending");
+        let worker = digger_store::spawn_usage_worker(
+            test_temp_dir("usage-exit-pending-db").join("usage.sqlite3"),
+            4,
+        )
+        .unwrap();
+        shell.apps.attach_usage_db(worker.handle(), "/scope".into());
+        let event = completed_usage_for_exit("pending-at-exit");
+        let _ = shell.apps.update(crate::apps::Message::UsagePersisted(
+            event.clone(),
+            Err("retry this record".into()),
+        ));
+        let retry = shell
+            .apps
+            .update(crate::apps::Message::RetryUsage(event.run_id.clone()));
+        assert!(shell.apps.failed_usage().is_empty());
+        assert!(
+            shell.apps.usage_persistence_error().is_some(),
+            "submission is not a durable acknowledgement"
+        );
+        tokio::task::spawn_blocking(move || worker.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        shell.closing = true;
+        let task = Product::update(
+            &mut shell,
+            HostMessage::Product(Msg::ShutdownFinished(Ok(()))),
+        );
+        assert!(iced_runtime::task::into_stream(task).is_none());
+        let mut replies = iced_runtime::task::into_stream(retry).unwrap();
+        let reply = loop {
+            if let iced_runtime::Action::Output(message) = replies.next().await.unwrap() {
+                break message;
+            }
+        };
+        let task = Product::update(&mut shell, HostMessage::Product(Msg::Apps(reply)));
+        assert!(shell.apps.usage_persistence_error().is_none());
+        assert!(shell.shutdown_error.is_none());
+        let mut actions = iced_runtime::task::into_stream(task).unwrap();
+        let mut exited = false;
+        while let Some(action) = actions.next().await {
+            exited |= matches!(action, iced_runtime::Action::Exit);
+        }
+        assert!(exited);
     }
 
     fn press(shell: &mut ProductShell, panel: &PanelId) {
@@ -6994,8 +6610,12 @@ mod tests {
         let original = b"{ this is not json";
         std::fs::write(&path, original).unwrap();
 
-        let (service, ledger, note) = load_usage_ledger(path.clone());
-        assert!(ledger.is_none(), "损坏时不得接线任何账本(含临时空账本)");
+        let (service, worker, handle, note) =
+            load_usage_db(dir.join("usage.sqlite3"), path.clone());
+        assert!(
+            worker.is_none() && handle.is_none(),
+            "损坏时不得接线任何账本(含临时空账本)"
+        );
         assert!(note.contains("暂不可用"), "boot 提示应说明不可用:{note}");
         let err = service
             .usage_summary("/p/a".into(), None)

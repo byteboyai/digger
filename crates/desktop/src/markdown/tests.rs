@@ -5,13 +5,108 @@ use serde_json::json;
 fn page(panel: &MarkdownPanel, v: serde_json::Value) -> String {
     let mut v = v;
     v["n"] = json!(panel.nonce);
+    if v["t"] == "ready" {
+        v["protocol"] = json!(digger_editor::protocol::PROTOCOL_VERSION);
+    }
     v.to_string()
 }
 
 fn live_panel() -> MarkdownPanel {
     let mut p = MarkdownPanel::with_mode(Mode::Normal);
-    p.live = true;
+    p.creation = CreationState::Ready {
+        generation: p.generation(),
+    };
     p
+}
+
+fn rect() -> LogicalRect {
+    LogicalRect {
+        x: 0.0,
+        y: 0.0,
+        width: 800.0,
+        height: 600.0,
+    }
+}
+
+#[test]
+fn a_failed_creation_retries_with_a_new_generation_and_ignores_the_old_one() {
+    let mut p = MarkdownPanel::with_mode(Mode::Normal);
+    p.window = Some(window::Id::unique());
+    p.bounds = Some(rect());
+    p.shown = true;
+    p.creation = CreationState::Failed {
+        generation: 0,
+        error: "boom".into(),
+    };
+    assert_eq!(p.failed_error(), Some("boom"));
+
+    let _ = p.update(Message::Retry);
+    assert_eq!(
+        p.creation,
+        CreationState::Building { generation: 1 },
+        "retry advances the generation and clears the old error"
+    );
+    assert_eq!(p.failed_error(), None);
+
+    // A late success / failure from the failed generation must not touch the new instance.
+    let _ = p.update(Message::Built(0, Ok(())));
+    assert_eq!(p.creation, CreationState::Building { generation: 1 });
+
+    let _ = p.update(Message::Built(1, Err("again".into())));
+    assert_eq!(
+        p.creation,
+        CreationState::Failed {
+            generation: 1,
+            error: "again".into()
+        }
+    );
+
+    let _ = p.update(Message::Retry);
+    let _ = p.update(Message::Built(2, Ok(())));
+    assert_eq!(p.creation, CreationState::Ready { generation: 2 });
+}
+
+#[test]
+fn hiding_and_showing_a_ready_panel_does_not_rebuild_it() {
+    let mut p = live_panel();
+    let generation = p.generation();
+    let id = window::Id::unique();
+    p.shown = true;
+    p.bounds = Some(rect());
+    let _ = p.sync_native(id, false, rect());
+    assert!(!p.shown);
+    let _ = p.sync_native(id, true, rect());
+    assert!(p.shown);
+    assert_eq!(
+        p.generation(),
+        generation,
+        "show/hide keeps the same webview"
+    );
+    assert_eq!(p.creation, CreationState::Ready { generation });
+}
+
+#[test]
+fn a_failed_panel_rebuilds_when_it_is_shown_again() {
+    let mut p = MarkdownPanel::with_mode(Mode::Normal);
+    p.creation = CreationState::Failed {
+        generation: 0,
+        error: "boom".into(),
+    };
+    p.shown = false;
+    let _ = p.sync_native(window::Id::unique(), true, rect());
+    assert_eq!(p.creation, CreationState::Building { generation: 1 });
+    assert!(p.shown);
+}
+
+#[test]
+fn closing_sets_closed_and_advances_the_generation() {
+    let mut p = live_panel();
+    let generation = p.generation();
+    let _ = p.close(window::Id::unique());
+    assert_eq!(p.creation, CreationState::Closed);
+    assert_eq!(p.generation(), generation + 1);
+    assert!(!p.is_live());
+    assert!(!p.shown);
 }
 
 #[test]

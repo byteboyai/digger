@@ -104,14 +104,14 @@ impl TaskRunner {
         agent: AgentKind,
         title: impl Into<String>,
     ) -> RunningTask {
-        RunningTask {
-            run_id: run_id.into(),
+        begin_run(
+            self.clock.as_ref(),
+            run_id,
             project_id,
-            project_path: project_path.into(),
+            project_path,
             agent,
-            title: title.into(),
-            started_ts_ms: self.clock.now_ms(),
-        }
+            title,
+        )
     }
 
     /// 结束一次运行:以**当前时刻**为结束时刻,结算成 [`CompletionEvent`] 并记入账本。
@@ -123,23 +123,7 @@ impl TaskRunner {
         run: RunningTask,
         outcome: TaskOutcome,
     ) -> Result<bool, UsageLedgerError> {
-        let event = CompletionEvent {
-            run_id: run.run_id,
-            project_id: run.project_id,
-            project_path: run.project_path,
-            agent: run.agent,
-            title: run.title,
-            started_ts_ms: run.started_ts_ms,
-            finished_ts_ms: self.clock.now_ms(),
-            turns: outcome.turns,
-            tool_calls: outcome.tool_calls,
-            mutating_tool_calls: outcome.mutating_tool_calls,
-            files_touched: outcome.files_touched,
-            tokens_in: outcome.tokens_in,
-            tokens_out: outcome.tokens_out,
-            tokens_cache_read: outcome.tokens_cache_read,
-            tokens_cache_write: outcome.tokens_cache_write,
-        };
+        let event = complete_run(self.clock.as_ref(), run, outcome);
         let mut ledger = self.ledger.lock().map_err(|_| UsageLedgerError::Corrupt {
             path: std::path::PathBuf::new(),
             message: "用量账本锁被污染".to_string(),
@@ -150,6 +134,46 @@ impl TaskRunner {
     /// 账本句柄(诊断/测试):与 [`crate::service::LedgerUsageService`] 共享同一实例。
     pub fn ledger(&self) -> Arc<Mutex<UsageLedger>> {
         Arc::clone(&self.ledger)
+    }
+}
+
+/// 开启一次运行(与 [`TaskRunner`] 共用同一时钟语义;后台 worker 生产者直接用它,不必先持有账本)。
+pub fn begin_run(
+    clock: &dyn Clock,
+    run_id: impl Into<String>,
+    project_id: i64,
+    project_path: impl Into<String>,
+    agent: AgentKind,
+    title: impl Into<String>,
+) -> RunningTask {
+    RunningTask {
+        run_id: run_id.into(),
+        project_id,
+        project_path: project_path.into(),
+        agent,
+        title: title.into(),
+        started_ts_ms: clock.now_ms(),
+    }
+}
+
+/// 结束一次运行并结算成完成事件;结束时刻只在这里取一次,A9 的重试必须复用同一个事件。
+pub fn complete_run(clock: &dyn Clock, run: RunningTask, outcome: TaskOutcome) -> CompletionEvent {
+    CompletionEvent {
+        run_id: run.run_id,
+        project_id: run.project_id,
+        project_path: run.project_path,
+        agent: run.agent,
+        title: run.title,
+        started_ts_ms: run.started_ts_ms,
+        finished_ts_ms: clock.now_ms(),
+        turns: outcome.turns,
+        tool_calls: outcome.tool_calls,
+        mutating_tool_calls: outcome.mutating_tool_calls,
+        files_touched: outcome.files_touched,
+        tokens_in: outcome.tokens_in,
+        tokens_out: outcome.tokens_out,
+        tokens_cache_read: outcome.tokens_cache_read,
+        tokens_cache_write: outcome.tokens_cache_write,
     }
 }
 

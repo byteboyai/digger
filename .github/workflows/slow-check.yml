@@ -1,0 +1,47 @@
+name: Slow verification
+
+# 完整属性集与 Release 基准。PR 门禁只跑快速代表集;这里保留全部种子与性能原始样本,
+# 结果作为 artifact 上传,便于失败复现。图形 / 进程查询相关自检仍需要本地 macOS 环境。
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  slow:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout digger
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-slow-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: 完整属性集(Release)
+        run: |
+          mkdir -p artifacts
+          cargo test --locked --release -p digger-editor --test properties -- --nocapture 2>&1 | tee artifacts/properties.log
+
+      - name: Release 基准(100 / 1000 / 5000 块)
+        run: |
+          mkdir -p artifacts
+          cargo run --locked --release -q -p digger-editor --example sync_bench 2>&1 | tee artifacts/sync_bench.log
+
+      - name: 上传样本与失败日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slow-verification-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn

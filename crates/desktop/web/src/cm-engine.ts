@@ -4,7 +4,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { history, historyKeymap, undo } from "@codemirror/commands";
 import type { Engine, RustApi } from "./engine";
-import { RustSync, fnv } from "./rust-sync";
+import { RustSync, fnv, type SyncState } from "./rust-sync";
 import { Footnote } from "./footnote";
 
 class ImageWidget extends WidgetType {
@@ -143,11 +143,74 @@ const theme = EditorView.theme({
   ".cm-quote": { borderLeft: "3px solid var(--editor-border)", paddingLeft: "10px", color: "var(--editor-muted)" },
 });
 
+/** A small, first-party banner for a sync conflict: show the draft, let the author copy it or choose explicitly. */
+type RecoveryBanner = {
+  kind: "conflict" | "failed";
+  snapshotText: string;
+  draft: string;
+  message?: string;
+  retryable?: boolean;
+};
+
+function makeConflictBanner(actions: {
+  resolveWithSnapshot: () => void;
+  commitDraft: () => void;
+  retrySync: () => void;
+}): { show: (info: RecoveryBanner | null) => void } {
+  let banner: HTMLDivElement | null = null;
+  return {
+    show(info) {
+      if (!info) {
+        banner?.remove();
+        banner = null;
+        return;
+      }
+      if (banner) banner.remove();
+      banner = document.createElement("div");
+      banner.id = "sync-conflict";
+      banner.style.cssText = "position:fixed;left:16px;right:16px;bottom:16px;z-index:9999;background:var(--editor-bg);color:var(--editor-fg);border:1px solid var(--editor-border);border-radius:8px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font:14px/1.5 -apple-system,sans-serif";
+      const title = document.createElement("div");
+      title.textContent =
+        info.kind === "failed"
+          ? `同步已停止：${info.message ?? "恢复失败"}。本地草稿已保留。`
+          : "同步失败：本地有未确认的修改。请选择保留你的草稿，或采用 Rust 保存的版本。";
+      const draft = document.createElement("textarea");
+      draft.readOnly = true;
+      draft.value = info.draft;
+      draft.style.cssText = "width:100%;height:96px;margin:8px 0;font:12px ui-monospace,monospace";
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
+      const mk = (label: string, fn: () => void) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.onclick = fn;
+        row.appendChild(b);
+      };
+      mk("复制草稿", () => void navigator.clipboard?.writeText(info.draft));
+      if (info.kind === "failed") {
+        if (info.retryable) mk("重试同步", () => actions.retrySync());
+      } else {
+        mk("采用 Rust 版本", () => actions.resolveWithSnapshot());
+        mk("提交我的草稿", () => actions.commitDraft());
+      }
+      banner.append(title, draft, row);
+      document.body.appendChild(banner);
+    },
+  };
+}
+
 export function createCm(post: (o: unknown) => void = () => {}): Engine {
   let view: EditorView;
+  const conflictBanner = makeConflictBanner({
+    resolveWithSnapshot: () => { sync.resolveWithSnapshot(); },
+    commitDraft: () => { sync.commitDraft(); },
+    retrySync: () => { sync.retrySync(); },
+  });
+  const showConflict = (info: RecoveryBanner | null) => conflictBanner.show(info);
   let sync: RustSync;
   let eventLog: (line: string) => void = () => {};
   const rust: RustApi = {
+    start(engine) { sync.start(engine); },
     async load(text) {
       sync.loading = true;
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor: 0 } });
@@ -173,9 +236,15 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
     pressKey(init) { view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); },
     composing: () => view.composing,
     pending: () => ({ inflight: sync.inflight, queued: !!sync.queued }),
+    syncState: (): SyncState => sync.state,
+    conflict: () => sync.conflictInfo ? { snapshotText: sync.conflictInfo.snapshot.text, draft: sync.conflictInfo.draft } : null,
+    resolveWithSnapshot() { sync.resolveWithSnapshot(); },
+    commitDraft() { sync.commitDraft(); },
+    failure: () => sync.failureInfo,
+    retrySync() { sync.retrySync(); },
     onEvent(cb) { eventLog = cb; },
     stats: () => ({ remoteApplied: sync.remoteApplied, remoteTransformed: sync.remoteTransformed }),
-    detach() { sync.active = false; rustTops = () => null; view.dispatch({ effects: refresh.of(null) }); },
+    detach() { sync.close("editor detached"); sync.active = false; rustTops = () => null; view.dispatch({ effects: refresh.of(null) }); },
   };
   const blocks = (s: EditorState) => {
     const out: { from: number; to: number }[] = [];
@@ -232,6 +301,19 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
           sync.loading = false;
           rustTops = () => (sync.active ? sync.blocks : null);
           sync.adopt(m);
+        },
+        {
+          getText: () => view.state.doc.toString(),
+          computeHash: window.__DIGGER__?.mode === "selftest",
+          onState: (state) => {
+            if (state === "conflict" && sync.conflictInfo) {
+              showConflict({ kind: "conflict", snapshotText: sync.conflictInfo.snapshot.text, draft: sync.conflictInfo.draft });
+            } else if (state === "failed" && sync.failureInfo) {
+              showConflict({ kind: "failed", snapshotText: "", draft: sync.failureInfo.draft, message: sync.failureInfo.message, retryable: sync.failureInfo.retryable });
+            } else {
+              showConflict(null);
+            }
+          },
         },
       );
     },

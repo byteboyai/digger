@@ -74,6 +74,8 @@ enum NoticeKind {
     List,
     /// 页签文件没保存:下一次保存成功时清掉。
     Save,
+    /// 项目数据已迁移,但旧文件归档失败:不影响使用,提示可重试。
+    Migration,
 }
 
 /// 顶栏上提示文字的最大字数;全文放在悬停提示里。
@@ -134,8 +136,17 @@ impl ProjectsState {
     /// 并先把 `legacy_db`(旧 `projects.db`)迁入。迁移失败显示"项目功能不可用",不静默回退。
     pub fn open_with(dir: &Path, db_path: &Path, legacy_db: &Path) -> Self {
         let loaded = ProjectTabs::load(&dir.join(paths::PROJECT_TABS_FILE));
-        let (host, notice) = match ProjectHost::open_in(db_path, legacy_db) {
-            Ok(host) => (Some(host), None),
+        let (host, notice) = match ProjectHost::open_in_with_outcome(db_path, legacy_db) {
+            Ok((host, outcome)) => (
+                Some(host),
+                match outcome {
+                    digger_store::MigrationOutcome::ArchivePending { error, .. } => Some((
+                        NoticeKind::Migration,
+                        format!("项目数据已迁移,旧文件归档待完成(下次启动重试): {error}"),
+                    )),
+                    _ => None,
+                },
+            ),
             Err(e) => (
                 None,
                 Some((NoticeKind::Unavailable, format!("项目功能不可用: {e}"))),

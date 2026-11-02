@@ -34,6 +34,8 @@ pub enum Message {
     /// 页面发来的原始消息,带它所属 webview 的 generation。
     Page(u64, String),
     Built(u64, Result<(), String>),
+    /// 用户点「重试」:失败后真实重建一个新 generation。
+    Retry,
     /// 生命周期自检的探针结果。
     Probed(Probe),
     /// 顶栏按钮:替身 Agent。
@@ -41,20 +43,33 @@ pub enum Message {
     Done,
 }
 
+/// 编辑器 webview 的创建状态。可见性 / 几何独立保存在 `shown` / `bounds`,不参与这个状态机。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CreationState {
+    /// 还没有创建过。
+    Idle,
+    /// 正在创建某个 generation。
+    Building { generation: u64 },
+    /// 该 generation 已创建,等待页面 ready。
+    Ready { generation: u64 },
+    /// 该 generation 创建失败;可点「重试」或切走再回来。
+    Failed { generation: u64, error: String },
+    /// 退出时销毁。
+    Closed,
+}
+
 pub struct MarkdownPanel {
     bridge: Bridge,
     nonce: String,
-    /// 当前 webview 的 generation;每次销毁都 +1,迟到的旧消息据此丢弃。
+    /// 当前 webview 的 generation;每次销毁 / 重建都 +1,迟到的旧消息据此丢弃。
     epoch: Arc<AtomicU64>,
-    /// webview 已创建(或正在创建)。
-    live: bool,
+    creation: CreationState,
     /// 页面说过 ready、Rust 已回 open:此后才能向页面推送。
     ready: bool,
     shown: bool,
     bounds: Option<LogicalRect>,
     /// 把回复送回页面要窗口 id。
     window: Option<window::Id>,
-    pub error: Option<String>,
     rejects: u32,
     last_reject: Option<String>,
     stand_in_runs: usize,
@@ -107,12 +122,11 @@ impl MarkdownPanel {
             bridge: Bridge::new(SAMPLE, mode, nonce.clone()),
             nonce,
             epoch: Arc::new(AtomicU64::new(0)),
-            live: false,
+            creation: CreationState::Idle,
             ready: false,
             shown: false,
             bounds: None,
             window: None,
-            error: None,
             rejects: 0,
             last_reject: None,
             stand_in_runs: 0,
@@ -137,10 +151,30 @@ impl MarkdownPanel {
         self.epoch.load(Ordering::SeqCst)
     }
 
+    /// webview 存在(创建中或已创建)。
+    fn is_live(&self) -> bool {
+        matches!(
+            self.creation,
+            CreationState::Building { .. } | CreationState::Ready { .. }
+        )
+    }
+
+    /// 当前创建状态(测试 / 生命周期自检读)。
+    pub fn creation_state(&self) -> &CreationState {
+        &self.creation
+    }
+
+    fn failed_error(&self) -> Option<&str> {
+        match &self.creation {
+            CreationState::Failed { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Page(generation, raw) => {
-                if !self.live || generation != self.generation() {
+                if !self.is_live() || generation != self.generation() {
                     return Task::none(); // 迟到的旧 generation:丢弃,绝不应用
                 }
                 match self.bridge.handle(&raw) {
@@ -159,14 +193,24 @@ impl MarkdownPanel {
                 }
             }
             Message::Built(generation, result) => {
-                if generation == self.generation()
-                    && self.live
-                    && let Err(error) = result
+                // 只接受当前 Building generation 的结果;旧 generation 的迟到成功 / 失败都不改变新实例。
+                if !matches!(self.creation, CreationState::Building { generation: g } if g == generation)
+                    || generation != self.generation()
                 {
-                    self.error = Some(error);
+                    return Task::none();
+                }
+                match result {
+                    Ok(()) => {
+                        self.creation = CreationState::Ready { generation };
+                    }
+                    Err(error) => {
+                        self.ready = false;
+                        self.creation = CreationState::Failed { generation, error };
+                    }
                 }
                 Task::none()
             }
+            Message::Retry => self.start_build(),
             Message::StandIn(what) => {
                 if !self.ready {
                     return Task::none();
@@ -253,6 +297,10 @@ impl MarkdownPanel {
     }
 
     /// 面板几何与可见性同步。`rect` 是面板内容区;webview 让出顶栏。
+    ///
+    /// - Idle / Closed / 失败后重新显示 → 建一个新 generation;
+    /// - Ready 隐藏时不重建(文档与撤销栈留在页面里),显示只改可见性 / 几何;
+    /// - Failed 且仍在显示 → 等用户点「重试」,不每帧自动重试。
     pub fn sync_native(
         &mut self,
         id: window::Id,
@@ -266,58 +314,97 @@ impl MarkdownPanel {
             width: rect.width,
             height: (rect.height - BAR_HEIGHT).max(1.0),
         };
+        let was_shown = self.shown;
         if !visible {
             // 切走:隐藏而不是留一个看不见的 webview 盖在别的面板上;文档与撤销历史留在页面里
-            if !self.live || !self.shown {
+            self.shown = false;
+            if !self.is_live() || !was_shown {
                 return Task::none();
             }
-            self.shown = false;
             let generation = self.generation();
             return window::run(id, move |_| {
                 host::set_visible(generation, false);
                 Message::Done
             });
         }
-        if !self.live {
-            self.live = true;
-            self.shown = true;
-            self.bounds = Some(web);
-            let (generation, nonce, mode, tx) = (
-                self.generation(),
-                self.nonce.clone(),
-                self.bridge.mode(),
-                self.tx.clone(),
-            );
-            return window::run(id, move |w| {
-                Message::Built(
-                    generation,
-                    host::build(&w, generation, web, &nonce, mode, tx),
-                )
-            });
+        match &self.creation {
+            CreationState::Building { .. } => {
+                let moved = self.bounds != Some(web);
+                self.bounds = Some(web);
+                self.shown = true;
+                if moved {
+                    let generation = self.generation();
+                    return window::run(id, move |_| {
+                        host::set_bounds(generation, web);
+                        Message::Done
+                    });
+                }
+                Task::none()
+            }
+            CreationState::Ready { .. } => {
+                let moved = self.bounds != Some(web);
+                self.shown = true;
+                self.bounds = Some(web);
+                if was_shown && !moved {
+                    return Task::none();
+                }
+                let generation = self.generation();
+                window::run(id, move |_| {
+                    if moved {
+                        host::set_bounds(generation, web);
+                    }
+                    if !was_shown {
+                        host::set_visible(generation, true);
+                    }
+                    Message::Done
+                })
+            }
+            // 仍在显示时的失败只等显式重试;切走再回来(showing 一次新的一次)才自动重建。
+            CreationState::Failed { .. } if was_shown => Task::none(),
+            _ => self.start_build_with(id, web),
         }
-        if self.error.is_some() {
+    }
+
+    /// 建一个新 generation:先销毁旧句柄(迟到回包由 generation 挡掉),清掉旧错误,再构建。
+    fn start_build_with(&mut self, id: window::Id, web: LogicalRect) -> Task<Message> {
+        if matches!(self.creation, CreationState::Building { .. }) {
             return Task::none();
         }
-        let (was_shown, moved) = (self.shown, self.bounds != Some(web));
+        let old = self.epoch.fetch_add(1, Ordering::SeqCst);
+        let generation = old + 1;
+        self.ready = false;
+        self.rejects = 0;
+        self.last_reject = None;
         self.shown = true;
         self.bounds = Some(web);
-        if was_shown && !moved {
+        self.creation = CreationState::Building { generation };
+        let (nonce, mode, tx) = (self.nonce.clone(), self.bridge.mode(), self.tx.clone());
+        let destroy = window::run(id, move |_| {
+            host::destroy(old);
+            Message::Done
+        });
+        let build = window::run(id, move |w| {
+            Message::Built(
+                generation,
+                host::build(&w, generation, web, &nonce, mode, tx),
+            )
+        });
+        Task::batch([destroy, build])
+    }
+
+    /// 顶栏「重试」:只有 Failed 状态可触发;用上次的窗口与几何真实重建。
+    fn start_build(&mut self) -> Task<Message> {
+        let (Some(id), Some(web)) = (self.window, self.bounds) else {
+            return Task::none();
+        };
+        if !matches!(self.creation, CreationState::Failed { .. }) {
             return Task::none();
         }
-        let generation = self.generation();
-        window::run(id, move |_| {
-            if moved {
-                host::set_bounds(generation, web);
-            }
-            if !was_shown {
-                host::set_visible(generation, true);
-            }
-            Message::Done
-        })
+        self.start_build_with(id, web)
     }
 
     pub fn sync_theme(&self) -> Task<Message> {
-        let Some(id) = self.window.filter(|_| self.live) else {
+        let Some(id) = self.window.filter(|_| self.is_live()) else {
             return Task::none();
         };
         let generation = self.generation();
@@ -330,11 +417,11 @@ impl MarkdownPanel {
 
     /// 关闭面板:销毁 webview 并丢掉文档(退出时调用)。迟到的消息从此被 generation 挡掉。
     pub fn close(&mut self, id: window::Id) -> Task<Message> {
-        if !self.live {
+        if matches!(self.creation, CreationState::Idle | CreationState::Closed) {
             return Task::none();
         }
         let generation = self.epoch.fetch_add(1, Ordering::SeqCst);
-        self.live = false;
+        self.creation = CreationState::Closed;
         self.ready = false;
         self.shown = false;
         self.bounds = None;
@@ -348,8 +435,8 @@ impl MarkdownPanel {
     pub fn view(&self) -> Element<'_, Message> {
         use iced::widget::{button, column, row, text};
         let doc = self.bridge.doc();
-        let status = if let Some(error) = &self.error {
-            format!("编辑器创建失败：{error}；切换页签可重试")
+        let status = if let Some(error) = self.failed_error() {
+            format!("编辑器创建失败：{error}")
         } else if self.is_selftest() {
             "自检中…".to_string()
         } else if self.ready {
@@ -357,13 +444,14 @@ impl MarkdownPanel {
                 Some(reason) => format!(" · 拒绝 {}（最近：{reason}）", self.rejects),
                 None => String::new(),
             };
-            format!(
-                "版本 {} · {} 个字符{sync}",
-                doc.version,
-                doc.text.chars().count()
-            )
+            format!("版本 {} · {} 个字符{sync}", doc.version, doc.char_count())
         } else {
-            "正在打开…".to_string()
+            match &self.creation {
+                CreationState::Building { .. } | CreationState::Idle => "正在打开…".to_string(),
+                CreationState::Closed => "编辑器已关闭".to_string(),
+                CreationState::Failed { .. } => "编辑器未打开".to_string(),
+                CreationState::Ready { .. } => "正在等待页面…".to_string(),
+            }
         };
         let mut rewrite = button("Agent 改写一段");
         let mut append = button("Agent 追加一段");
@@ -371,10 +459,20 @@ impl MarkdownPanel {
             rewrite = rewrite.on_press(Message::StandIn(StandIn::RewriteParagraph(0)));
             append = append.on_press(Message::StandIn(StandIn::Append));
         }
+        let mut retry = button("重试");
+        if matches!(self.creation, CreationState::Failed { .. }) {
+            retry = retry.on_press(Message::Retry);
+        }
         column![
-            row![text("未持久化 / 示例章节"), text(status), rewrite, append]
-                .spacing(16)
-                .align_y(iced::Alignment::Center),
+            row![
+                text("未持久化 / 示例章节"),
+                text(status),
+                rewrite,
+                append,
+                retry
+            ]
+            .spacing(16)
+            .align_y(iced::Alignment::Center),
         ]
         .height(iced::Length::Fixed(BAR_HEIGHT as f32))
         .into()

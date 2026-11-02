@@ -2,7 +2,7 @@
 //! Rust applies them, re-parses, keeps block ids stable with the reconciler, and answers with the block list.
 
 use crate::blocks::parse::{Kind, Parsed, parse_blocks};
-use crate::blocks::reconcile::{Config, Tracked, reconcile};
+use crate::blocks::reconcile::{Config, Tracked, reconcile_with_stats};
 use crate::protocol::{BlockInfo, Change, EditorOutbound};
 
 pub enum AgentOp {
@@ -58,8 +58,29 @@ pub struct Doc {
     /// re-parse only the blocks around an edit (falls back to the whole document whenever it cannot prove the result equal)
     pub incremental: bool,
     pub stats: ReparseStats,
+    /// cached UTF-16 length and character count; updated from edit deltas, never rescanned on every message
+    len16: usize,
+    chars: usize,
     /// (block id, run, version) of every block an Agent step wrote, not yet saved (block_agent_history)
     history: Vec<(u64, u64, u64)>,
+    /// information for a wire-level block delta, if the last edit stayed inside one re-parse window
+    last_incremental: Option<LastIncremental>,
+    /// diagnostics: how many times a full-text FNV check was actually computed
+    hash_scans: std::cell::Cell<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct LastIncremental {
+    base_version: u64,
+    /// range of the OLD block list replaced by this edit
+    removed: (usize, usize),
+    /// slice of the NEW block list that replaces it
+    new_start: usize,
+    new_count: usize,
+    old_total: usize,
+    new_total: usize,
+    /// text changes in the coordinates of `base_version`
+    changes: Vec<Change>,
 }
 
 /// Everything about block identity that cannot be recovered from the text (ADR-012): saved with the text in one
@@ -84,6 +105,8 @@ pub struct ReparseStats {
     pub full: u64,
     /// total bytes handed to the parser
     pub parsed_bytes: u64,
+    /// character-diff pairs that were skipped because they exceeded the work budget
+    pub budget_degraded: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -106,6 +129,32 @@ pub fn byte_offset(text: &str, utf16: usize) -> Option<usize> {
         }
     }
     (u == utf16).then_some(text.len())
+}
+
+/// Convert a batch of sorted UTF-16 endpoints in one pass over the text.
+///
+/// Returns `None` if any endpoint is past the end or inside a surrogate pair. Callers validate
+/// the batch is sorted and disjoint first, so this preserves the atomic "all or nothing" edit.
+fn byte_offsets(text: &str, endpoints: &[usize]) -> Option<Vec<usize>> {
+    let mut out = Vec::with_capacity(endpoints.len());
+    let mut u = 0usize;
+    let mut next = 0usize;
+    for (i, c) in text.char_indices() {
+        while next < endpoints.len() && endpoints[next] == u {
+            out.push(i);
+            next += 1;
+        }
+        let after = u + c.len_utf16();
+        if next < endpoints.len() && endpoints[next] > u && endpoints[next] < after {
+            return None; // inside a surrogate pair
+        }
+        u = after;
+    }
+    while next < endpoints.len() && endpoints[next] == u {
+        out.push(text.len());
+        next += 1;
+    }
+    (next == endpoints.len()).then_some(out)
 }
 
 /// FNV-1a 64 over the UTF-8 bytes, as 16 hex digits (the page computes the same to check both sides hold the same text).
@@ -163,16 +212,33 @@ impl Doc {
             runs: 0,
             incremental: true,
             stats: ReparseStats::default(),
+            len16: 0,
+            chars: 0,
             history: vec![],
+            last_incremental: None,
+            hash_scans: std::cell::Cell::new(0),
         }
     }
 
     /// A new document: every block gets a fresh id.
     pub fn load(&mut self, text: &str) {
         self.text = text.to_string();
+        self.len16 = self.text.encode_utf16().count();
+        self.chars = self.text.chars().count();
         self.tracked.clear();
         self.version += 1;
+        self.last_incremental = None;
         self.reparse();
+    }
+
+    /// cached UTF-16 length (O(1)).
+    pub fn len16(&self) -> usize {
+        self.len16
+    }
+
+    /// cached character count (O(1)); the top bar uses it instead of scanning the whole document.
+    pub fn char_count(&self) -> usize {
+        self.chars
     }
 
     /// Apply patches given in the coordinates of the document the editor had at `base` (UTF-16, sorted, disjoint).
@@ -183,15 +249,40 @@ impl Doc {
                 got: base,
             });
         }
+        let base_version = self.version;
+        self.last_incremental = None;
         let mut spans = Vec::with_capacity(changes.len());
         let mut prev_end = 0;
+        let (mut len16_delta, mut char_delta) = (0isize, 0isize);
         for (from, to, _) in changes {
             if *from < prev_end || to < from {
                 return Err(EditError::Malformed("changes must be sorted and disjoint"));
             }
             prev_end = *to;
-            let f = byte_offset(&self.text, *from).ok_or(EditError::BadPosition(*from))?;
-            let t = byte_offset(&self.text, *to).ok_or(EditError::BadPosition(*to))?;
+        }
+        prev_end = 0;
+        let endpoints: Vec<usize> = changes
+            .iter()
+            .flat_map(|(from, to, _)| [*from, *to])
+            .collect();
+        let offsets = byte_offsets(&self.text, &endpoints).ok_or_else(|| {
+            let bad = endpoints
+                .iter()
+                .find(|e| byte_offset(&self.text, **e).is_none())
+                .copied()
+                .unwrap_or(0);
+            EditError::BadPosition(bad)
+        })?;
+        for ((from, to, ins), pair) in changes.iter().zip(offsets.chunks(2)) {
+            if *from < prev_end || to < from {
+                return Err(EditError::Malformed("changes must be sorted and disjoint"));
+            }
+            prev_end = *to;
+            let (f, t) = (pair[0], pair[1]);
+            // `from`/`to` are already UTF-16 units, so the old length is `to - from`.
+            len16_delta += ins.encode_utf16().count() as isize - (*to as isize - *from as isize);
+            // count the removed characters before the text is replaced (spans are disjoint)
+            char_delta += ins.chars().count() as isize - self.text[f..t].chars().count() as isize;
             spans.push((f, t));
         }
         let old_len = self.text.len();
@@ -199,12 +290,36 @@ impl Doc {
             self.text.replace_range(*f..*t, ins);
         }
         self.version += 1;
+        self.len16 = (self.len16 as isize + len16_delta) as usize;
+        self.chars = (self.chars as isize + char_delta) as usize;
         let delta: isize = self.text.len() as isize - old_len as isize;
         let region = (
             spans.first().map(|x| x.0).unwrap_or(0),
             spans.last().map(|x| x.1).unwrap_or(0),
         );
-        if !(self.incremental && self.reparse_window(region, delta)) {
+        let window = if self.incremental {
+            self.reparse_window(region, delta)
+        } else {
+            None
+        };
+        if let Some((old_start, old_count, new_count, old_total, new_total)) = window {
+            self.last_incremental = Some(LastIncremental {
+                base_version,
+                removed: (old_start, old_start + old_count),
+                new_start: old_start,
+                new_count,
+                old_total,
+                new_total,
+                changes: changes
+                    .iter()
+                    .map(|(from, to, insert)| Change {
+                        from: *from,
+                        to: *to,
+                        insert: insert.clone(),
+                    })
+                    .collect(),
+            });
+        } else {
             self.reparse();
         }
         Ok(())
@@ -281,10 +396,14 @@ impl Doc {
             })
             .collect();
         d.text = st.text.clone();
+        d.len16 = d.text.encode_utf16().count();
+        d.chars = d.text.chars().count();
         if text == st.text {
             d.last = Some((saved, st.ids.iter().map(|i| (*i, "Exact")).collect()));
         } else {
             d.text = text.to_string();
+            d.len16 = d.text.encode_utf16().count();
+            d.chars = d.text.chars().count();
             d.version += 1;
             d.reparse();
         }
@@ -341,7 +460,7 @@ impl Doc {
         run: u64,
     ) -> Result<Vec<(usize, usize, String)>, AgentError> {
         let ranges = self.ranges16();
-        let end16 = self.text.encode_utf16().count();
+        let end16 = self.len16;
         let mut alias_from: Option<(u64, usize)> = None; // (old id, byte start of the block) for the forwarding entry
         let patch = match op {
             AgentOp::ReplaceBlock { id, text } => {
@@ -433,15 +552,9 @@ impl Doc {
 
     /// The `update` message for the editor after an Agent patch: the patch, and the resulting version and blocks.
     pub fn update_message(&self, patch: &[(usize, usize, String)], origin: &str) -> EditorOutbound {
-        let EditorOutbound::Blocks {
-            version,
-            hash,
-            len16,
-            blocks,
-        } = self.blocks_message()
-        else {
-            unreachable!()
-        };
+        let (len16, blocks) = self.blocks_data();
+        let version = self.version;
+        let hash = String::new(); // ordinary Agent updates do not rescan the whole text for FNV
         let changes = patch
             .iter()
             .map(|(from, to, insert)| Change {
@@ -464,13 +577,17 @@ impl Doc {
     /// window of text. The result is used only if the window parses back to exactly the same neighbours (same
     /// kind, text and position) — then nothing outside it can have changed — and is spliced into the old block list.
     /// `region` is the edited byte range in the OLD text, `delta` the change in length. Returns false to fall back.
-    fn reparse_window(&mut self, region: (usize, usize), delta: isize) -> bool {
+    fn reparse_window(
+        &mut self,
+        region: (usize, usize),
+        delta: isize,
+    ) -> Option<(usize, usize, usize, usize, usize)> {
         let Some((old, _)) = self.last.as_ref() else {
-            return false;
+            return None;
         };
         let n = old.len();
         if n < 8 {
-            return false;
+            return None;
         }
         // first block that ends at or after the edit, last block that starts at or before its end
         let first = old.partition_point(|p| p.end < region.0);
@@ -485,7 +602,7 @@ impl Doc {
             let i = first.saturating_sub(pad);
             let j = (last.max(first) + pad).min(n - 1);
             if j - i > 64 {
-                return false;
+                return None;
             } // a big edit: the window would be most of the document anyway
             let ws = if i == 0 { 0 } else { old[i].start };
             let we_old = if j == n - 1 { old_len } else { old[j].end };
@@ -495,7 +612,7 @@ impl Doc {
                 || !self.text.is_char_boundary(ws)
                 || !self.text.is_char_boundary(we)
             {
-                return false;
+                return None;
             }
             let mut win = parse_blocks(&self.text[ws..we]);
             self.stats.parsed_bytes += (we - ws) as u64;
@@ -521,15 +638,17 @@ impl Doc {
             break;
         }
         let Some((i, j, win)) = found else {
-            return false;
+            return None;
         };
         self.stats.incremental += 1;
         let (mut parsed, mut hows) = self.last.take().unwrap();
         let mut next = self.next_id;
-        let assigned = reconcile(&self.tracked[i..=j], &win, &Config::default(), || {
-            next += 1;
-            next - 1
-        });
+        let (assigned, reconcile_stats) =
+            reconcile_with_stats(&self.tracked[i..=j], &win, &Config::default(), || {
+                next += 1;
+                next - 1
+            });
+        self.stats.budget_degraded += reconcile_stats.budget_degraded;
         self.next_id = next;
         // splice in place: only the window is replaced, the rest keeps its strings (offsets after it just shift)
         let new_tracked: Vec<Tracked> = win
@@ -544,6 +663,9 @@ impl Doc {
         let new_hows: Vec<(u64, &'static str)> =
             assigned.iter().map(|a| (a.id, how_name(a.how))).collect();
         let added = win.len();
+        let old_count = j - i + 1;
+        let new_count = added;
+        let old_total = parsed.len();
         parsed.splice(i..=j, win);
         for p in &mut parsed[i + added..] {
             p.start = (p.start as isize + delta) as usize;
@@ -556,7 +678,13 @@ impl Doc {
         self.tracked.splice(i..=j, new_tracked);
         let new_hows = hows;
         self.last = Some((parsed, new_hows));
-        true
+        Some((
+            i,
+            old_count,
+            new_count,
+            old_total,
+            old_total - old_count + new_count,
+        ))
     }
 
     fn reparse(&mut self) {
@@ -564,10 +692,12 @@ impl Doc {
         self.stats.parsed_bytes += self.text.len() as u64;
         let parsed = parse_blocks(&self.text);
         let mut next = self.next_id;
-        let assigned = reconcile(&self.tracked, &parsed, &Config::default(), || {
-            next += 1;
-            next - 1
-        });
+        let (assigned, reconcile_stats) =
+            reconcile_with_stats(&self.tracked, &parsed, &Config::default(), || {
+                next += 1;
+                next - 1
+            });
+        self.stats.budget_degraded += reconcile_stats.budget_degraded;
         self.next_id = next;
         self.tracked = parsed
             .iter()
@@ -585,56 +715,133 @@ impl Doc {
     }
 
     /// (from, to) of every block in UTF-16 positions, in document order.
+    ///
+    /// One pass over the text with an ordered boundary list: block starts are already sorted and
+    /// non-overlapping, so no sort or hash map is needed (and only O(blocks) extra memory).
     fn ranges16(&self) -> Vec<(usize, usize)> {
         let (parsed, _) = self.last.as_ref().expect("a document was loaded");
-        let mut offsets: Vec<usize> = parsed.iter().flat_map(|p| [p.start, p.end]).collect();
-        offsets.sort_unstable();
-        offsets.dedup();
-        let mut pos16 = std::collections::HashMap::with_capacity(offsets.len());
-        let (mut u, mut k) = (0usize, 0usize);
-        for (i, c) in self
-            .text
-            .char_indices()
-            .chain(std::iter::once((self.text.len(), '\0')))
-        {
-            while k < offsets.len() && offsets[k] <= i {
-                pos16.insert(offsets[k], u);
-                k += 1;
+        let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(parsed.len());
+        let (mut next, mut open) = (0usize, None::<usize>);
+        let (mut u, mut i) = (0usize, 0usize);
+        let mut iter = self.text.char_indices().peekable();
+        loop {
+            // close a block that ends here, then open blocks that start here
+            if let Some(k) = open
+                && parsed[k].end == i
+            {
+                ranges[k].1 = u;
+                open = None;
             }
+            while next < parsed.len() && parsed[next].start == i {
+                ranges.push((u, u));
+                if parsed[next].end == i {
+                    ranges[next].1 = u; // an empty block closes immediately
+                } else {
+                    open = Some(next);
+                }
+                next += 1;
+            }
+            let Some((idx, c)) = iter.next() else {
+                break;
+            };
+            debug_assert_eq!(idx, i);
             u += c.len_utf16();
+            i += c.len_utf8();
         }
-        parsed
-            .iter()
-            .map(|p| (pos16[&p.start], pos16[&p.end]))
-            .collect()
+        // sentinel at the end of the text closes the final block
+        if let Some(k) = open {
+            ranges[k].1 = u;
+        }
+        debug_assert_eq!(ranges.len(), parsed.len());
+        ranges
     }
 
-    /// The `blocks` message for the editor: ranges in UTF-16 positions.
-    pub fn blocks_message(&self) -> EditorOutbound {
+    /// The result of the last successful local edit: an incremental block delta when the edit stayed in one
+    /// re-parse window and only touched a small part of the document, otherwise a full `blocks` message.
+    pub fn after_edit_message(&self, request_id: Option<u64>) -> EditorOutbound {
+        if let Some(inc) = &self.last_incremental
+            && inc.base_version + 1 == self.version
+            && inc.new_count.saturating_mul(4) <= inc.new_total
+            && (inc.removed.1 - inc.removed.0).saturating_mul(4) <= inc.old_total
+        {
+            let (parsed, hows) = self.last.as_ref().expect("a document was loaded");
+            let ranges = self.ranges16();
+            let blocks = (inc.new_start..inc.new_start + inc.new_count)
+                .map(|k| block_info(&parsed[k], hows[k].1, ranges[k]).with_id(hows[k].0))
+                .collect();
+            return EditorOutbound::Incremental {
+                request_id,
+                base_version: inc.base_version,
+                version: self.version,
+                // Ordinary confirmations do not rescan the whole document for FNV. Full checks are
+                // kept on open / snapshot / explicit verification.
+                hash: String::new(),
+                len16: self.len16,
+                changes: inc.changes.clone(),
+                removed_from: inc.removed.0,
+                removed_to: inc.removed.1,
+                blocks,
+            };
+        }
+        let (len16, blocks) = self.blocks_data();
+        EditorOutbound::Blocks {
+            request_id,
+            version: self.version,
+            hash: String::new(),
+            len16,
+            blocks,
+        }
+    }
+
+    /// Blocks and cached length without the full-text FNV check.
+    fn blocks_data(&self) -> (usize, Vec<BlockInfo>) {
         let (parsed, hows) = self.last.as_ref().expect("a document was loaded");
         let ranges = self.ranges16();
-        let blocks: Vec<BlockInfo> = parsed
+        let blocks = parsed
             .iter()
             .zip(hows)
             .zip(&ranges)
-            .map(|((p, (id, how)), (from, to))| {
-                let (kind, level) = kind_name(&p.kind);
-                BlockInfo {
-                    id: id.to_string(),
-                    kind,
-                    level,
-                    title: level.map(|_| heading_title(&p.text)),
-                    how,
-                    from: *from,
-                    to: *to,
-                    head: p.text.chars().take(16).collect::<String>(),
-                }
-            })
+            .map(|((p, (id, how)), range)| block_info(p, how, *range).with_id(*id))
             .collect();
+        (self.len16, blocks)
+    }
+
+    /// The `blocks` message for the editor: ranges in UTF-16 positions and a full-text check.
+    pub fn blocks_message(&self) -> EditorOutbound {
+        let (len16, blocks) = self.blocks_data();
+        self.hash_scans.set(self.hash_scans.get() + 1);
         EditorOutbound::Blocks {
+            request_id: None,
             version: self.version,
             hash: fnv(&self.text),
-            len16: self.text.encode_utf16().count(),
+            len16,
+            blocks,
+        }
+    }
+
+    /// diagnostics: number of full-text FNV checks computed on this document.
+    pub fn hash_scans(&self) -> u64 {
+        self.hash_scans.get()
+    }
+
+    /// 只读快照:当前权威文本 + 版本 + 块。normal 模式可用,不改文档。
+    pub fn snapshot_message(&self, request_id: Option<u64>) -> EditorOutbound {
+        let EditorOutbound::Blocks {
+            version,
+            hash,
+            len16,
+            blocks,
+            ..
+        } = self.blocks_message()
+        else {
+            unreachable!()
+        };
+        EditorOutbound::Snapshot {
+            request_id,
+            text: self.text.clone(),
+            version,
+            hash,
+            len16,
             blocks,
         }
     }
@@ -646,17 +853,42 @@ impl Doc {
             hash,
             len16,
             blocks,
+            ..
         } = self.blocks_message()
         else {
             unreachable!()
         };
         EditorOutbound::Open {
+            protocol: crate::protocol::PROTOCOL_VERSION,
             text: self.text.clone(),
             version,
             hash,
             len16,
             blocks,
         }
+    }
+}
+
+/// One wire-level block. `BlockInfo.id` is a string, so the helper takes it separately for the
+/// incremental path (which already has the id) and the full path (which supplies the numeric id).
+fn block_info(p: &Parsed, how: &'static str, range: (usize, usize)) -> BlockInfo {
+    let (kind, level) = kind_name(&p.kind);
+    BlockInfo {
+        id: String::new(),
+        kind,
+        level,
+        title: level.map(|_| heading_title(&p.text)),
+        how,
+        from: range.0,
+        to: range.1,
+        head: p.text.chars().take(16).collect::<String>(),
+    }
+}
+
+impl BlockInfo {
+    fn with_id(mut self, id: u64) -> Self {
+        self.id = id.to_string();
+        self
     }
 }
 
@@ -698,6 +930,45 @@ mod tests {
         assert_eq!(byte_offset(t, 4), Some(8));
         assert_eq!(byte_offset(t, 5), Some(9));
         assert_eq!(byte_offset(t, 6), None);
+    }
+
+    #[test]
+    fn a_batch_of_utf16_endpoints_converts_in_one_pass() {
+        let text = "a字😀b𠮷c";
+        // UTF-16 boundaries: 0,1,2,4,5,7,8
+        let ends = [0usize, 1, 2, 4, 5, 7, 8];
+        let got = byte_offsets(text, &ends).unwrap();
+        assert_eq!(
+            got,
+            ends.iter()
+                .map(|e| byte_offset(text, *e).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(byte_offset(text, 3), None, "inside 😀");
+        assert!(byte_offsets(text, &[0, 3, 8]).is_none());
+        assert!(byte_offsets(text, &[0, 9]).is_none());
+        assert_eq!(byte_offsets("", &[0]), Some(vec![0]));
+    }
+
+    #[test]
+    fn a_small_document_full_edit_result_does_not_scan_the_text_for_fnv() {
+        let mut d = Doc::new();
+        d.load("甲\n\n乙\n\n丙\n");
+        let before = d.hash_scans();
+        d.edit(d.version, &[(0, 0, "x".to_string())]).unwrap();
+        // Fewer than 8 blocks: the wire result falls back to a full block list, but still no FNV.
+        let _ = d.after_edit_message(Some(1));
+        assert_eq!(
+            d.hash_scans(),
+            before,
+            "ordinary confirmation must not compute FNV"
+        );
+        let _ = d.blocks_message();
+        assert_eq!(
+            d.hash_scans(),
+            before + 1,
+            "explicit full blocks still checks"
+        );
     }
 
     #[test]
@@ -1196,6 +1467,117 @@ mod tests {
             if ra.is_ok() {
                 same(&a, &b).unwrap_or_else(|e| panic!("seed {seed}: {e} {ch:?}"));
             }
+        }
+    }
+
+    #[test]
+    fn an_incremental_block_result_equals_the_full_block_list() {
+        let mut r = R(99);
+        let text = sample_doc(&mut r, 30);
+        let mut d = Doc::new();
+        d.load(&text);
+        let EditorOutbound::Blocks { blocks: base, .. } = d.blocks_message() else {
+            unreachable!()
+        };
+        let base_meta: Vec<(String, usize, usize, String)> = base
+            .iter()
+            .map(|b| (b.id.clone(), b.from, b.to, b.head.clone()))
+            .collect();
+        let middle = d.text[..d.text.len() / 2].encode_utf16().count();
+        let insert = "字😀".to_string();
+        let delta = insert.encode_utf16().count();
+        d.edit(d.version, &[(middle, middle, insert)]).unwrap();
+        let inc = d.after_edit_message(Some(7));
+        let EditorOutbound::Incremental {
+            removed_from,
+            removed_to,
+            blocks: fresh,
+            changes,
+            base_version,
+            version,
+            ..
+        } = inc
+        else {
+            panic!("an edit in the middle of a 30-block document should be incremental");
+        };
+        assert_eq!(base_version, 1);
+        assert_eq!(version, 2);
+        assert_eq!(changes.len(), 1);
+        let map = |pos: usize, assoc: isize| {
+            if pos > middle || (pos == middle && assoc > 0) {
+                pos + delta
+            } else {
+                pos
+            }
+        };
+        let mapped: Vec<(String, usize, usize, String)> = base_meta
+            .iter()
+            .map(|(id, from, to, head)| (id.clone(), map(*from, -1), map(*to, 1), head.clone()))
+            .collect();
+        let mut applied = mapped[..removed_from].to_vec();
+        applied.extend(
+            fresh
+                .iter()
+                .map(|b| (b.id.clone(), b.from, b.to, b.head.clone())),
+        );
+        applied.extend(mapped[removed_to..].to_vec());
+        // Compare with a fresh full parse of the same text.
+        let mut full = Doc::new();
+        full.load(&d.text);
+        let EditorOutbound::Blocks { blocks: all, .. } = full.blocks_message() else {
+            unreachable!()
+        };
+        let want: Vec<(String, usize, usize, String)> = all
+            .iter()
+            .map(|b| (b.id.clone(), b.from, b.to, b.head.clone()))
+            .collect();
+        assert_eq!(applied, want, "incremental blocks must equal a full result");
+    }
+
+    #[test]
+    fn cached_lengths_always_match_a_full_recount() {
+        for seed in 1..=120u64 {
+            let mut r = R(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut d = Doc::new();
+            let n = 8 + r.next() % 20;
+            let text = sample_doc(&mut r, n);
+            d.load(&text);
+            assert_eq!(d.len16(), d.text.encode_utf16().count());
+            assert_eq!(d.char_count(), d.text.chars().count());
+            for _ in 0..25 {
+                let chars: Vec<usize> = d
+                    .text
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(d.text.len()))
+                    .collect();
+                let at = chars[r.next() % chars.len()];
+                let end = chars[(chars.iter().position(|c| *c == at).unwrap() + r.next() % 4)
+                    .min(chars.len() - 1)];
+                let (f16, t16) = (
+                    d.text[..at].encode_utf16().count(),
+                    d.text[..end].encode_utf16().count(),
+                );
+                d.edit(
+                    d.version,
+                    &[(f16, t16, PIECES[r.next() % PIECES.len()].to_string())],
+                )
+                .unwrap();
+                assert_eq!(
+                    d.len16(),
+                    d.text.encode_utf16().count(),
+                    "seed {seed}: len16 cache"
+                );
+                assert_eq!(
+                    d.char_count(),
+                    d.text.chars().count(),
+                    "seed {seed}: char cache"
+                );
+            }
+            let state = d.export_state();
+            let restored = Doc::import_state(&state, &state.text);
+            assert_eq!(restored.len16(), state.text.encode_utf16().count());
+            assert_eq!(restored.char_count(), state.text.chars().count());
         }
     }
 

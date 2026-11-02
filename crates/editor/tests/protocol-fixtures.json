@@ -1,0 +1,68 @@
+{
+  "protocol_version": 2,
+  "error_codes": [
+    "stale_base",
+    "bad_position",
+    "malformed_changes",
+    "unauthorized",
+    "unsupported_protocol",
+    "duplicate_request",
+    "out_of_order_request",
+    "internal"
+  ],
+  "inbound": [
+    {
+      "name": "ready",
+      "json": { "n": "nonce-1", "t": "ready", "protocol": 2, "engine": "cm" }
+    },
+    {
+      "name": "edit-with-request-id",
+      "json": {
+        "n": "nonce-1",
+        "t": "edit",
+        "request_id": 7,
+        "base": 1,
+        "changes": [{ "from": 0, "to": 0, "insert": "x" }]
+      }
+    },
+    {
+      "name": "snapshot",
+      "json": { "n": "nonce-1", "t": "snapshot", "request_id": 8 }
+    }
+  ],
+  "outbound": [
+    {
+      "name": "stale-reject",
+      "json": {
+        "t": "reject",
+        "code": "stale_base",
+        "request_id": 7,
+        "reason": "StaleBase { have: 2, got: 1 }",
+        "version": 2
+      }
+    },
+    {
+      "name": "snapshot-ok",
+      "json": {
+        "t": "snapshot",
+        "request_id": 8,
+        "text": "abcd",
+        "version": 2,
+        "hash": "0123456789abcdef",
+        "len16": 4,
+        "blocks": []
+      }
+    },
+    {
+      "name": "blocks-with-request-id",
+      "json": {
+        "t": "blocks",
+        "request_id": 7,
+        "version": 2,
+        "hash": "0123456789abcdef",
+        "len16": 4,
+        "blocks": []
+      }
+    }
+  ]
+}

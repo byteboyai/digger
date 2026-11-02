@@ -38,7 +38,13 @@ pub struct StoreCleanup {
 impl StoreCleanup {
     /// 从产品状态目录下的台账文件载入,**并把上次未完成的清除重新排进内存队列**(重启恢复)。
     pub fn load(path: PathBuf) -> Self {
-        let ledger = StoreCleanups::load(path);
+        let ledger = match StoreCleanups::load(path.clone()) {
+            Ok(ledger) => ledger,
+            Err(e) => {
+                // 读不出来 ≠ 空表:保留原文件,禁止写入覆盖;设置页会显示这条原因。
+                StoreCleanups::unavailable(path, e.to_string())
+            }
+        };
         let mut queue = StoreRemovals::default();
         // 上次仍是 `Pending` 的(被占用待重试、或退出时还没轮到的):重启后继续驱动。
         // `Failed` 的不重新排队——它已经是终态,留在台账里给设置页展示。
@@ -58,17 +64,15 @@ impl StoreCleanup {
     /// **调用方必须先把该应用的 Surface 销毁**(webview 离池),否则只会得到 `DataStoreInUse` 再重试。
     /// 把它排进持久台账与内存队列:落盘失败不影响内存记账(下次仍会尝试),但会让"重启恢复"这一保证
     /// 打折扣——调用方据此可提示,这里不 panic。
-    pub fn request(&mut self, app_id: &str) {
+    pub fn request(&mut self, app_id: &str) -> Result<(), String> {
         let result = if matches!(self.ledger.state(app_id), Some(CleanupState::Failed { .. })) {
             self.ledger.retry(app_id)
         } else {
             self.ledger.request(app_id).map(|_| ())
         };
-        if let Err(_e) = result {
-            // 落盘失败:内存里已加,仍会尝试清除;但重启后不保证继续,这是有意的降级(不 panic)。
-            // 日志由调用方按需补(本层无日志框架)。
-        }
+        // 落盘失败仍会尝试清除,但调用方必须把"重启后不保证继续"告诉用户,并允许同一意图重试。
         self.queue.request(app_id);
+        result.map_err(|e| e.to_string())
     }
 
     /// 一个结果回来:更新持久台账与内存队列。
@@ -76,29 +80,40 @@ impl StoreCleanup {
     /// - `Done` → 台账移除 + 队列完成;
     /// - `InUse` → 队列记为待重试(隔 [`STORE_RETRY_DELAY`](bytehost_webview) 再试),台账保持 `Pending`;
     /// - `Unsupported`/`Failed` → 记成终态失败(不再自动重试),台账保留供设置页展示。
-    pub fn settle(&mut self, app_id: &str, outcome: StoreRemovalOutcome, now: std::time::Instant) {
-        match outcome {
+    pub fn settle(
+        &mut self,
+        app_id: &str,
+        outcome: StoreRemovalOutcome,
+        now: std::time::Instant,
+    ) -> Result<(), String> {
+        let result = match outcome {
             StoreRemovalOutcome::Done => {
-                let _ = self.ledger.finish(app_id);
+                let r = self.ledger.finish(app_id);
                 self.queue.finish(app_id);
+                r
             }
             StoreRemovalOutcome::InUse => {
                 // 队列自己按退避排下一拍;若已超次数上限,`retry` 返回 false → 记成终态失败。
                 if !self.queue.retry(app_id, now) {
-                    let _ = self.ledger.fail(app_id, "数据存储仍被占用,已停止自动重试");
+                    self.ledger.fail(app_id, "数据存储仍被占用,已停止自动重试")
+                } else {
+                    Ok(())
                 }
             }
             StoreRemovalOutcome::Unsupported => {
-                let _ = self
+                let r = self
                     .ledger
                     .fail(app_id, "系统版本过低(macOS 14 以下),无法清除浏览器数据");
                 self.queue.finish(app_id);
+                r
             }
             StoreRemovalOutcome::Failed(reason) => {
-                let _ = self.ledger.fail(app_id, reason);
+                let r = self.ledger.fail(app_id, reason);
                 self.queue.finish(app_id);
+                r
             }
-        }
+        };
+        result.map_err(|e| e.to_string())
     }
 
     /// 取出**现在就该清**的应用及其存储标识(webview 必须已离池)。
@@ -150,6 +165,21 @@ impl StoreCleanup {
     pub fn pending_count(&self) -> usize {
         self.ledger.pending().len()
     }
+
+    /// 台账读不出来的原因(`None` = 正常)。设置页展示,并禁用覆盖写入。
+    pub fn unavailable_reason(&self) -> Option<&str> {
+        self.ledger.unavailable_reason()
+    }
+
+    /// 上次写入失败后仍有内存意图未落盘。
+    pub fn dirty(&self) -> bool {
+        self.ledger.dirty()
+    }
+
+    /// 最近一次持久化失败原文。
+    pub fn last_error(&self) -> Option<&str> {
+        self.ledger.last_error()
+    }
 }
 
 /// 卸载模式是否要求清除浏览器数据存储。
@@ -181,7 +211,7 @@ mod tests {
     #[test]
     fn a_requested_purge_is_only_ready_after_the_webview_leaves_the_pool() {
         let mut c = StoreCleanup::load(temp_ledger("in-pool"));
-        c.request("notes");
+        c.request("notes").unwrap();
         let now = Instant::now();
         // 仍在池里 → 不取。
         assert!(c.take_ready(now, |_| true).is_empty());
@@ -195,8 +225,9 @@ mod tests {
     #[test]
     fn a_done_result_clears_the_ledger() {
         let mut c = StoreCleanup::load(temp_ledger("done"));
-        c.request("notes");
-        c.settle("notes", StoreRemovalOutcome::Done, Instant::now());
+        c.request("notes").unwrap();
+        c.settle("notes", StoreRemovalOutcome::Done, Instant::now())
+            .unwrap();
         assert!(!c.is_pending("notes"));
         assert!(c.failures().is_empty());
     }
@@ -204,8 +235,9 @@ mod tests {
     #[test]
     fn an_in_use_result_keeps_it_pending_for_retry() {
         let mut c = StoreCleanup::load(temp_ledger("inuse"));
-        c.request("notes");
-        c.settle("notes", StoreRemovalOutcome::InUse, Instant::now());
+        c.request("notes").unwrap();
+        c.settle("notes", StoreRemovalOutcome::InUse, Instant::now())
+            .unwrap();
         assert!(c.is_pending("notes"), "被占用仍待重试");
         assert_eq!(c.pending_count(), 1);
     }
@@ -213,11 +245,11 @@ mod tests {
     #[test]
     fn repeated_in_use_gives_up_into_a_visible_failure() {
         let mut c = StoreCleanup::load(temp_ledger("giveup"));
-        c.request("notes");
+        c.request("notes").unwrap();
         let mut now = Instant::now();
         // 一直"被占用":队列按退避最多重试若干次,超上限后记终态失败、不再自动重试。
         for _ in 0..20 {
-            c.settle("notes", StoreRemovalOutcome::InUse, now);
+            c.settle("notes", StoreRemovalOutcome::InUse, now).unwrap();
             now += Duration::from_secs(5);
         }
         assert_eq!(c.pending_count(), 0, "不再自动重试");
@@ -228,20 +260,22 @@ mod tests {
     #[test]
     fn unsupported_and_failed_are_terminal_but_visible() {
         let mut c = StoreCleanup::load(temp_ledger("terminal"));
-        c.request("a");
-        c.settle("a", StoreRemovalOutcome::Unsupported, Instant::now());
+        c.request("a").unwrap();
+        c.settle("a", StoreRemovalOutcome::Unsupported, Instant::now())
+            .unwrap();
         assert!(
             c.state("a")
                 .is_some_and(|s| matches!(s, CleanupState::Failed { .. }))
         );
         assert_eq!(c.pending_count(), 0);
 
-        c.request("b");
+        c.request("b").unwrap();
         c.settle(
             "b",
             StoreRemovalOutcome::Failed("boom".into()),
             Instant::now(),
-        );
+        )
+        .unwrap();
         assert!(c.failures().iter().any(|(id, _)| *id == "b"));
     }
 
@@ -249,8 +283,9 @@ mod tests {
     fn a_pending_purge_survives_a_restart_and_is_redriven() {
         let path = temp_ledger("restart");
         let mut c = StoreCleanup::load(path.clone());
-        c.request("notes");
-        c.settle("notes", StoreRemovalOutcome::InUse, Instant::now());
+        c.request("notes").unwrap();
+        c.settle("notes", StoreRemovalOutcome::InUse, Instant::now())
+            .unwrap();
 
         // 模拟重启:重新载入,待办仍在,并已重新排进内存队列,可被取出去清。
         let mut reloaded = StoreCleanup::load(path);
@@ -264,12 +299,13 @@ mod tests {
     fn a_failed_purge_is_not_redriven_on_restart() {
         let path = temp_ledger("no-redrive");
         let mut c = StoreCleanup::load(path.clone());
-        c.request("notes");
+        c.request("notes").unwrap();
         c.settle(
             "notes",
             StoreRemovalOutcome::Failed("boom".into()),
             Instant::now(),
-        );
+        )
+        .unwrap();
 
         let mut reloaded = StoreCleanup::load(path);
         assert!(reloaded.is_pending("notes"), "失败仍可见");
@@ -283,22 +319,39 @@ mod tests {
     fn manual_retry_is_persisted_across_restart() {
         let path = temp_ledger("manual-retry");
         let mut c = StoreCleanup::load(path.clone());
-        c.request("notes");
+        c.request("notes").unwrap();
         c.settle(
             "notes",
             StoreRemovalOutcome::Failed("busy".into()),
             Instant::now(),
-        );
-        c.request("notes");
+        )
+        .unwrap();
+        c.request("notes").unwrap();
         let mut reloaded = StoreCleanup::load(path);
         assert_eq!(reloaded.take_ready(Instant::now(), |_| false).len(), 1);
     }
 
     #[test]
+    fn a_corrupt_ledger_is_visible_and_read_only() {
+        let path = temp_ledger("corrupt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = b"{ not json";
+        std::fs::write(&path, original).unwrap();
+        let mut c = StoreCleanup::load(path.clone());
+        assert!(c.unavailable_reason().is_some());
+        assert!(
+            c.request("notes").is_err(),
+            "must not overwrite the unreadable ledger"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(!c.is_pending("notes"), "no in-memory success is claimed");
+    }
+
+    #[test]
     fn requesting_a_purge_twice_is_idempotent() {
         let mut c = StoreCleanup::load(temp_ledger("idem"));
-        c.request("notes");
-        c.request("notes");
+        c.request("notes").unwrap();
+        c.request("notes").unwrap();
         assert_eq!(c.take_ready(Instant::now(), |_| false).len(), 1);
     }
 }

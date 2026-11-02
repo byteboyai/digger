@@ -10,6 +10,7 @@
 
 use crate::blocks::parse::{Kind, Parsed};
 use similar::{Algorithm, DiffOp, capture_diff_slices};
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 
@@ -79,11 +80,11 @@ impl Default for Config {
 
 struct Sig {
     norm: Vec<char>,
-    grams: HashMap<u64, u16>,
+    grams: HashMap<u64, usize>,
     total: usize,
     /// sentences / lines with syntax stripped, as a multiset: "half of the sentences are untouched" is strong
     /// evidence even when the rest was rewritten and the character statistics no longer agree
-    units: HashMap<String, u16>,
+    units: HashMap<String, usize>,
     unit_count: usize,
 }
 
@@ -96,8 +97,8 @@ fn normalize(text: &str) -> Vec<char> {
 
 /// Comparison tokens: character bigrams for CJK text, whole words for alphabetic text. Bigrams of Latin letters
 /// are far too common ("th", "er") for two unrelated English paragraphs to look different.
-fn tokens(text: &str) -> (HashMap<u64, u16>, usize) {
-    let mut grams: HashMap<u64, u16> = HashMap::new();
+fn tokens(text: &str) -> (HashMap<u64, usize>, usize) {
+    let mut grams: HashMap<u64, usize> = HashMap::new();
     let mut total = 0;
     let h = |parts: &[u64]| -> u64 {
         let mut st = std::collections::hash_map::DefaultHasher::new();
@@ -106,7 +107,7 @@ fn tokens(text: &str) -> (HashMap<u64, u16>, usize) {
     };
     let mut word = String::new();
     let mut prev_cjk: Option<char> = None;
-    let flush = |word: &mut String, grams: &mut HashMap<u64, u16>, total: &mut usize| {
+    let flush = |word: &mut String, grams: &mut HashMap<u64, usize>, total: &mut usize| {
         if !word.is_empty() {
             let mut st = std::collections::hash_map::DefaultHasher::new();
             word.hash(&mut st);
@@ -138,7 +139,7 @@ fn tokens(text: &str) -> (HashMap<u64, u16>, usize) {
 fn sig(text: &str) -> Sig {
     let norm = normalize(text);
     let (grams, total) = tokens(text);
-    let mut units: HashMap<String, u16> = HashMap::new();
+    let mut units: HashMap<String, usize> = HashMap::new();
     let mut unit_count = 0;
     for line in text.lines() {
         for u in line.split_inclusive(['。', '！', '？', '.', '!', '?']) {
@@ -167,14 +168,34 @@ fn unit_overlap(a: &Sig, b: &Sig) -> f32 {
     let inter: usize = a
         .units
         .iter()
-        .map(|(u, &n)| n.min(*b.units.get(u).unwrap_or(&0)) as usize)
+        .map(|(u, &n)| n.min(*b.units.get(u).unwrap_or(&0)))
         .sum();
     inter as f32 / max as f32
+}
+
+/// Work budget for the character edit ratio. Bigram statistics stay O(n); the character diff is
+/// O(n*m) in the worst case, so very long blocks fall back to the statistical score (and are counted)
+/// instead of letting one pair consume the whole reconcile.
+const MAX_CHAR_DIFF_CHARS: usize = 32_768;
+const MAX_CHAR_DIFF_WORK: usize = 4_000_000;
+
+fn char_diff_within_budget(a: &Sig, b: &Sig) -> bool {
+    a.norm.len() <= MAX_CHAR_DIFF_CHARS
+        && b.norm.len() <= MAX_CHAR_DIFF_CHARS
+        && a.norm.len().saturating_mul(b.norm.len()) <= MAX_CHAR_DIFF_WORK
 }
 
 fn char_ratio(a: &Sig, b: &Sig) -> f32 {
     let (x, y): (String, String) = (a.norm.iter().collect(), b.norm.iter().collect());
     similar::TextDiff::from_chars(&x, &y).ratio()
+}
+
+/// Diagnostics for the reconciliation budget. `budget_degraded` counts pairs that skipped the
+/// character diff because they were too large; those pairs were still compared by bigram statistics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReconcileStats {
+    pub char_diff_calls: u64,
+    pub budget_degraded: u64,
 }
 
 fn dice(a: &Sig, b: &Sig) -> f32 {
@@ -209,6 +230,7 @@ struct Ctx<'a> {
     osig: Vec<Sig>,
     nsig: Vec<Sig>,
     cfg: &'a Config,
+    stats: Cell<ReconcileStats>,
 }
 
 impl Ctx<'_> {
@@ -228,18 +250,31 @@ impl Ctx<'_> {
         } else if shortest < self.cfg.short_chars {
             // bigram statistics are meaningless on a handful of characters: use the character edit ratio
             need = need.max(self.cfg.short_ratio);
-            char_ratio(a, b)
+            self.char_ratio(a, b).unwrap_or(0.0)
         } else {
             let d = dice(a, b).max(unit_overlap(a, b));
             // Bigram statistics are stricter than an edit ratio; when they say "somewhat similar", ask the
             // character edit ratio too (only for plausible pairs, so the cost stays small).
             if d < need && d >= 0.25 {
-                d.max(char_ratio(a, b))
+                d.max(self.char_ratio(a, b).unwrap_or(d))
             } else {
                 d
             }
         };
         (s >= need).then_some(s)
+    }
+
+    fn char_ratio(&self, a: &Sig, b: &Sig) -> Option<f32> {
+        if !char_diff_within_budget(a, b) {
+            let mut stats = self.stats.get();
+            stats.budget_degraded += 1;
+            self.stats.set(stats);
+            return None;
+        }
+        let mut stats = self.stats.get();
+        stats.char_diff_calls += 1;
+        self.stats.set(stats);
+        Some(char_ratio(a, b))
     }
 }
 
@@ -247,14 +282,25 @@ pub fn reconcile(
     old: &[Tracked],
     new: &[Parsed],
     cfg: &Config,
-    mut fresh: impl FnMut() -> BlockId,
+    fresh: impl FnMut() -> BlockId,
 ) -> Vec<Assigned> {
+    reconcile_with_stats(old, new, cfg, fresh).0
+}
+
+/// Same as [`reconcile`], with diagnostics for budget decisions.
+pub fn reconcile_with_stats(
+    old: &[Tracked],
+    new: &[Parsed],
+    cfg: &Config,
+    mut fresh: impl FnMut() -> BlockId,
+) -> (Vec<Assigned>, ReconcileStats) {
     let cx = Ctx {
         old,
         new,
         osig: old.iter().map(|b| sig(&b.text)).collect(),
         nsig: new.iter().map(|b| sig(&b.text)).collect(),
         cfg,
+        stats: Cell::new(ReconcileStats::default()),
     };
     let mut out: Vec<Option<Assigned>> = vec![None; new.len()];
     let mut old_used = vec![false; old.len()];
@@ -357,7 +403,13 @@ pub fn reconcile(
     // 4. edited and moved: best similarity first, across the whole document.
     let lo: Vec<usize> = (0..old.len()).filter(|&i| !old_used[i]).collect();
     let ln: Vec<usize> = (0..new.len()).filter(|&i| out[i].is_none()).collect();
-    if !lo.is_empty() && !ln.is_empty() && lo.len() * ln.len() <= 1_000_000 {
+    if !lo.is_empty()
+        && !ln.is_empty()
+        && lo
+            .len()
+            .checked_mul(ln.len())
+            .is_some_and(|n| n <= 1_000_000)
+    {
         let mut cands: Vec<(f32, usize, usize)> = Vec::new();
         for &o in &lo {
             for &n in &ln {
@@ -380,7 +432,9 @@ pub fn reconcile(
     }
 
     // 5. new blocks.
-    out.into_iter()
+    let stats = cx.stats.get();
+    let out = out
+        .into_iter()
         .map(|a| {
             a.unwrap_or_else(|| Assigned {
                 id: fresh(),
@@ -388,7 +442,8 @@ pub fn reconcile(
                 confidence: 1.0,
             })
         })
-        .collect()
+        .collect();
+    (out, stats)
 }
 
 /// Indices of a longest strictly increasing subsequence of `a`.
@@ -439,7 +494,7 @@ fn refine_duplicates(
             !o.is_empty()
                 && !n.is_empty()
                 && (o.len() > 1 || n.len() > 1)
-                && o.len() * n.len() <= 100_000
+                && o.len().checked_mul(n.len()).is_some_and(|n| n <= 100_000)
         })
         .map(|(h, _)| *h)
         .collect();
@@ -667,6 +722,38 @@ mod tests {
     }
 
     const BASE: &str = "# 第一章 开端\n\n夜色渐深，城市的灯火一盏盏亮起。他推开门，雨声涌了进来。\n\n第二段讲述了他回到旧居之后发现的事情，一切都与记忆里不同。\n\n结尾段落收束了全章的情绪，留下一个开放的问题。\n";
+
+    #[test]
+    fn repeated_tokens_beyond_u16_do_not_overflow() {
+        for n in [65_535usize, 65_536, 70_000] {
+            for text in ["a ".repeat(n), "中".repeat(n)] {
+                let parsed = parse_blocks(&text);
+                assert_eq!(parsed.len(), 1, "one paragraph");
+                let id = reconcile(&[], &parsed, &Config::default(), || 7);
+                assert_eq!(ids(&id), [7]);
+
+                let old = track(&text, 1);
+                let mut edited = parsed.clone();
+                edited[0].text.push('尾');
+                let (assigned, _stats) =
+                    reconcile_with_stats(&old, &edited, &Config::default(), || 8);
+                assert_eq!(ids(&assigned), [1], "the huge block keeps its id");
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_character_diff_is_bounded_and_still_keeps_ids_unique() {
+        // 40k characters on both sides: the statistical score is only 0.3, so the reconciler would
+        // normally ask the character diff for a second opinion. The work budget must skip it instead.
+        let old = track(&"甲".repeat(40_000), 1);
+        let new = parse_blocks(&format!("{}{}", "甲".repeat(12_000), "乙".repeat(28_000)));
+        let (assigned, stats) = reconcile_with_stats(&old, &new, &Config::default(), || 99);
+        assert_eq!(assigned.len(), 1);
+        assert!(stats.budget_degraded >= 1, "the oversized pair degrades");
+        assert_eq!(stats.char_diff_calls, 0);
+        assert!(assigned[0].id == 1 || assigned[0].id == 99);
+    }
 
     #[test]
     fn unchanged_text_keeps_every_id() {

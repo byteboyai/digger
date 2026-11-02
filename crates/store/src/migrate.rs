@@ -1,25 +1,49 @@
 //! S6a Task 8:旧 `projects.db` 到 `digger.db` 的迁移。
 //!
 //! 迁移用 SQLite 的 `ATTACH` 在同一事务里把 legacy 的项目表与记忆表行按原 id
-//! 拷入 target。成功后把 legacy 改名为 `projects.db.migrated`(保留不删除,D5)。
+//! 拷入 target。数据行与 Digger 自己的完成标记(`digger_migration_runs`)在**同一事务**提交:
+//! 重启后不会因为"已经复制成功、但改名失败"而重复插入主键冲突。
 //!
-//! **不改 Dozer**:迁移逻辑是 Digger 自己的事,只在 digger-store 里实现。
+//! 成功的迁移把 legacy 改名为 `projects.db.migrated`(保留不删除,D5)。改名失败是
+//! "数据已迁移、归档待完成",返回 [`MigrationOutcome::ArchivePending`],不阻止项目服务启动。
+//!
+//! **不改 Dozer**:迁移逻辑是 Digger 自己的事,只在 digger-store 里实现;完成标记是本产品
+//! 命名空间下的独立表,不占用共享 store 的 `PRAGMA user_version`,也不改它的表定义。
 
 use dozer_services::{ServiceError, ServiceErrorKind};
-use rusqlite::Connection;
-use std::path::Path;
+use rusqlite::{Connection, TransactionBehavior};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 迁移结果的格式版本。表结构或核对规则变化时递增。
+const FORMAT_VERSION: i64 = 1;
+/// Digger 自己的迁移记录表名(不碰共享 store 的 user_version)。
+const MARKER_TABLE: &str = "digger_migration_runs";
+const MIGRATION_KIND: &str = "projects";
 
 /// 迁移结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MigrationOutcome {
     /// 旧文件不存在,无事可做。
     NothingToMigrate,
-    /// 迁移成功:`projects` 与 `memories` 各搬了多少行(历史行随记忆一起搬,不单独计数)。
+    /// 本文件此前已经迁移完成(标记在,旧文件已归档或不存在)。
+    AlreadyMigrated,
+    /// 迁移成功(本次复制,或此前已提交、本次仅完成归档)。
     Migrated { projects: usize, memories: usize },
+    /// 数据已经提交,但旧文件归档改名失败。项目服务可以继续使用,提示用户归档待完成。
+    ArchivePending {
+        projects: usize,
+        memories: usize,
+        error: String,
+    },
 }
 
-fn unavailable(what: &str, e: impl std::fmt::Display) -> ServiceError {
+fn unavailable(what: impl std::fmt::Display, e: impl std::fmt::Display) -> ServiceError {
     ServiceError::new(ServiceErrorKind::Unavailable, format!("{what}: {e}"))
+}
+
+fn conflict(what: impl std::fmt::Display) -> ServiceError {
+    ServiceError::new(ServiceErrorKind::Unavailable, format!("迁移冲突: {what}"))
 }
 
 /// `conn` 的 `schema` 库里 `table` 是否有 `column` 列(`schema` 为 `legacy` 等已 ATTACH 的库名)。
@@ -43,96 +67,327 @@ fn has_table(conn: &Connection, schema: &str, table: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// 一次调用的规范化来源身份。文件存在时用真实路径,避免同一 legacy 经不同相对路径被认成两份。
+fn source_identity(legacy: &Path) -> String {
+    // 规范化**父目录**而不是文件本身:文件成功归档后,后续启动仍要能算出同一个身份。
+    let parent = legacy.parent().filter(|p| !p.as_os_str().is_empty());
+    let resolved_parent = parent
+        .and_then(|p| p.canonicalize().ok())
+        .unwrap_or_else(|| parent.map(Path::to_path_buf).unwrap_or_default());
+    let path = match legacy.file_name() {
+        Some(name) => resolved_parent.join(name),
+        None => legacy.to_path_buf(),
+    };
+    path.to_string_lossy().into_owned()
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+fn ensure_marker_table(conn: &Connection) -> Result<(), ServiceError> {
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS main.{MARKER_TABLE} (
+            kind TEXT NOT NULL,
+            format_version INTEGER NOT NULL,
+            source_identity TEXT NOT NULL,
+            completed_ms INTEGER NOT NULL,
+            projects_copied INTEGER NOT NULL,
+            memories_copied INTEGER NOT NULL,
+            history_copied INTEGER NOT NULL,
+            PRIMARY KEY (kind, format_version, source_identity)
+         );"
+    ))
+    .map_err(|e| unavailable("创建 Digger 迁移记录表", e))
+}
+
+/// 读取完成标记的复制计数;`None` = 尚未标记。
+fn marker_counts(
+    conn: &Connection,
+    identity: &str,
+) -> Result<Option<(usize, usize)>, ServiceError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT projects_copied, memories_copied FROM main.{MARKER_TABLE}
+             WHERE kind = ?1 AND format_version = ?2 AND source_identity = ?3"
+        ))
+        .map_err(|e| unavailable("查询迁移记录", e))?;
+    match stmt.query_row(
+        rusqlite::params![MIGRATION_KIND, FORMAT_VERSION, identity],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    ) {
+        Ok((p, m)) => Ok(Some((
+            usize::try_from(p).map_err(|_| conflict("迁移记录中的 projects 计数越界"))?,
+            usize::try_from(m).map_err(|_| conflict("迁移记录中的 memories 计数越界"))?,
+        ))),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(unavailable("查询迁移记录", e)),
+    }
+}
+
+fn table_rows(conn: &Connection, schema: &str, table: &str) -> Result<usize, ServiceError> {
+    let n: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM {schema}.{table}"), [], |r| {
+            r.get(0)
+        })
+        .map_err(|e| unavailable(format!("统计 {schema}.{table}"), e))?;
+    usize::try_from(n).map_err(|_| conflict(format!("{schema}.{table} 行数越界")))
+}
+
+/// 旧版"已经复制、但没有新标记"的严格行级核对。
+///
+/// 用旧 schema 的规范化投影(缺列用默认值)逐表做 `EXCEPT`:来源每一行都必须在目标里出现。
+/// 目标额外行不删除;任何来源行缺失或内容不同都停止自动恢复,不把"碰巧部分相同"当成功。
+fn verify_old_copy(
+    conn: &Connection,
+    created: &str,
+    desc: &str,
+    has_memories: bool,
+    has_history: bool,
+) -> Result<(), ServiceError> {
+    let mut checks = vec![(
+        "projects",
+        format!(
+            "SELECT id, path, name, last_active_ms, {created} AS created_ms FROM legacy.projects
+             EXCEPT
+             SELECT id, path, name, last_active_ms, created_ms FROM main.projects"
+        ),
+    )];
+    if has_memories {
+        checks.push((
+            "memories",
+            format!(
+                "SELECT id, project_id, title, kind, {desc} AS description, body, created_ms, created_by, updated_ms, updated_by
+                 FROM legacy.memories
+                 EXCEPT
+                 SELECT id, project_id, title, kind, description, body, created_ms, created_by, updated_ms, updated_by
+                 FROM main.memories"
+            ),
+        ));
+    }
+    if has_history {
+        checks.push((
+            "memory_history",
+            "SELECT id, memory_id, project_id, changed_ms, changed_by, change_kind,
+                    title_snapshot, kind_snapshot, description_snapshot, body_snapshot
+             FROM legacy.memory_history
+             EXCEPT
+             SELECT id, memory_id, project_id, changed_ms, changed_by, change_kind,
+                    title_snapshot, kind_snapshot, description_snapshot, body_snapshot
+             FROM main.memory_history"
+                .to_string(),
+        ));
+    }
+    for (table, query) in checks {
+        let missing: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM ({query})"), [], |r| r.get(0))
+            .map_err(|e| unavailable(format!("核对旧版 {table} 行"), e))?;
+        if missing != 0 {
+            return Err(conflict(format!(
+                "目标库已有数据,但旧版 {table} 有 {missing} 行在目标中缺失或内容不同;未自动覆盖,请先备份后人工处理"
+            )));
+        }
+    }
+    Ok(())
+}
+
+struct Projection {
+    created: &'static str,
+    desc: &'static str,
+    has_memories: bool,
+    has_history: bool,
+}
+
+fn projection(conn: &Connection) -> Projection {
+    Projection {
+        created: if has_column(conn, "legacy", "projects", "created_ms") {
+            "created_ms"
+        } else {
+            "last_active_ms"
+        },
+        desc: if has_column(conn, "legacy", "memories", "description") {
+            "description"
+        } else {
+            "''"
+        },
+        has_memories: has_table(conn, "legacy", "memories"),
+        has_history: has_table(conn, "legacy", "memory_history"),
+    }
+}
+
+/// 在目标库事务里完成"核对 / 复制 + 完成标记",返回 `(projects, memories)`。
+fn copy_and_mark(
+    conn: &mut Connection,
+    identity: &str,
+    p: &Projection,
+) -> Result<(usize, usize), ServiceError> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| unavailable("BEGIN IMMEDIATE", e))?;
+
+    // 锁内重新检查标记:两个迁移调用(线程 / 进程)只有一个会真正复制。
+    if let Some(counts) = marker_counts(&tx, identity)? {
+        tx.commit().map_err(|e| unavailable("COMMIT", e))?;
+        return Ok(counts);
+    }
+
+    let target_rows = table_rows(&tx, "main", "projects")?
+        + table_rows(&tx, "main", "memories").unwrap_or(0)
+        + table_rows(&tx, "main", "memory_history").unwrap_or(0);
+    let (projects, memories);
+    if target_rows > 0 {
+        // 旧版可能已经复制而未写标记:只有全部来源行逐行一致,才允许补标记。
+        verify_old_copy(&tx, p.created, p.desc, p.has_memories, p.has_history)?;
+        projects = table_rows(&tx, "legacy", "projects")?;
+        memories = if p.has_memories {
+            table_rows(&tx, "legacy", "memories")?
+        } else {
+            0
+        };
+    } else {
+        projects = tx
+            .execute(
+                &format!(
+                    "INSERT INTO main.projects (id, path, name, last_active_ms, created_ms)
+                     SELECT id, path, name, last_active_ms, {} FROM legacy.projects",
+                    p.created
+                ),
+                [],
+            )
+            .map_err(|e| unavailable("拷贝 projects(与 digger.db 已有行冲突?)", e))?;
+        memories = if p.has_memories {
+            tx.execute(
+                &format!(
+                    "INSERT INTO main.memories (id, project_id, title, kind, description, body, created_ms, created_by, updated_ms, updated_by)
+                     SELECT id, project_id, title, kind, {}, body, created_ms, created_by, updated_ms, updated_by FROM legacy.memories",
+                    p.desc
+                ),
+                [],
+            )
+            .map_err(|e| unavailable("拷贝 memories(与 digger.db 已有行冲突?)", e))?
+        } else {
+            0
+        };
+    }
+    let history = if p.has_history {
+        if target_rows == 0 {
+            tx.execute(
+                "INSERT INTO main.memory_history (id, memory_id, project_id, changed_ms, changed_by, change_kind, title_snapshot, kind_snapshot, description_snapshot, body_snapshot)
+                 SELECT id, memory_id, project_id, changed_ms, changed_by, change_kind, title_snapshot, kind_snapshot, description_snapshot, body_snapshot FROM legacy.memory_history",
+                [],
+            )
+            .map_err(|e| unavailable("拷贝 memory_history", e))?
+        } else {
+            table_rows(&tx, "main", "memory_history")?
+        }
+    } else {
+        0
+    };
+    tx.execute(
+        &format!(
+            "INSERT INTO main.{MARKER_TABLE}
+             (kind, format_version, source_identity, completed_ms, projects_copied, memories_copied, history_copied)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        ),
+        rusqlite::params![
+            MIGRATION_KIND,
+            FORMAT_VERSION,
+            identity,
+            now_ms(),
+            i64::try_from(projects).map_err(|_| conflict("projects 计数越界"))?,
+            i64::try_from(memories).map_err(|_| conflict("memories 计数越界"))?,
+            i64::try_from(history).map_err(|_| conflict("history 计数越界"))?,
+        ],
+    )
+    .map_err(|e| unavailable("写迁移完成标记", e))?;
+    tx.commit().map_err(|e| unavailable("COMMIT", e))?;
+    Ok((projects, memories))
+}
+
+/// 把 legacy 改名为 `*.migrated`,不覆盖已有归档文件。
+fn archive_legacy(legacy: &Path) -> Result<(), String> {
+    let mut dest = legacy.as_os_str().to_owned();
+    dest.push(".migrated");
+    let dest = PathBuf::from(dest);
+    if dest.exists() {
+        return Err(format!("归档目标已存在,未覆盖: {}", dest.to_string_lossy()));
+    }
+    std::fs::rename(legacy, &dest).map_err(|e| format!("改名 legacy 为 .migrated: {e}"))
+}
+
 /// 把 `legacy`(`projects.db`)的项目与记忆行按原 id 拷入 `target`(`digger.db`)。
 ///
 /// - 目标表结构由 `dozer-store-project` 自己建(`ProjectHost::open`),这里不抄 schema。
-/// - 一个事务;与目标库已有行的 id/路径/标题冲突时整体回滚并返回错误(不覆盖、不部分写入),legacy 保持原位。
-/// - 失败时若 `target` 是本次调用才创建的,会被删除;已存在的 `target` 回滚后内容不变。
-/// - 成功后 legacy 改名为 `projects.db.migrated`(保留不删除)。
+/// - 数据复制与 Digger 命名空间下的完成标记在同一事务;提交后崩溃 / 重启只补归档,不重复插入。
+/// - 目标已有数据时只接受"旧版半完成"的逐行核对;真实冲突整体失败,不覆盖。
+/// - 归档失败返回 [`MigrationOutcome::ArchivePending`](数据已提交,可重试归档),不阻止项目服务启动。
 pub fn migrate_legacy_projects(
     legacy: &Path,
     target: &Path,
 ) -> Result<MigrationOutcome, ServiceError> {
-    if !legacy.exists() {
-        return Ok(MigrationOutcome::NothingToMigrate);
-    }
-    let target_existed = target.exists();
-    let result = copy_rows(legacy, target);
-    match result {
-        Ok(outcome) => {
-            let mut migrated = legacy.as_os_str().to_owned();
-            migrated.push(".migrated");
-            std::fs::rename(legacy, std::path::PathBuf::from(migrated))
-                .map_err(|e| unavailable("改名 legacy 为 .migrated", e))?;
-            Ok(outcome)
-        }
-        Err(e) => {
-            if !target_existed {
-                for suffix in ["", "-wal", "-shm", "-journal"] {
-                    let mut p = target.as_os_str().to_owned();
-                    p.push(suffix);
-                    let _ = std::fs::remove_file(std::path::PathBuf::from(p));
-                }
-            }
-            Err(e)
-        }
-    }
+    migrate_legacy_projects_with(legacy, target, || {})
 }
 
-fn copy_rows(legacy: &Path, target: &Path) -> Result<MigrationOutcome, ServiceError> {
-    // 让两个 store 建好(并升级)目标表结构。
+/// Internal seam for the concurrency regression: `after_target_check` runs after the pre-flight
+/// check and before any database write. Production passes a no-op.
+fn migrate_legacy_projects_with(
+    legacy: &Path,
+    target: &Path,
+    after_target_check: impl FnOnce(),
+) -> Result<MigrationOutcome, ServiceError> {
+    let identity = source_identity(legacy);
+    if !legacy.exists() {
+        if target.exists() {
+            let conn = Connection::open(target).map_err(|e| unavailable("打开目标库", e))?;
+            ensure_marker_table(&conn)?;
+            if marker_counts(&conn, &identity)?.is_some() {
+                return Ok(MigrationOutcome::AlreadyMigrated);
+            }
+        }
+        return Ok(MigrationOutcome::NothingToMigrate);
+    }
+
+    let _target_existed = target.exists();
+    after_target_check();
+    // Never delete `target` or its sidecars here. The pre-flight `exists()` does not prove ownership:
+    // another writer may have created and committed the file after that check. A rolled-back
+    // transaction leaves the shared file in place; cleanup is the owner's business.
+    migrate_into_target(legacy, target, &identity)
+}
+
+fn migrate_into_target(
+    legacy: &Path,
+    target: &Path,
+    identity: &str,
+) -> Result<MigrationOutcome, ServiceError> {
+    // 让共享 store 建好(并升级)目标表结构。
     crate::ProjectHost::open(target)?;
 
     let mut conn = Connection::open(target).map_err(|e| unavailable("打开目标库", e))?;
+    ensure_marker_table(&conn)?;
     conn.execute(
         "ATTACH DATABASE ?1 AS legacy",
         [legacy.to_string_lossy().as_ref()],
     )
     .map_err(|e| unavailable("ATTACH legacy", e))?;
 
-    let created = if has_column(&conn, "legacy", "projects", "created_ms") {
-        "created_ms"
-    } else {
-        "last_active_ms"
-    };
-    let has_desc = has_column(&conn, "legacy", "memories", "description");
-    let desc = if has_desc { "description" } else { "''" };
-    let has_memories = has_table(&conn, "legacy", "memories");
-    let has_history = has_table(&conn, "legacy", "memory_history");
-
-    let tx = conn.transaction().map_err(|e| unavailable("BEGIN", e))?;
-    let projects = tx
-        .execute(
-            &format!(
-                "INSERT INTO main.projects (id, path, name, last_active_ms, created_ms)
-                 SELECT id, path, name, last_active_ms, {created} FROM legacy.projects"
-            ),
-            [],
-        )
-        .map_err(|e| unavailable("拷贝 projects(与 digger.db 已有行冲突?)", e))?;
-    let mut memories = 0;
-    if has_memories {
-        memories = tx
-            .execute(
-                &format!(
-                    "INSERT INTO main.memories (id, project_id, title, kind, description, body, created_ms, created_by, updated_ms, updated_by)
-                     SELECT id, project_id, title, kind, {desc}, body, created_ms, created_by, updated_ms, updated_by FROM legacy.memories"
-                ),
-                [],
-            )
-            .map_err(|e| unavailable("拷贝 memories(与 digger.db 已有行冲突?)", e))?;
-    }
-    if has_history {
-        tx.execute(
-            "INSERT INTO main.memory_history (id, memory_id, project_id, changed_ms, changed_by, change_kind, title_snapshot, kind_snapshot, description_snapshot, body_snapshot)
-             SELECT id, memory_id, project_id, changed_ms, changed_by, change_kind, title_snapshot, kind_snapshot, description_snapshot, body_snapshot FROM legacy.memory_history",
-            [],
-        )
-        .map_err(|e| unavailable("拷贝 memory_history", e))?;
-    }
-    tx.commit().map_err(|e| unavailable("COMMIT", e))?;
+    let p = projection(&conn);
+    let copied = copy_and_mark(&mut conn, identity, &p);
     let _ = conn.execute_batch("DETACH DATABASE legacy");
-    Ok(MigrationOutcome::Migrated { projects, memories })
+    drop(conn);
+
+    let (projects, memories) = copied?;
+    match archive_legacy(legacy) {
+        Ok(()) => Ok(MigrationOutcome::Migrated { projects, memories }),
+        Err(error) => Ok(MigrationOutcome::ArchivePending {
+            projects,
+            memories,
+            error,
+        }),
+    }
 }
 
 /// 把 `digger.db` 切换到 WAL 模式(尽力而为,失败只返回 Err 不阻断)。
@@ -304,9 +559,9 @@ mod tests {
         let r1 = migrate_legacy_projects(&legacy, &target).unwrap();
         assert!(matches!(r1, MigrationOutcome::Migrated { .. }));
 
-        // 第二次调用:legacy 已被改名为 .migrated,所以返回 NothingToMigrate。
+        // 第二次调用:legacy 已被改名为 .migrated,完成标记仍在,所以返回 AlreadyMigrated。
         let r2 = migrate_legacy_projects(&legacy, &target).unwrap();
-        assert_eq!(r2, MigrationOutcome::NothingToMigrate);
+        assert_eq!(r2, MigrationOutcome::AlreadyMigrated);
 
         // 目标库行数不变。
         let conn = Connection::open(&target).unwrap();
@@ -338,6 +593,11 @@ mod tests {
         seed_legacy(&target, 1, 1);
         seed_legacy(&legacy, 1, 1);
 
+        {
+            let c = Connection::open(&target).unwrap();
+            c.execute("UPDATE projects SET name = 'Other'", []).unwrap();
+        }
+
         let err = migrate_legacy_projects(&legacy, &target).unwrap_err();
         assert_eq!(err.kind, ServiceErrorKind::Unavailable);
         assert!(legacy.exists(), "legacy must stay in place");
@@ -349,7 +609,7 @@ mod tests {
             .unwrap()
             .map(|r| r.unwrap())
             .collect();
-        assert_eq!(names, vec!["Project 0".to_string()]);
+        assert_eq!(names, vec!["Other".to_string()]);
     }
 
     #[test]
@@ -375,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_migration_leaves_no_new_digger_db() {
+    fn a_failed_migration_does_not_delete_the_target_file() {
         let dir = tempfile::tempdir().unwrap();
         let legacy = dir.path().join("projects.db");
         let target = dir.path().join("digger.db");
@@ -383,8 +643,57 @@ mod tests {
         std::fs::write(&legacy, b"this is not a database at all, just text").unwrap();
 
         assert!(migrate_legacy_projects(&legacy, &target).is_err());
-        assert!(!target.exists(), "a partial digger.db must not remain");
+        // 失败的事务已经回滚;文件本身可能由共享 store 创建,不能凭旧 exists 删除。
         assert!(legacy.exists());
+        if target.exists() {
+            let c = Connection::open(&target).unwrap();
+            let n: i64 = c
+                .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "a failed migration leaves no committed rows");
+        }
+    }
+
+    #[test]
+    fn a_concurrent_writer_that_commits_after_the_exists_check_is_not_deleted() {
+        use std::sync::{Arc, Barrier, mpsc};
+
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("projects.db");
+        let target = dir.path().join("digger.db");
+        std::fs::write(&legacy, b"not a database").unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer_target = target.clone();
+        let writer_barrier = barrier.clone();
+        let writer = std::thread::spawn(move || {
+            // Wait until the migration has passed its pre-flight exists() check.
+            writer_barrier.wait();
+            let c = Connection::open(&writer_target).unwrap();
+            c.execute_batch(
+                "CREATE TABLE sentinel (value TEXT NOT NULL);
+                 INSERT INTO sentinel VALUES ('committed by another writer');",
+            )
+            .unwrap();
+            done_tx.send(()).unwrap();
+        });
+
+        let check_barrier = barrier.clone();
+        let err = migrate_legacy_projects_with(&legacy, &target, move || {
+            check_barrier.wait();
+            done_rx.recv().unwrap(); // the other writer has committed
+        })
+        .unwrap_err();
+        writer.join().unwrap();
+        assert!(matches!(err.kind, ServiceErrorKind::Unavailable));
+
+        let c = Connection::open(&target).unwrap();
+        let value: String = c
+            .query_row("SELECT value FROM sentinel", [], |r| r.get(0))
+            .expect("the other writer's committed database must survive");
+        assert_eq!(value, "committed by another writer");
+        assert!(legacy.exists(), "a failed migration keeps the source");
     }
 
     #[test]
@@ -432,6 +741,157 @@ mod tests {
                 memories: 1
             }
         ));
+    }
+
+    #[test]
+    fn a_committed_migration_with_a_failed_archive_restarts_as_archive_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("projects.db");
+        let target = dir.path().join("digger.db");
+        seed_legacy(&legacy, 2, 2);
+        // 归档目标已存在:数据可以提交,但改名必须失败且不覆盖。
+        std::fs::write(dir.path().join("projects.db.migrated"), b"keep me").unwrap();
+
+        let first = migrate_legacy_projects(&legacy, &target).unwrap();
+        match first {
+            MigrationOutcome::ArchivePending {
+                projects, memories, ..
+            } => {
+                assert_eq!((projects, memories), (2, 4));
+            }
+            other => panic!("expected ArchivePending, got {other:?}"),
+        }
+        assert!(legacy.exists(), "legacy stays for a later archive attempt");
+        assert_eq!(
+            std::fs::read(dir.path().join("projects.db.migrated")).unwrap(),
+            b"keep me",
+            "an existing archive is never overwritten"
+        );
+
+        // 重启前完成标记已经提交:第二次调用只做归档,不再 INSERT。
+        std::fs::remove_file(dir.path().join("projects.db.migrated")).unwrap();
+        let second = migrate_legacy_projects(&legacy, &target).unwrap();
+        assert_eq!(
+            second,
+            MigrationOutcome::Migrated {
+                projects: 2,
+                memories: 4
+            }
+        );
+        assert!(!legacy.exists());
+        let c = Connection::open(&target).unwrap();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "restart must not duplicate rows");
+        let markers: i64 = c
+            .query_row(&format!("SELECT COUNT(*) FROM {MARKER_TABLE}"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(markers, 1);
+    }
+
+    #[test]
+    fn an_old_half_completed_copy_is_marked_only_when_every_source_row_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("projects.db");
+        let target = dir.path().join("digger.db");
+        seed_legacy(&legacy, 3, 2);
+        // 模拟旧版:已经复制了全部来源行,但没有完成标记,也没有归档。
+        crate::ProjectHost::open(&target).unwrap();
+        {
+            let c = Connection::open(&target).unwrap();
+            c.execute(
+                "ATTACH DATABASE ?1 AS legacy",
+                [legacy.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO main.projects (id, path, name, last_active_ms, created_ms)
+                 SELECT id, path, name, last_active_ms, created_ms FROM legacy.projects",
+                [],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO main.memories (id, project_id, title, kind, description, body, created_ms, created_by, updated_ms, updated_by)
+                 SELECT id, project_id, title, kind, description, body, created_ms, created_by, updated_ms, updated_by FROM legacy.memories",
+                [],
+            )
+            .unwrap();
+        }
+
+        let outcome = migrate_legacy_projects(&legacy, &target).unwrap();
+        assert!(matches!(
+            outcome,
+            MigrationOutcome::Migrated {
+                projects: 3,
+                memories: 6
+            }
+        ));
+        let c = Connection::open(&target).unwrap();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 3, "no duplicate insert during recovery");
+        let markers: i64 = c
+            .query_row(&format!("SELECT COUNT(*) FROM {MARKER_TABLE}"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(markers, 1);
+    }
+
+    #[test]
+    fn an_old_half_completed_copy_with_different_content_is_a_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("projects.db");
+        let target = dir.path().join("digger.db");
+        seed_legacy(&legacy, 1, 1);
+        crate::ProjectHost::open(&target).unwrap();
+        {
+            let c = Connection::open(&target).unwrap();
+            c.execute(
+                "ATTACH DATABASE ?1 AS legacy",
+                [legacy.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO main.projects (id, path, name, last_active_ms, created_ms)
+                 SELECT id, path, 'different name', last_active_ms, created_ms FROM legacy.projects",
+                [],
+            )
+            .unwrap();
+        }
+
+        let err = migrate_legacy_projects(&legacy, &target).unwrap_err();
+        assert!(err.message.contains("projects"), "{err:?}");
+        assert!(legacy.exists(), "a conflict never archives the source");
+        let c = Connection::open(&target).unwrap();
+        let name: String = c
+            .query_row("SELECT name FROM projects", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "different name", "the target is left untouched");
+        let markers: i64 = c
+            .query_row(&format!("SELECT COUNT(*) FROM {MARKER_TABLE}"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(markers, 0, "a conflict does not write a success marker");
+    }
+
+    #[test]
+    fn a_marker_without_the_legacy_file_reports_already_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("projects.db");
+        let target = dir.path().join("digger.db");
+        seed_legacy(&legacy, 1, 1);
+        migrate_legacy_projects(&legacy, &target).unwrap();
+        // 与重启等价:legacy 已被归档,标记仍在。
+        assert_eq!(
+            migrate_legacy_projects(&legacy, &target).unwrap(),
+            MigrationOutcome::AlreadyMigrated
+        );
     }
 
     #[test]

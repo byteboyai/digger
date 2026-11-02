@@ -127,9 +127,9 @@ pub struct UsageLedger {
 
 /// 磁盘形状:`{ "runs": { "<run_id>": { ... } } }`。
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct OnDisk {
+pub(crate) struct OnDisk {
     #[serde(default)]
-    runs: BTreeMap<String, TaskUsageRecord>,
+    pub(crate) runs: BTreeMap<String, TaskUsageRecord>,
 }
 
 impl UsageLedger {

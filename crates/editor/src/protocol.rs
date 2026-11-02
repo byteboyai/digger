@@ -4,6 +4,31 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 线上协议版本。Rust 与编译进二进制的页面同次更新;版本不匹配时停止同步,不按旧格式继续。
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// 结构化错误码。状态机只按 code 分支,`reason` 只用于展示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    /// 编辑的 base 不是当前版本(通常 Agent 先改了文档)。
+    StaleBase,
+    /// UTF-16 位置落在代理对中间或越界。
+    BadPosition,
+    /// changes 未排序 / 重叠 / 格式不合法。
+    MalformedChanges,
+    /// nonce / 模式不允许该消息(例如 normal 模式触发 Load / Agent)。
+    Unauthorized,
+    /// 协议版本不兼容。
+    UnsupportedProtocol,
+    /// 同一 request ID 携带了不同内容。
+    DuplicateRequest,
+    /// request ID 早于最近确认的请求,无法判断是否重复。
+    OutOfOrderRequest,
+    /// 内部错误。
+    Internal,
+}
+
 /// 一处文本改动(UTF-16 位置)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Change {
@@ -16,13 +41,25 @@ pub struct Change {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum EditorInbound {
-    /// 页面就绪,请 Rust 给出文档。
+    /// 页面就绪,请 Rust 给出文档。`protocol` 缺省视为 1(旧页面),不匹配当前版本会被拒绝。
     Ready {
+        #[serde(default)]
+        protocol: Option<u32>,
         #[serde(default)]
         engine: Option<String>,
     },
-    /// 一批编辑,坐标是页面在 `base` 版本时的文档。
-    Edit { base: u64, changes: Vec<Change> },
+    /// 一批编辑,坐标是页面在 `base` 版本时的文档。`request_id` 在会话内单调递增。
+    Edit {
+        #[serde(default)]
+        request_id: Option<u64>,
+        base: u64,
+        changes: Vec<Change>,
+    },
+    /// 只读快照:normal 模式允许,用于拒绝 / 超时后的恢复;不改文档,也不扩大写权限。
+    Snapshot {
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     /// 仅 harness:页面自带语料,请 Rust 当作新文档载入。
     Load { text: String },
     /// 仅 harness:代替 Agent 运行时的测试入口,按块 id 改文本。
@@ -93,14 +130,41 @@ pub struct BlockInfo {
 pub enum EditorOutbound {
     /// 握手的回答:初始文档。
     Open {
+        protocol: u32,
         text: String,
         version: u64,
         hash: String,
         len16: usize,
         blocks: Vec<BlockInfo>,
     },
-    /// 编辑被接受后的块列表。
+    /// 编辑被接受后的块列表(带对应的 request ID,便于丢弃过时回包)。
     Blocks {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+        version: u64,
+        hash: String,
+        len16: usize,
+        blocks: Vec<BlockInfo>,
+    },
+    /// 局部编辑的块增量:替换 `base_version` 块列表的 `[removed_from, removed_to)` 区间,
+    /// 新块的 `from`/`to` 已是在结果版本文本里的坐标;保留块先由 `changes` 映射。
+    Incremental {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+        base_version: u64,
+        version: u64,
+        hash: String,
+        len16: usize,
+        changes: Vec<Change>,
+        removed_from: usize,
+        removed_to: usize,
+        blocks: Vec<BlockInfo>,
+    },
+    /// 只读快照(Rust 权威文本 + 块)。恢复交互用它决定是否采用权威版本。
+    Snapshot {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+        text: String,
         version: u64,
         hash: String,
         len16: usize,
@@ -119,6 +183,9 @@ pub enum EditorOutbound {
     AgentError { reason: String, stale: bool },
     /// 消息被拒绝(过期的 base、解析不了、未知、nonce 不对……)。
     Reject {
+        code: ErrorCode,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
         reason: String,
         version: Option<u64>,
     },

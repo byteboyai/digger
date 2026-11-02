@@ -224,3 +224,43 @@ mod tests {
         assert_eq!(err.kind, ServiceErrorKind::Unavailable);
     }
 }
+
+/// SQLite 后台账本的 [`UsageService`] 实现:查询经 worker 线程,不在窗口 / Tokio worker 上长时间执行 SQLite。
+#[derive(Clone)]
+pub struct UsageDbService {
+    handle: crate::usage_worker::UsageHandle,
+}
+
+impl UsageDbService {
+    pub fn new(handle: crate::usage_worker::UsageHandle) -> Self {
+        Self { handle }
+    }
+}
+
+impl std::fmt::Debug for UsageDbService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UsageDbService").finish()
+    }
+}
+
+impl UsageService for UsageDbService {
+    fn usage_summary(
+        &self,
+        cwd: String,
+        since_ts: Option<u64>,
+    ) -> BoxFuture<'_, Result<UsageRows, ServiceError>> {
+        Box::pin(async move {
+            let rx = self
+                .handle
+                .query(cwd, since_ts)
+                .map_err(|e| ServiceError::new(ServiceErrorKind::Unavailable, e.to_string()))?;
+            let rows = rx
+                .await
+                .map_err(|_| {
+                    ServiceError::new(ServiceErrorKind::Unavailable, "用量查询 worker 已停止")
+                })?
+                .map_err(|e| ServiceError::new(ServiceErrorKind::Unavailable, e))?;
+            Ok(rows.iter().map(to_row).collect())
+        })
+    }
+}

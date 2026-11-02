@@ -1138,7 +1138,7 @@ mod tests {
             Message::SaveFinished {
                 tab_id: 1,
                 revision: 9,
-                result: Ok(()),
+                result: Ok(dozer_panel_preview::SaveOutcome::Committed),
             },
         );
         assert!(fx.is_empty(), "A 的迟到结果不许触发 B 的后续效果");
@@ -1361,6 +1361,7 @@ mod tests {
                     path: path.to_path_buf(),
                     text: "x".to_string(),
                     revision: 0,
+                    project_root: Some(dir.to_path_buf()),
                 },
             ]
         };
