@@ -330,7 +330,7 @@ impl ProductShell {
                 .expect("首次注册产品面板");
         }
         catalog
-            .register(CatalogEntry::single_surface(shell::markdown_id(), "编辑器"))
+            .register(CatalogEntry::single_surface(shell::markdown_id(), "写字台"))
             .expect("首次注册 digger.markdown");
 
         // 启动时读全局布局(项目布局只在切到项目页签时换上,见 `Msg::Projects`)。

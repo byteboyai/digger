@@ -75,7 +75,7 @@ pub fn all_panels() -> Vec<PanelId> {
 /// 图标栏上的图标与悬停标题。
 pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
     let (title, icon) = match panel.as_str() {
-        "digger.markdown" => ("编辑器", IconKind::FileText),
+        "digger.markdown" => ("写字台", IconKind::NotebookTabs),
         "digger.usage" => ("用量", IconKind::BarChart3),
         "digger.project" => ("项目", IconKind::Briefcase),
         "digger.files" => ("文件", IconKind::FolderTree),

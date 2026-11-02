@@ -292,7 +292,8 @@ impl PanelDisplay<Msg> for PreviewDisplay<'_> {
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim,
             ))
-            .on_press(Msg::Shell(ShellMsg::TogglePane(id))),
+            .on_press(Msg::Shell(ShellMsg::TogglePane(id)))
+            .style(crate::adapters::collapse_button_style()),
             container(text(tip).size(byteui::theme::font::body()))
                 .padding(6)
                 .style(container::rounded_box),

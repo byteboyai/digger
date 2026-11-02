@@ -61,3 +61,15 @@ pub mod conversations_search_menu;
 pub mod review_native;
 
 pub mod review_geometry;
+
+use iced_widget::button;
+
+/// 收起 / 展开列表列等图标按钮:用中性深色底(`card`),去掉 iced 默认按钮的蓝紫底色。
+/// 默认 `button()` 会吃到主题默认按钮样式(蓝紫填充),这类纯图标按钮应是透明的深色方块。
+pub fn collapse_button_style(
+) -> impl Fn(&iced_widget::Theme, button::Status) -> button::Style {
+    move |_t, _s| button::Style {
+        background: Some(byteui::theme::color::current().card.into()),
+        ..button::Style::default()
+    }
+}

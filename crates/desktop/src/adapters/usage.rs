@@ -260,7 +260,8 @@ impl PanelDisplay<Msg> for UsagePanel {
                 byteui::theme::icon_size::row(),
                 byteui::theme::color::current().dim,
             ))
-            .on_press(on_select),
+            .on_press(on_select)
+            .style(crate::adapters::collapse_button_style()),
             container(text(tip).size(byteui::theme::font::body()))
                 .padding(6)
                 .style(container::rounded_box),

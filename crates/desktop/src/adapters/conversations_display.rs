@@ -80,7 +80,8 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
                 byteui::theme::color::current().dim,
             ))
             .padding(review_button_padding())
-            .on_press(toggle_pane_message()),
+            .on_press(toggle_pane_message())
+            .style(crate::adapters::collapse_button_style()),
             container(text(tip).size(byteui::theme::font::body()))
                 .padding(6)
                 .style(container::rounded_box),
