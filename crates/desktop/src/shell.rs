@@ -17,14 +17,6 @@ fn id(s: &str) -> PanelId {
     PanelId::new(s).expect("合法 panel id")
 }
 
-/// 产品信息 / 状态面板。
-pub fn info_id() -> PanelId {
-    id("digger.info")
-}
-/// 应用管理面板。
-pub fn apps_id() -> PanelId {
-    id("digger.apps")
-}
 /// 用量面板(共享 `dozer-panel-usage` 库)。
 pub fn usage_id() -> PanelId {
     id("digger.usage")
@@ -73,8 +65,6 @@ pub fn all_panels() -> Vec<PanelId> {
         conversations_id(),
         browser_id(),
         markdown_id(),
-        info_id(),
-        apps_id(),
         usage_id(),
         project_id(),
         files_id(),
@@ -86,8 +76,6 @@ pub fn all_panels() -> Vec<PanelId> {
 pub fn meta(panel: &PanelId) -> Option<PanelMeta> {
     let (title, icon) = match panel.as_str() {
         "digger.markdown" => ("编辑器", IconKind::FileText),
-        "digger.info" => ("信息", IconKind::SquareActivity),
-        "digger.apps" => ("应用", IconKind::LayoutList),
         "digger.usage" => ("用量", IconKind::BarChart3),
         "digger.project" => ("项目", IconKind::Briefcase),
         "digger.files" => ("文件", IconKind::FolderTree),
@@ -164,14 +152,12 @@ pub fn defaults() -> Defaults {
                 files_id(),
                 todo_id(),
                 markdown_id(),
-                info_id(),
+                browser_id(),
             ],
             vec![
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id(),
             ],
         ],
@@ -282,7 +268,7 @@ fn conversations_after_agent(json: &str) -> String {
     value.to_string()
 }
 
-/// 旧布局缺浏览器时放到右栏会话后面(没有会话就放最前);已放置(任一栏)则原样返回。
+/// 旧布局缺浏览器时放到左栏编辑器后面(没有编辑器就追加到左栏末尾);已放置(任一栏)则原样返回。
 /// 只改读入文本中的栏顺序,保留两侧的选中字段;不写盘,更高 schema 的保护仍由 `Loaded::may_save` 执行。
 /// 必须排在 `conversations_after_agent` 之后,这样"会话"一定已在右栏(或用户拖去了左栏)。
 fn browser_after_conversations(json: &str) -> String {
@@ -301,17 +287,17 @@ fn browser_after_conversations(json: &str) -> String {
     }) {
         return json.to_owned();
     }
-    let right = object
-        .entry("right")
+    let left = object
+        .entry("left")
         .or_insert_with(|| serde_json::json!([]));
-    let Some(right) = right.as_array_mut() else {
+    let Some(left) = left.as_array_mut() else {
         return json.to_owned();
     };
-    let at = right
+    let at = left
         .iter()
-        .position(|v| v.as_str() == Some(conversations_id().as_str()))
-        .map_or(0, |i| i + 1);
-    right.insert(at, serde_json::Value::String(wire.as_str().to_owned()));
+        .position(|v| v.as_str() == Some(markdown_id().as_str()))
+        .map_or(left.len(), |i| i + 1);
+    left.insert(at, serde_json::Value::String(wire.as_str().to_owned()));
     value.to_string()
 }
 
@@ -482,8 +468,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 id("digger.conversations"),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -502,8 +486,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 id("digger.conversations"),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -526,11 +508,11 @@ mod tests {
         for (tag, json) in [
             (
                 "right",
-                r#"{"left":["digger.markdown"],"right":["digger.apps","digger.conversations","digger.agent","digger.usage"],"selected_left":"digger.markdown","selected_right":"digger.usage"}"#,
+                r#"{"left":["digger.markdown"],"right":["digger.conversations","digger.agent","digger.usage"],"selected_left":"digger.markdown","selected_right":"digger.usage"}"#,
             ),
             (
                 "left",
-                r#"{"left":["digger.conversations","digger.markdown"],"right":["digger.agent","digger.apps","digger.usage"],"selected_left":"digger.markdown","selected_right":"digger.usage"}"#,
+                r#"{"left":["digger.conversations","digger.markdown"],"right":["digger.agent","digger.usage"],"selected_left":"digger.markdown","selected_right":"digger.usage"}"#,
             ),
         ] {
             assert_eq!(
@@ -661,8 +643,6 @@ mod tests {
 
     #[test]
     fn panel_ids_are_the_persisted_wire_names_and_must_not_change() {
-        assert_eq!(info_id().as_str(), "digger.info");
-        assert_eq!(apps_id().as_str(), "digger.apps");
         assert_eq!(usage_id().as_str(), "digger.usage");
         assert_eq!(markdown_id().as_str(), "digger.markdown");
         assert_eq!(project_id().as_str(), "digger.project");
@@ -699,7 +679,7 @@ mod tests {
                 files_id(),
                 todo_id(),
                 markdown_id(),
-                info_id()
+                browser_id()
             ],
             "project, files, todo, then the content panels, like Dozer"
         );
@@ -709,8 +689,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -732,7 +710,7 @@ mod tests {
         let model = load(&path).into_model();
         assert_eq!(
             model.rail(Side::Left),
-            [info_id(), markdown_id(), files_id(), todo_id()],
+            [markdown_id(), browser_id(), files_id(), todo_id()],
             "the file says where project lives, so new panels are appended to its default side"
         );
         assert_eq!(
@@ -741,8 +719,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id(),
                 project_id()
             ]
@@ -786,8 +762,8 @@ mod tests {
             [
                 project_id(),
                 files_id(),
-                info_id(),
                 markdown_id(),
+                browser_id(),
                 todo_id()
             ],
             "the user's order is kept, the new panels land on their default side"
@@ -798,8 +774,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ],
             "the new panels land on their default side"
@@ -835,8 +809,8 @@ mod tests {
             [
                 project_id(),
                 files_id(),
-                info_id(),
                 markdown_id(),
+                browser_id(),
                 todo_id()
             ],
             "files lands right after project; todo is appended to the default side"
@@ -847,8 +821,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -878,7 +850,7 @@ mod tests {
             byteui::theme::geometry::default_split_ratio()
         );
         assert_eq!(pane.min_first_px, list_min_width());
-        for p in [markdown_id(), info_id(), apps_id()] {
+        for p in [markdown_id(), browser_id()] {
             assert!(rules(&p).is_none(), "{p} stays a single-column panel");
         }
     }
@@ -899,7 +871,7 @@ mod tests {
             assert_eq!(pane.spec, bytehost_desktop::PaneSpec::new(false, true));
             assert_eq!(pane.min_first_px, list_min_width());
         }
-        for p in [markdown_id(), info_id(), apps_id()] {
+        for p in [markdown_id(), browser_id()] {
             assert!(rules(&p).is_none(), "{p} stays single-column");
         }
     }
@@ -926,8 +898,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -1231,8 +1201,8 @@ mod tests {
             [
                 project_id(),
                 files_id(),
-                info_id(),
                 markdown_id(),
+                browser_id(),
                 todo_id()
             ]
         );
@@ -1242,8 +1212,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -1297,7 +1265,7 @@ mod tests {
                 project_id(),
                 files_id(),
                 markdown_id(),
-                info_id(),
+                browser_id(),
                 todo_id()
             ],
             "old relative order is kept; todo is appended to its default side"
@@ -1308,8 +1276,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -1351,8 +1317,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -1371,8 +1335,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -1392,8 +1354,6 @@ mod tests {
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -1457,36 +1417,25 @@ mod tests {
     }
 
     #[test]
-    fn the_default_layout_places_the_browser_after_conversations() {
+    fn the_default_layout_places_the_browser_in_the_left_rail() {
         let d = defaults();
-        assert_eq!(
-            d.rails[1],
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                browser_id(),
-                apps_id(),
-                usage_id()
-            ]
-        );
-        assert_eq!(d.selected, [markdown_id(), agent_id()]);
+        assert_eq!(d.rails[0].last(), Some(&browser_id()));
+        assert!(!d.rails[1].contains(&browser_id()));
     }
 
     #[test]
-    fn an_old_file_without_the_browser_gets_it_after_conversations_and_keeps_selection() {
+    fn an_old_file_without_the_browser_gets_it_in_the_left_rail_and_keeps_selection() {
         let (model, dir) = load_json(
             "browser-old",
-            r#"{"left":["digger.project","digger.files","digger.markdown"],"right":["digger.agent","digger.group_chat","digger.conversations","digger.apps","digger.usage"],"selected_right":"digger.conversations"}"#,
+            r#"{"left":["digger.project","digger.files","digger.markdown"],"right":["digger.agent","digger.group_chat","digger.conversations","digger.usage"],"selected_right":"digger.conversations"}"#,
         );
+        assert!(model.rail(Side::Left).contains(&browser_id()));
         assert_eq!(
             model.rail(Side::Right),
             [
                 agent_id(),
                 group_chat_id(),
                 conversations_id(),
-                browser_id(),
-                apps_id(),
                 usage_id()
             ]
         );
@@ -1501,7 +1450,7 @@ mod tests {
         );
         assert_eq!(
             once,
-            r#"{"left":[],"right":["digger.agent","digger.conversations","digger.browser"]}"#
+            r#"{"left":["digger.browser"],"right":["digger.agent","digger.conversations"]}"#
         );
         assert_eq!(browser_after_conversations(&once), once);
         // 已放在左栏(用户拖过去了)也不再动。
@@ -1513,19 +1462,18 @@ mod tests {
     }
 
     #[test]
-    fn an_old_file_with_an_empty_right_rail_gets_the_browser_too() {
+    fn an_old_file_with_an_empty_right_rail_gets_the_browser_in_the_left_rail() {
         let (model, dir) = load_json(
             "browser-empty",
             r#"{"left":["digger.markdown"],"right":[]}"#,
         );
-        let right = model.rail(Side::Right);
-        assert_eq!(right[0], agent_id());
-        let pos = |p: PanelId| right.iter().position(|x| *x == p).unwrap();
-        assert_eq!(pos(browser_id()), pos(conversations_id()) + 1);
+        let left = model.rail(Side::Left);
+        let pos = |p: PanelId| left.iter().position(|x| *x == p).unwrap();
+        assert_eq!(pos(browser_id()), pos(markdown_id()) + 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 与 `digger.markdown`/`digger.info`/`digger.apps` 同类:单栏、不配对;所在侧由 `defaults()` 与迁移决定。
+    /// 与 `digger.markdown` 同类:单栏、不配对;默认在左栏,旧布局缺它时由迁移补到左栏。
     #[test]
     fn browser_has_no_pair_rules_like_markdown() {
         assert!(rules(&browser_id()).is_none());

@@ -86,7 +86,7 @@ fn release() -> Action {
 
 fn shell_steps() -> Vec<Step> {
     let editor = shell::markdown_id;
-    let info = shell::info_id;
+    let info = shell::files_id;
     vec![
         Step {
             name: "S1 the editor is shown in the left zone, below its own bar, with the default 640 px zone",
@@ -178,7 +178,7 @@ fn steps(scenario: Scenario) -> Vec<Step> {
 
 fn usage_steps() -> Vec<Step> {
     let usage = shell::usage_id;
-    let apps = shell::apps_id;
+    let apps = shell::agent_id;
     // 配对宽 448,右区内容 x 693:光标放在 693 + 0.5·448 = 917,内容占一半 ⇒ 列表占 0.5
     let drag_to_half = vec![
         Action::Msg(ShellMsg::DividerPress(Divider::Pair(Side::Right))),

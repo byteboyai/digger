@@ -29,7 +29,6 @@ use iced_widget::core::Border;
 use crate::{paths, shell};
 
 /// 应用面板自己的头部(返回按钮 + 应用 id + 状态)的高度:原生应用 webview 摆在它下面。
-const APPS_HEADER_HEIGHT: f32 = 96.0;
 /// 用量面板自己的原生头部(标题 + 加载态)的高度:图表 webview 摆在它下面。
 const USAGE_HEADER_HEIGHT: f32 = 80.0;
 /// 预览展示上下文的常量部分:Digger 面板外观固定(无悬停动画 D2、列表恒在左 D3)。
@@ -313,8 +312,6 @@ impl ProductShell {
     pub(crate) fn with_shell_path(shell_path: PathBuf) -> Self {
         let mut catalog = PanelCatalog::new();
         for (id, title) in [
-            (shell::info_id(), "Digger"),
-            (shell::apps_id(), "应用"),
             (shell::usage_id(), "用量"),
             (shell::project_id(), "项目"),
             (shell::files_id(), "文件"),
@@ -604,13 +601,6 @@ impl ProductShell {
 
     /// 面板刚被切入(或启动时本来就可见):触发各自的"切入时动作"。
     fn on_visible(&mut self, panel: &PanelId) -> Task<Msg> {
-        if *panel == shell::apps_id() {
-            // 首次进入「应用」面板:触发一次探测 + 拉列表(Task 14)。
-            return self
-                .apps
-                .update(crate::apps::Message::Opened)
-                .map(Msg::Apps);
-        }
         if *panel == shell::usage_id() {
             // 进入「用量」面板:触发一次取数(库的 on_activate,Task 20)。
             self.usage.activate();
@@ -1037,14 +1027,6 @@ impl ProductShell {
             tasks.push(self.on_visible(&panel));
         }
         // 应用面板从可见变成不可见(切走 / 收起 / 被放大盖住):关掉正在显示的应用,别留一个看不见的 webview 盖在别处。
-        let apps = shell::all_panels()
-            .iter()
-            .position(|p| *p == shell::apps_id());
-        if apps.is_some_and(|i| {
-            self.visible_before.get(i).copied().unwrap_or(false) && !visible_now[i]
-        }) {
-            self.apps.close_selected();
-        }
         if self.agent.picker.is_some() && !self.panel_visible(&shell::agent_id()) {
             self.agent.picker = None;
         }
@@ -1107,7 +1089,6 @@ impl ProductShell {
             }
             rects.content(side)
         };
-        let apps_rect = content_of(&shell::apps_id());
         let usage_rect = content_of(&shell::usage_id()).map(|content| {
             let pair = self
                 .shell
@@ -1154,14 +1135,6 @@ impl ProductShell {
         };
         let closing = self.closing;
 
-        let apps_task = match apps_rect {
-            Some(r) if !closing => self
-                .apps
-                .sync_native(window, logical(below_header(r, APPS_HEADER_HEIGHT)))
-                .map(Msg::Apps),
-            // 关闭时由 `apps.prepare_shutdown` 收尾;不可见时 `on_shell` 已 `close_selected`,这里仍要让待办的原生动作跑完。
-            _ => self.apps.sync_native(window, hidden).map(Msg::Apps),
-        };
         let usage_task = self
             .usage
             .sync_native(
@@ -1230,7 +1203,6 @@ impl ProductShell {
         Task::batch([
             browser_task,
             chat_task,
-            apps_task,
             usage_task,
             markdown_task,
             todo_task,
@@ -1346,43 +1318,6 @@ impl ProductShell {
             scripts.extend(preview.host_scripts(panel, project.id));
         }
         vec![native_preview_task(window, host, desired, scripts)]
-    }
-
-    fn info_view(&self) -> Element<'_, Msg> {
-        let tokens = color::current();
-        let dim = tokens.dim;
-        container(
-            column![
-                text(format!(
-                    "面板目录已注册 {} 个(产品组合根)",
-                    self.catalog.len()
-                ))
-                .color(tokens.body),
-                text(format!("数据根:{}", paths::config_dir().display())).color(dim),
-                text(format!("应用宿主根:{}", paths::bytehost_root().display())).color(dim),
-                text(match self.projects.current_project() {
-                    Some(p) => format!("当前 Project:{}({})", p.name, p.path),
-                    None => "当前 Project:无".to_string(),
-                })
-                .color(tokens.body),
-                text(&self.boot_note).color(tokens.gold),
-                iced::widget::button("退出 Digger").on_press(Msg::Exit),
-            ]
-            .spacing(8)
-            .width(Length::Fill),
-        )
-        .padding(16)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
-
-    fn apps_view(&self) -> Element<'_, Msg> {
-        container(self.apps.view().map(Msg::Apps))
-            .padding(0)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
     }
 
     /// 共享设置页文案:Digger 本期没有 i18n,统一用共享层英文回退。
@@ -2399,8 +2334,6 @@ impl ShellHost<Msg> for ProductShell {
 
     fn body<'a>(&'a self, panel: &PanelId, area: &BodyArea) -> El<'a, Msg> {
         match panel.as_str() {
-            "digger.info" => self.info_view(),
-            "digger.apps" => self.apps_view(),
             "digger.usage" => self.usage_view(area),
             "digger.todo" => self.todo_view(area),
             "digger.markdown" => self.markdown_view(),
@@ -4312,7 +4245,6 @@ mod tests {
             let mut shell = ProductShell::with_shell_path(dir.path().join("shell.json"));
             shell.apps = crate::apps::AppsState::with_ledger_path(dir.path().join("cleanups.json"));
             let mut rx = crate::apps::take_reply_receiver(&shell.apps.reply_receiver()).unwrap();
-            assert!(!shell.panel_visible(&shell::apps_id()));
             let _ = shell.update_settings(S::Open(direct.then(apps_page_id)));
             if !direct {
                 assert!(rx.try_recv().is_err(), "主题页不应启动应用服务");
@@ -5004,7 +4936,7 @@ mod tests {
         );
         assert!(shell::pair_rects(&shell, files_side).is_some());
         // 选中同侧的另一块(非配对)面板后,该侧不再是配对的可渲染状态。
-        let other = [shell::info_id(), shell::apps_id()]
+        let other = [shell::project_id(), shell::todo_id()]
             .into_iter()
             .find(|id| shell.side_of(id) == Some(files_side))
             .expect("同侧总还有别的面板");
@@ -5145,7 +5077,7 @@ mod tests {
         let dir = test_temp_dir("global-only");
         let path = dir.join("shell.json");
         let mut shell = ProductShell::with_shell_path(path.clone());
-        press(&mut shell, &shell::info_id());
+        press(&mut shell, &shell::files_id());
         assert!(path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5689,19 +5621,11 @@ mod tests {
         for id in shell::all_panels() {
             assert!(shell.catalog.contains(&id), "{id}");
         }
-        assert_eq!(shell.catalog.len(), 11);
+        assert_eq!(shell.catalog.len(), 9);
         // 编辑器声明一个主 Surface 槽位;纯 iced 原生面板不声明。
         assert_eq!(
             shell.catalog.get(&shell::markdown_id()).unwrap().surfaces,
             vec![bytehost_desktop::SurfaceSlot::MAIN]
-        );
-        assert!(
-            shell
-                .catalog
-                .get(&shell::info_id())
-                .unwrap()
-                .surfaces
-                .is_empty()
         );
     }
 
@@ -6053,9 +5977,6 @@ mod tests {
         let shell = fresh("default");
         assert!(shell.panel_visible(&shell::markdown_id()));
         assert!(shell.panel_visible(&shell::agent_id()));
-        assert!(!shell.panel_visible(&shell::info_id()));
-        assert!(!shell.panel_visible(&shell::apps_id()));
-        assert_eq!(shell.shell.side_of(&shell::apps_id()), Some(Side::Right));
     }
 
     #[test]
@@ -6081,10 +6002,10 @@ mod tests {
         let dir = test_temp_dir("saved");
         let path = dir.join("shell.json");
         let mut shell = ProductShell::with_shell_path(path.clone());
-        press(&mut shell, &shell::info_id());
+        press(&mut shell, &shell::files_id());
         assert!(path.exists(), "a layout change is written right away");
         let again = ProductShell::with_shell_path(path);
-        assert_eq!(again.shell.selected(Side::Left), &shell::info_id());
+        assert_eq!(again.shell.selected(Side::Left), &shell::files_id());
     }
 
     /// 复盘发现 4:高版本布局文件退出时**不得覆盖**。
@@ -6095,7 +6016,7 @@ mod tests {
         let original = r#"{ "schema_version": 999, "left": ["digger.info"], "right": [] }"#;
         std::fs::write(&path, original).unwrap();
         let mut shell = ProductShell::with_shell_path(path.clone());
-        press(&mut shell, &shell::info_id());
+        press(&mut shell, &shell::files_id());
         let _ = Product::update(&mut shell, HostMessage::Product(Msg::Exit));
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
@@ -6112,30 +6033,6 @@ mod tests {
         assert_eq!(below_header(Rect::new(0.0, 0.0, 50.0, 40.0), 96.0).h, 1.0);
     }
 
-    /// 评审 Important 3:应用面板只要从"看不见"变成"看得见"就要触发探测 + 拉列表,不能只在"被切入"时。
-    /// 上次退出时应用面板被选中但右区收起;重启后点它的图标只是展开(没有 `switched_in`),服务必须随之启动。
-    #[tokio::test]
-    async fn the_apps_panel_starts_when_expanding_its_zone_makes_it_visible() {
-        let dir = test_temp_dir("apps-visible");
-        let path = dir.join("shell.json");
-        std::fs::write(
-            &path,
-            r#"{ "selected_right": "digger.apps", "right_collapsed": true }"#,
-        )
-        .unwrap();
-        let mut shell = ProductShell::with_shell_path(path);
-        assert!(
-            !shell.panel_visible(&shell::apps_id()),
-            "selected but its zone is collapsed"
-        );
-        assert!(!shell.apps.opened());
-        press(&mut shell, &shell::apps_id()); // expands the zone: no panel switch happens
-        assert!(shell.panel_visible(&shell::apps_id()));
-        assert!(
-            shell.apps.opened(),
-            "becoming visible by expanding still starts the service"
-        );
-    }
 
     /// 评审关注点 4:库的 `update` 对 `ToggleListCollapse` / `CollapseHover` 是 `unreachable!`(它们必须由宿主拦截)。
     /// 任何一条漏进去都会让进程崩溃,所以产品在 `Msg::Usage` 入口先拦截。
@@ -6558,7 +6455,7 @@ mod tests {
         send(
             &mut shell,
             Msg::Shell(ShellMsg::PanelPress {
-                panel: shell::apps_id(),
+                panel: shell::group_chat_id(),
             }),
         );
         send(&mut shell, Msg::Shell(ShellMsg::PointerReleased));
@@ -6728,7 +6625,7 @@ mod tests {
         press(&mut shell, &shell::todo_id());
         let _ = shell.sync_native();
         assert!(shell.todo.native.is_live(), "visible todo builds the view");
-        press(&mut shell, &shell::info_id());
+        press(&mut shell, &shell::files_id());
         let _ = shell.sync_native();
         assert!(
             !shell.todo.native.is_live(),
@@ -6742,7 +6639,7 @@ mod tests {
         assert!(!todo_poll_active(&shell), "todo is not selected by default");
         press(&mut shell, &shell::todo_id());
         assert!(todo_poll_active(&shell));
-        press(&mut shell, &shell::info_id());
+        press(&mut shell, &shell::files_id());
         assert!(!todo_poll_active(&shell));
         shell.closing = true;
         assert!(!todo_poll_active(&shell));
