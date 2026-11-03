@@ -2,7 +2,7 @@ name: Consumer check
 
 # Digger 的 PR 门禁:编译 + 依赖门禁 + 核心 Rust 行为测试 + 无窗口 web 同步测试与产物一致性。
 # 完整属性集 / Release 基准 / 图形自检在 slow-check.yml(定时或手动)。
-# 仓库没有远端时这份 workflow 只在本地分支提交,配置 remote 后生效。
+# 已接入 byteboyai/digger；发行构建使用已发布共享库，不依赖个人 path patch。
 
 on:
   push:
@@ -50,7 +50,10 @@ jobs:
           cargo test --locked -p digger-store -p digger-app-host -p digger-paths
 
       - name: 业务层宿主依赖门禁
-        run: bash scripts/check-host-deps.sh
+        run: bash scripts/check-host-deps.sh --self-test
+
+      - name: 实机自检入口故障测试
+        run: python3 scripts/tests/test_editor_selftest.py
 
       - name: 共享库钉版守卫
         run: bash scripts/check-shared-deps.sh --offline

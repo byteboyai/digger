@@ -21,20 +21,37 @@ case "${1:-harness}" in
   usage) export DIGGER_LIFECYCLE_SELFTEST=usage ;;
   *) echo "用法: $0 [harness|lifecycle|usage]" >&2; exit 2 ;;
 esac
-cargo build -q -p digger-desktop --bin digger
-bin="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
-exe="$( (ls -t "$bin"/*/debug/digger "$bin"/debug/digger 2>/dev/null || true) | head -1)"
-[ -x "$exe" ] || { echo "找不到 digger 二进制(在 $bin 下)" >&2; exit 1; }
+# Select only the executable emitted by this successful build, never a cached mtime winner.
+cargo build --locked -q -p digger-desktop --bin digger --message-format=json > "$data/build.jsonl"
+exe="$(python3 - "$data/build.jsonl" <<'PYBUILD'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1])]
+paths = {row["executable"] for row in rows
+         if row.get("reason") == "compiler-artifact"
+         and row.get("target", {}).get("name") == "digger"
+         and "bin" in row.get("target", {}).get("kind", [])
+         and row.get("executable")}
+if len(paths) != 1:
+    raise SystemExit("expected exactly one digger executable from this build")
+print(paths.pop())
+PYBUILD
+)"
+[ -x "$exe" ] || { echo "本次构建的 digger 不可执行: $exe" >&2; exit 1; }
 
 out="$data/selftest.log"
 set +e
-( "$exe" >"$out" 2>&1 ) &
-pid=$!
-( sleep "${SELFTEST_TIMEOUT:-180}"; kill "$pid" 2>/dev/null ) &
-guard=$!
-wait "$pid"
+python3 - "$exe" "$out" "${SELFTEST_TIMEOUT:-180}" <<'PYRUN'
+import subprocess, sys
+with open(sys.argv[2], "w") as output:
+    try:
+        result = subprocess.run([sys.argv[1]], stdout=output, stderr=subprocess.STDOUT,
+                                timeout=float(sys.argv[3]))
+        code = result.returncode
+    except subprocess.TimeoutExpired:
+        code = 124
+raise SystemExit(code if code >= 0 else 128 - code)
+PYRUN
 code=$?
-kill "$guard" 2>/dev/null
 set -e
 cat "$out"
 # 进程正常退出但没打出 SUMMARY = 自检没跑完(例如提前被关掉),同样算失败
@@ -44,7 +61,7 @@ if ! grep -q '^SUMMARY' "$out"; then
   exit 1
 fi
 if [ "$code" -ne 0 ]; then
-  echo "editor selftest: 失败(退出码 $code;被超时终止时为 143)" >&2
+  echo "editor selftest: 失败(退出码 $code;被超时终止时为 124)" >&2
   exit 1
 fi
 echo "editor selftest: ok"
