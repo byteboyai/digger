@@ -1,0 +1,42 @@
+
+> digger-editor-web@0.0.0 test
+> tsc -p tsconfig.test.json && node --test tests/*.test.mjs
+
+✔ the fixture protocol version matches the page (0.361625ms)
+✔ every error code in the fixture is a snake_case wire value (0.168084ms)
+✔ the shared reject fixture drives the same state machine branch as Rust (0.807042ms)
+✔ every shared outbound fixture passes the production decoder (0.076084ms)
+✔ the shared incremental contract replaces the specified old interval (0.488042ms)
+✔ a non-stale rejection keeps sent and queued and asks for a snapshot (1.436458ms)
+✔ a stale base without a received transform asks for a snapshot instead of replaying (0.107042ms)
+✔ a stale base replays once when an Agent update transformed the patch (0.2665ms)
+✔ a second stale rejection after one replay stops automatic retries (0.541083ms)
+✔ an ack advances the version, clears sent and flushes the queued patch (0.172209ms)
+✔ an out-of-order or duplicate ack never corrupts the confirmed version (0.100625ms)
+✔ a timeout is bounded and starts recovery without losing the draft (0.168167ms)
+✔ closing settles every waiter with a typed error (0.111ms)
+✔ resolving a conflict with the snapshot adopts Rust's text through onOpen (0.139584ms)
+✔ committing the draft after a conflict sends one whole-document edit (0.468125ms)
+✔ continuous snapshot timeouts end in a typed terminal state with the draft kept (0.146417ms)
+✔ a late full acknowledgement while idle cannot move the version backwards (0.09ms)
+✔ a protocol mismatch fails closed and never sends edits (0.092625ms)
+✔ a snapshot reply is read-only and does not apply remote changes (0.057417ms)
+✔ the first conflict notification already carries the snapshot and draft (0.100916ms)
+✔ an incremental result replaces the announced block range and maps preserved blocks (0.128042ms)
+✔ an inconsistent incremental result stops and recovers instead of corrupting ranges (0.0535ms)
+✔ old edit rejections cannot consume the current snapshot recovery budget (0.09275ms)
+✔ duplicate incremental acknowledgements are ignored while idle and while sending (0.055625ms)
+✔ the normal ready handshake times out and rejects all waiters (0.112625ms)
+✔ normal handshake rejections fail visibly even without an edit in flight (0.104708ms)
+✔ a successful normal handshake cancels its timeout and late opens preserve edits (0.062416ms)
+✔ replayed old replies preserve recovering, conflict, failed and closed states (0.203833ms)
+✔ invalid wire fields and JSON preserve drafts and converge through bounded recovery (0.323041ms)
+✔ Agent version gaps recover without applying remote text (0.087542ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 47.975291

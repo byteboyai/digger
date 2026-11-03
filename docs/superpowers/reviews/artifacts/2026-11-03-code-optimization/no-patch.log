@@ -1,0 +1,40 @@
+    Checking digger-store v0.1.0 (/private/tmp/digger-no-patch/crates/store)
+    Checking digger-editor v0.0.0 (/private/tmp/digger-no-patch/crates/editor)
+    Checking digger-app-host v0.1.0 (/private/tmp/digger-no-patch/crates/app-host)
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+    Checking digger-mcp v0.1.0 (/private/tmp/digger-no-patch/crates/digger-mcp)
+    Checking digger-desktop v0.1.7 (/private/tmp/digger-no-patch/crates/desktop)
+error[E0433]: cannot find `SaveOutcome` in `dozer_panel_preview`
+    --> crates/desktop/src/adapters/preview.rs:1141:49
+     |
+1141 |                 result: Ok(dozer_panel_preview::SaveOutcome::Committed),
+     |                                                 ^^^^^^^^^^^ could not find `SaveOutcome` in `dozer_panel_preview`
+
+error[E0599]: no variant, associated function, or constant named `NotebookTabs` found for enum `byteui::interaction::icons::IconKind` in the current scope
+  --> crates/desktop/src/shell.rs:78:48
+   |
+78 |         "digger.markdown" => ("写字台", IconKind::NotebookTabs),
+   |                                                   ^^^^^^^^^^^^ variant, associated function, or constant not found in `byteui::interaction::icons::IconKind`
+
+error[E0559]: variant `dozer_panel_preview::Effect::SaveFile` has no field named `project_root`
+    --> crates/desktop/src/adapters/preview.rs:1364:21
+     |
+1364 |                     project_root: Some(dir.to_path_buf()),
+     |                     ^^^^^^^^^^^^ `dozer_panel_preview::Effect::SaveFile` does not have this field
+     |
+     = note: all struct fields are already assigned
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `digger-desktop` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0433, E0559, E0599.
+For more information about an error, try `rustc --explain E0433`.
+error: could not compile `digger-desktop` (lib test) due to 3 previous errors

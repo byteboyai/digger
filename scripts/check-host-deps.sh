@@ -45,13 +45,17 @@ tree_of() {
 }
 
 # 枚举 workspace 里所有 digger-* 生产包。
-mapfile -t packages < <(
+package_names=$(
   cargo metadata --no-deps --format-version 1 \
     | python3 -c 'import json,sys
 m=json.load(sys.stdin)
 for p in sorted(m["packages"], key=lambda p: p["name"]):
     print(p["name"])'
 )
+packages=()
+while IFS= read -r package; do
+  packages+=("$package")
+done <<< "$package_names"
 
 checked=0
 for pkg in "${packages[@]}"; do

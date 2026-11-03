@@ -169,7 +169,14 @@ impl UsageWorker {
 
 /// 启动后台 worker。打开数据库失败时直接返回错误,不建一个会静默丢写入的空服务。
 pub fn spawn(path: impl Into<PathBuf>, capacity: usize) -> Result<UsageWorker, UsageDbError> {
-    let path = path.into();
+    spawn_with(path.into(), capacity, |_| Ok(()))
+}
+
+fn spawn_with(
+    path: PathBuf,
+    capacity: usize,
+    mut before_record: impl FnMut(&CompletionEvent) -> Result<(), String> + Send + 'static,
+) -> Result<UsageWorker, UsageDbError> {
     // 先在当前线程验证能打开,失败立即上报;worker 自己再打开一次(Connection 不跨线程共享)。
     UsageDb::open(path.clone())?;
     let (tx, rx) = sync_channel::<Command>(capacity.max(1));
@@ -204,7 +211,9 @@ pub fn spawn(path: impl Into<PathBuf>, capacity: usize) -> Result<UsageWorker, U
                     };
                     match cmd {
                         Command::Record { event, reply } => {
-                            let _ = reply.send(db.record(event).map_err(|e| e.to_string()));
+                            let result = before_record(&event)
+                                .and_then(|()| db.record(event).map_err(|e| e.to_string()));
+                            let _ = reply.send(result);
                         }
                         Command::Query {
                             cwd,
@@ -400,5 +409,66 @@ mod tests {
         assert_eq!(rows.len(), 1);
         worker.shutdown().unwrap();
         assert_eq!(handle.query("/p/a", None).unwrap_err(), SubmitError::Closed);
+    }
+    #[test]
+    fn a_blocked_writer_fills_the_queue_without_blocking_submit_and_retries_the_same_event() {
+        let path = temp_path("slow-full-failed-retry");
+        let (entered, waiting) = channel();
+        let (release, resume) = channel();
+        let mut first = true;
+        let worker = spawn_with(path.clone(), 1, move |event| {
+            if first {
+                first = false;
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+                return Err("injected disk commit failure".into());
+            }
+            assert!(!event.run_id.is_empty());
+            Ok(())
+        })
+        .unwrap();
+        let handle = worker.handle();
+        let mut failed = handle.record(event("retry", "/p/a", 100)).unwrap();
+        waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        let queued = handle.record(event("queued", "/p/a", 101)).unwrap();
+        // The receiver cannot advance past the barrier. These calls must return, without a
+        // timing assertion or another thread releasing the writer.
+        assert_eq!(
+            handle.record(event("full", "/p/a", 102)).unwrap_err(),
+            SubmitError::QueueFull
+        );
+        assert_eq!(
+            handle.query("/p/a", None).unwrap_err(),
+            SubmitError::QueueFull
+        );
+        assert!(matches!(
+            failed.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert!(
+            rt.block_on(failed)
+                .unwrap()
+                .unwrap_err()
+                .contains("commit failure")
+        );
+        rt.block_on(queued).unwrap().unwrap();
+        let db = UsageDb::open(&path).unwrap();
+        assert_eq!(
+            db.query("/p/a", None).unwrap().len(),
+            1,
+            "failed write is not a committed fact"
+        );
+        drop(db);
+        rt.block_on(handle.record(event("retry", "/p/a", 100)).unwrap())
+            .unwrap()
+            .unwrap();
+        worker.shutdown().unwrap();
+        let db = UsageDb::open(path).unwrap();
+        assert_eq!(db.len().unwrap(), 2);
+        assert_eq!(db.query("/p/a", Some(100)).unwrap()[0].run_id, "retry");
     }
 }

@@ -1,0 +1,118 @@
+   Compiling digger-paths v0.1.0 (/private/tmp/digger-completion/crates/paths)
+   Compiling digger-app-host v0.1.0 (/private/tmp/digger-completion/crates/app-host)
+   Compiling digger-store v0.1.0 (/private/tmp/digger-completion/crates/store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.78s
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/digger_app_host-a500daa62568b709)
+
+running 39 tests
+test effects::action_tests::every_completion_action_round_trips_through_its_key ... ok
+test effects::action_tests::list_and_per_app_keys_are_not_completion_actions ... ok
+test request::tests::a_matching_reply_is_accepted_once ... ok
+test request::tests::a_stale_generation_is_rejected ... ok
+test request::tests::a_later_request_on_the_same_key_supersedes_the_earlier_one ... ok
+test request::tests::a_stale_reply_cannot_impersonate_a_newer_request_after_reuse ... ok
+test cleanups::tests::a_request_is_persisted_and_survives_a_restart ... ok
+test cleanups::tests::a_corrupt_file_is_an_error_and_never_becomes_an_empty_table ... ok
+test request::tests::actions_are_not_latest_only_but_still_carry_identity ... ok
+test cleanups::tests::a_failure_is_recorded_and_not_auto_retried_but_still_visible ... ok
+test cleanups::tests::a_failed_write_is_visible_and_the_same_request_retries_it ... ok
+test cleanups::tests::an_unreadable_ledger_is_read_only_and_keeps_the_original_bytes ... ok
+test request::tests::closing_a_panel_invalidates_all_its_requests ... ok
+test cleanups::tests::finishing_removes_it_from_disk ... ok
+test request::tests::concurrent_actions_sharing_one_key_each_receive_their_reply ... ok
+test cleanups::tests::requesting_twice_is_idempotent ... ok
+test cleanups::tests::a_failed_fail_restores_the_previous_state ... ok
+test request::tests::scope_mismatch_is_rejected ... ok
+test request::tests::uninstalling_an_app_invalidates_only_that_apps_requests ... ok
+test service::tests::begin_shutdown_flips_the_cancel_token ... ok
+test cleanups::tests::a_failed_finish_restores_the_entry_so_it_can_be_retried ... ok
+test service::tests::the_placeholder_api_is_unavailable_until_a_service_is_installed ... ok
+test service::tests::a_never_started_service_reports_never_started ... ok
+test service::tests::a_fake_backend_is_usable_generically ... ok
+test testing::tests::a_disconnecting_subscription_ends_with_disconnected ... ok
+test cleanups::tests::repeated_request_keeps_a_terminal_failure_until_explicit_retry ... ok
+test trust::tests::a_trusted_local_process_app_is_allowed_to_be_reviewed ... ok
+test trust::tests::agent_generated_is_treated_like_network ... ok
+test trust::tests::local_sources_are_trusted_and_network_is_not ... ok
+test trust::tests::an_unknown_runtime_is_never_silently_allowed ... ok
+test trust::tests::an_untrusted_process_app_is_rejected_only_static_web_is_allowed ... ok
+test testing::tests::an_unstubbed_call_fails_explicitly ... ok
+test testing::tests::a_live_subscription_delivers_pushed_changes ... ok
+test testing::tests::an_unavailable_subscription_fails_like_a_dead_host ... ok
+test testing::tests::a_host_failure_keeps_its_kind ... ok
+test testing::tests::a_stubbed_list_succeeds ... ok
+test testing::tests::requests_are_recorded_for_assertions ... ok
+test testing::tests::a_transport_failure_has_no_kind ... ok
+test cleanups::tests::each_atomic_write_stage_preserves_the_original_and_can_retry ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/embedded.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/embedded-03c9f7de35002347)
+
+running 17 tests
+test closing_a_panel_invalidates_every_result_of_that_instance ... ok
+test a_late_reply_for_a_superseded_request_is_discarded_by_identity ... ok
+test a_disconnect_rusts_the_subscription_and_eventually_resubscribes ... ok
+test uninstalling_an_app_invalidates_its_ui_results_but_not_the_installation_write ... ok
+test connection_lost_and_restored_are_left_to_the_composition_root ... ok
+test begin_shutdown_refuses_new_dispatches ... ok
+test a_ui_only_effect_is_left_to_the_composition_root ... ok
+test an_install_effect_is_dispatched_and_routed_back_with_identity ... ok
+test per_app_actions_carry_their_kind_and_target_id ... ok
+test runtime_effects_carry_their_action_identity_and_payload ... ok
+test the_state_machine_executor_and_fake_backend_form_a_full_loop ... ok
+test a_pushed_change_reaches_the_sink_as_a_refresh ... ok
+test a_change_arriving_while_a_list_is_in_flight_is_coalesced_into_one_refetch ... ok
+test the_start_service_task_installs_the_backend_before_announcing_ready ... ok
+test a_real_in_process_service_is_reachable_through_the_generic_host ... ok
+test the_shutdown_sequence_stops_new_ops_before_awaiting_the_service ... ok
+test a_real_static_app_installs_from_a_local_source_and_shows_in_the_list ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/install_flow.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/install_flow-ccd766bb01e65805)
+
+running 12 tests
+test a_plan_request_failure_is_shown_in_the_flow ... ok
+test uninstalling_an_app_goes_through_confirmation_and_reports_done ... ok
+test a_runtime_install_flows_from_click_through_approval_to_done ... ok
+test a_runtime_plan_failure_is_shown_in_the_flow ... ok
+test switching_source_expires_the_previous_review ... ok
+test uninstalling_a_runtime_requires_confirmation ... ok
+test stopping_an_app_reports_action_done ... ok
+test a_rejected_source_becomes_a_flow_failure_not_a_review ... ok
+test rolling_back_an_app_requires_confirmation ... ok
+test dismissing_a_reviewed_plan_cancels_without_installing ... ok
+test a_local_process_app_reaches_review_with_the_plans_identity_bound ... ok
+test duplicate_approval_only_installs_once ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/recovery.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/recovery-ad2f6292abb2c909)
+
+running 7 tests
+test force_quit_recovery_is_verified_at_the_process_level_not_by_dropping_a_handle ... ok
+test a_shutdown_result_is_observable_and_never_hangs ... ok
+test the_app_service_starts_without_any_project_directory ... ok
+test reaping_a_stale_record_never_kills_a_pid_that_does_not_match_the_record ... ok
+test a_restart_after_a_kill_reaps_the_recorded_orphan_and_leaves_unrelated_processes_alone ... FAILED
+test one_root_refuses_a_second_owner_while_different_roots_run_side_by_side ... ok
+test a_normal_close_releases_the_gateway_port_and_keeps_the_persisted_port ... ok
+
+failures:
+
+---- a_restart_after_a_kill_reaps_the_recorded_orphan_and_leaves_unrelated_processes_alone stdout ----
+
+thread 'a_restart_after_a_kill_reaps_the_recorded_orphan_and_leaves_unrelated_processes_alone' (8292791) panicked at crates/app-host/tests/recovery.rs:140:5:
+assertion `left == right` failed: 记录在案的进程被收掉
+  left: Stale
+ right: Killed(12575)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_restart_after_a_kill_reaps_the_recorded_orphan_and_leaves_unrelated_processes_alone
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p digger-app-host --test recovery`

@@ -60,8 +60,13 @@ bash scripts/build-editor-web.sh --check
 
 这些是库层 Release 数据，不是真实 webview 往返，也不是 CI 门禁。Spec §2 的 Debug 探针（13.4 / 133.8 / 680.5 ms）保留为历史参照，不与本表直接比较。
 
-## 5. 未完成 / 环境受限
+## 5. 前轮未完成 / 环境受限（历史）
 
 - 图形会话下的 `bash scripts/run-editor-selftest.sh`、真实 webview 性能、macOS 进程查询（`ps`）测试未在本会话执行。
 - 发布级“无本地 patch”构建未执行：本机 `.cargo/config.toml` 指向兄弟目录；没有远端 checkout 可用。
 - GitHub Actions 未实际运行；本地等价命令全部通过。
+
+
+## 6. 2026-11-03 完整路径基线补齐
+
+[补齐复验](../reviews/2026-11-03-code-optimization-completion.md) 已使用优化前 `88fcf4e` 源码与当前源码，同机 Release 固定 100 / 1000 / 5000 块，分别采集 Doc load/edit、生产 Bridge + JSON 的逐样本数据与 p50/p95，并另测 Node 前端回包应用。基线源码从本仓库历史提取到临时独立 editor crate，复用当前依赖锁；不把历史 Debug 探针与 Release 直接比较。脚本：`scripts/bench-editor-sync.sh`，门槛：`scripts/check-editor-performance.py`。原始数据、工具链、当前 HEAD、环境失败与限定见复验产物。

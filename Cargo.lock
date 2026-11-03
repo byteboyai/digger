@@ -445,7 +445,6 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bytegit"
 version = "0.9.2"
-source = "git+https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa553ab34d97d9a1e4055c89d03b48eb4848"
 dependencies = [
  "git2",
  "libc",
@@ -615,7 +614,6 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "byteui"
 version = "0.5.1"
-source = "git+https://github.com/byteboyai/byteui?tag=v0.5.1#2b3973cdb02433e22c7e0cc8d03d3fb96d06ad74"
 dependencies = [
  "iced_futures",
  "iced_renderer",
@@ -1310,7 +1308,6 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dozer-client"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1326,7 +1323,6 @@ dependencies = [
 [[package]]
 name = "dozer-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "anyhow",
  "bytehost-apps",
@@ -1342,7 +1338,6 @@ dependencies = [
 [[package]]
 name = "dozer-git-runtime"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytegit",
  "tokio",
@@ -1351,7 +1346,6 @@ dependencies = [
 [[package]]
 name = "dozer-hook"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "dozer-core",
  "libc",
@@ -1361,7 +1355,6 @@ dependencies = [
 [[package]]
 name = "dozer-i18n"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "dozer-model",
  "serde",
@@ -1371,7 +1364,6 @@ dependencies = [
 [[package]]
 name = "dozer-mcp"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "anyhow",
  "dozer-client",
@@ -1387,7 +1379,6 @@ dependencies = [
 [[package]]
 name = "dozer-model"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "serde",
 ]
@@ -1395,7 +1386,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-agent"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytegit",
  "byteui",
@@ -1414,7 +1404,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-browser"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytehost-core",
  "byteui",
@@ -1431,7 +1420,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-conversations"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytehost-core",
  "byteui",
@@ -1450,7 +1438,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-files"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytegit",
  "byteui",
@@ -1469,7 +1456,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-group-chat"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytehost-core",
  "byteui",
@@ -1488,7 +1474,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-host"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytehost-core",
  "bytehost-desktop",
@@ -1500,7 +1485,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-preview"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "byteui",
  "dozer-i18n",
@@ -1519,7 +1503,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-project"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytegit",
  "bytehost-core",
@@ -1540,7 +1523,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-term"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "alacritty_terminal",
  "byteui",
@@ -1552,7 +1534,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-todo"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytehost-core",
  "bytehost-desktop",
@@ -1571,7 +1552,6 @@ dependencies = [
 [[package]]
 name = "dozer-panel-usage"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "bytehost-core",
  "bytehost-desktop",
@@ -1590,7 +1570,6 @@ dependencies = [
 [[package]]
 name = "dozer-preview-core"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "dozer-i18n",
  "dozer-model",
@@ -1602,7 +1581,6 @@ dependencies = [
 [[package]]
 name = "dozer-services"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "dozer-model",
  "tokio",
@@ -1611,7 +1589,6 @@ dependencies = [
 [[package]]
 name = "dozer-store-project"
 version = "0.1.0"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "anyhow",
  "bytegit",
@@ -1623,7 +1600,6 @@ dependencies = [
 [[package]]
 name = "dozerd"
 version = "0.3.3"
-source = "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-01e#734f2800e4fbd0bc38f6c3757bcd27e4b238c16b"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

@@ -108,21 +108,62 @@ interface Waiter {
   reject: (e: SyncError) => void;
 }
 
-interface OutMsg {
-  t: string;
-  protocol?: number;
+interface BlockResult {
   request_id?: number;
-  text?: string;
-  version?: number;
-  hash?: string;
-  len16?: number;
-  blocks?: RBlock[];
-  code?: SyncErrorCode;
-  reason?: string;
-  changes?: { from: number; to: number; insert: string }[];
-  base_version?: number;
-  removed_from?: number;
-  removed_to?: number;
+  version: number;
+  hash: string;
+  len16: number;
+  blocks: RBlock[];
+}
+type WireChange = { from: number; to: number; insert: string };
+export type OutMsg =
+  | OpenMsg
+  | SnapshotMsg
+  | ({ t: "blocks" } & BlockResult)
+  | ({ t: "incremental"; base_version: number; removed_from: number; removed_to: number; changes: WireChange[] } & BlockResult)
+  | ({ t: "update"; changes: WireChange[] } & BlockResult)
+  | { t: "reject"; request_id?: number; code: SyncErrorCode; reason: string }
+  | { t: "agent_error"; reason: string };
+
+/** Validate the untrusted native boundary before touching sync state or CodeMirror. */
+export function decodeOutbound(value: unknown): OutMsg {
+  const record = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+  const uint = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+  const bad = (): never => { throw new SyncError("protocol", "Rust 回包字段不合法"); };
+  if (!record(value)) return bad();
+  const m = value;
+  if (m.request_id !== undefined && !uint(m.request_id)) return bad();
+  if (m.t === "reject") {
+    if (!isErrorCode(m.code) || typeof m.reason !== "string") return bad();
+  } else if (m.t === "agent_error") {
+    if (typeof m.reason !== "string") return bad();
+  } else if (["open", "snapshot", "blocks", "incremental", "update"].includes(String(m.t))) {
+    if (!uint(m.version) || !uint(m.len16) || typeof m.hash !== "string" || !Array.isArray(m.blocks)) return bad();
+    const ids = new Set<string>();
+    let end = 0;
+    for (const b of m.blocks) {
+      if (!record(b) || typeof b.id !== "string" || ids.has(b.id) || typeof b.kind !== "string" ||
+          !(b.level === null || (uint(b.level) && b.level >= 1 && b.level <= 6)) ||
+          !(b.title === null || typeof b.title === "string") || typeof b.how !== "string" || typeof b.head !== "string" ||
+          !uint(b.from) || !uint(b.to) || b.from < end || b.from > b.to || b.to > m.len16) return bad();
+      ids.add(b.id); end = b.to;
+    }
+    if (m.t === "open" || m.t === "snapshot") {
+      if (typeof m.text !== "string" || m.text.length !== m.len16) return bad();
+      if (m.t === "open" && !uint(m.protocol)) return bad();
+    }
+    if (m.t === "incremental" || m.t === "update") {
+      if (!Array.isArray(m.changes)) return bad();
+      let previous = 0, delta = 0;
+      for (const c of m.changes) {
+        if (!record(c) || !uint(c.from) || !uint(c.to) || c.from < previous || c.from > c.to || typeof c.insert !== "string") return bad();
+        previous = c.to; delta += c.insert.length - (c.to - c.from);
+      }
+      if (previous > m.len16 - delta || m.len16 - delta < 0) return bad();
+      if (m.t === "incremental" && (!uint(m.base_version) || !uint(m.removed_from) || !uint(m.removed_to) || m.removed_from > m.removed_to)) return bad();
+    }
+  } else return bad();
+  return m as unknown as OutMsg;
 }
 
 /** Bound the automatic snapshot loop: an edit failure plus one snapshot retry, then a terminal state. */
@@ -143,7 +184,7 @@ function isErrorCode(value: unknown): value is SyncErrorCode {
   return typeof value === "string" && (ERROR_CODES as readonly string[]).includes(value);
 }
 
-function parseCode(m: OutMsg): SyncErrorCode {
+function parseCode(m: Extract<OutMsg, { t: "reject" }>): SyncErrorCode {
   if (isErrorCode(m.code)) return m.code;
   // 兼容旧回包:reason 里仍有 Rust Debug 名字。
   if (/StaleBase/.test(m.reason ?? "")) return "stale_base";
@@ -219,7 +260,7 @@ export class RustSync {
         return () => clearTimeout(id);
       });
     if (typeof window !== "undefined") {
-      (window as unknown as { __md: unknown }).__md = { receive: (j: string) => this.receive(JSON.parse(j)) };
+      (window as unknown as { __md: unknown }).__md = { receive: (j: string) => this.receiveJson(j) };
     }
   }
 
@@ -412,7 +453,31 @@ export class RustSync {
     return cs ? blocks.map((b) => ({ ...b, from: cs.mapPos(b.from, -1), to: cs.mapPos(b.to, 1) })) : blocks;
   }
 
-  private receive(m: OutMsg) {
+  receiveJson(json: string): void {
+    try { this.receive(JSON.parse(json)); }
+    catch (error) { this.invalidReply(error); }
+  }
+
+  private invalidReply(error: unknown): void {
+    if (this.state === "closed" || this.state === "failed") return;
+    if (this.awaitingOpen || this.awaitingLoad) this.fail(new SyncError("protocol", String(error)));
+    else this.enterRecovery(`invalid Rust reply: ${String(error)}`, false);
+  }
+
+  private receive(value: unknown) {
+    if (this.state === "closed" || this.state === "failed") return;
+    // Identity filtering precedes payload validation: a malformed replay cannot spend the
+    // recovery budget of the newer request. It never reaches state mutation.
+    if (typeof value === "object" && value !== null && "request_id" in value) {
+      const id = value.request_id;
+      const expected = this.state === "sending" ? this.sentRequest : this.snapshotRequest;
+      if (typeof id === "number" && Number.isSafeInteger(id) && id >= 0 && id <= this.nextRequestId && id !== expected) return;
+    }
+    try { this.receiveValidated(decodeOutbound(value)); }
+    catch (error) { this.invalidReply(error); }
+  }
+
+  private receiveValidated(m: OutMsg) {
     if (this.state === "closed" || this.state === "failed") return;
     if (m.t === "open") {
       if (!this.awaitingOpen) return;
@@ -427,8 +492,9 @@ export class RustSync {
     }
     // Only the identity currently being awaited may change state. In particular, after recovery
     // clears sentRequest, an old edit rejection must not consume the snapshot's retry budget.
+    const requestId = "request_id" in m ? m.request_id : undefined;
     const expectedRequest = this.state === "sending" ? this.sentRequest : this.snapshotRequest;
-    if (m.request_id !== undefined && m.request_id !== expectedRequest && m.request_id <= this.nextRequestId) return;
+    if (requestId !== undefined && requestId !== expectedRequest && requestId <= this.nextRequestId) return;
     if (m.t === "snapshot") {
       if (this.state !== "recovering" || m.request_id !== this.snapshotRequest) return;
       this.cancelTimerNow();
@@ -450,7 +516,12 @@ export class RustSync {
         this.agentErrors.push("Agent update ignored while the editor is recovering");
         return;
       }
-      const delta = (m.changes ?? []).reduce((a, c) => a + c.insert.length - (c.to - c.from), 0);
+      const delta = m.changes.reduce((a, c) => a + c.insert.length - (c.to - c.from), 0);
+      if (m.version <= this.version) return; // duplicate Agent update
+      if (m.version !== this.version + 1 || this.len16 + delta !== m.len16) {
+        this.enterRecovery("Agent update version/length discontinuity", false);
+        return;
+      }
       let R = ChangeSet.of(m.changes ?? [], (m.len16 ?? 0) - delta);
       if (this.sent || this.queued) this.remoteTransformed++;
       if (this.sent) {
@@ -498,7 +569,7 @@ export class RustSync {
         this.enterRecovery(`invalid incremental changes: ${String(e)}`, false);
         return;
       }
-      const mapped = this.mapBlocks(this.confirmedBlocks, cs);
+      const mapped = this.mapBlocks(this.confirmedBlocks, cs).map((b) => ({ ...b, how: "Exact" }));
       const from = m.removed_from ?? -1;
       const to = m.removed_to ?? -1;
       const nextLen = m.len16 ?? this.len16;
@@ -518,7 +589,7 @@ export class RustSync {
         return;
       }
       const next = [...mapped.slice(0, from), ...fresh, ...mapped.slice(to)];
-      if (!next.every((b, i) => i === 0 || next[i - 1].to <= b.from)) {
+      if (new Set(next.map((b) => b.id)).size !== next.length || !next.every((b, i) => i === 0 || next[i - 1].to <= b.from)) {
         this.enterRecovery("incremental result overlaps", false);
         return;
       }
@@ -621,7 +692,7 @@ export class RustSync {
     }
   }
 
-  private adoptBlocks(m: OutMsg) {
+  private adoptBlocks(m: Extract<OutMsg, { t: "blocks" }>) {
     this.cancelTimerNow();
     this.version = m.version ?? this.version;
     this.hash = m.hash ?? "";

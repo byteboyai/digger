@@ -1,0 +1,18 @@
+{
+  "head": "e497c9c4b72f730ef1d8338514f6c3d2c9ef65c1",
+  "baseline": "88fcf4e0cdd3edf34c967971e62e62190828e01a",
+  "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "node": "v24.14.0",
+  "npm": "11.11.0",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+  "arch": "arm64",
+  "protocol": 2,
+  "benchmark_samples": 41,
+  "warmups": 3,
+  "seeds": "random incremental 1..8 × 7919, 100 edits/seed; properties fixed existing seeds",
+  "patches": "developer checks: existing local Cargo path patches; no-patch check: separate checkout and CARGO_HOME, original committed lock, no path patches",
+  "registry": "rsproxy sparse (cache reused); personal configuration unchanged",
+  "gui": "launch blocked by sandbox system services; process queries denied",
+  "git_remote": ""
+}

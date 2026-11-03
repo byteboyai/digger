@@ -54,6 +54,10 @@ impl StoreCleanup {
         Self { ledger, queue }
     }
 
+    pub fn flush(&mut self) -> Result<(), String> {
+        self.ledger.flush().map_err(|e| e.to_string())
+    }
+
     /// 记账文件路径(供组合根构造;测试可断言落在产品状态目录)。
     pub fn ledger_path(&self) -> &std::path::Path {
         self.ledger.path()

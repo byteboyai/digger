@@ -13,7 +13,12 @@
   "inbound": [
     {
       "name": "ready",
-      "json": { "n": "nonce-1", "t": "ready", "protocol": 2, "engine": "cm" }
+      "json": {
+        "n": "nonce-1",
+        "t": "ready",
+        "protocol": 2,
+        "engine": "cm"
+      }
     },
     {
       "name": "edit-with-request-id",
@@ -22,12 +27,22 @@
         "t": "edit",
         "request_id": 7,
         "base": 1,
-        "changes": [{ "from": 0, "to": 0, "insert": "x" }]
+        "changes": [
+          {
+            "from": 0,
+            "to": 0,
+            "insert": "x"
+          }
+        ]
       }
     },
     {
       "name": "snapshot",
-      "json": { "n": "nonce-1", "t": "snapshot", "request_id": 8 }
+      "json": {
+        "n": "nonce-1",
+        "t": "snapshot",
+        "request_id": 8
+      }
     }
   ],
   "outbound": [
@@ -62,6 +77,38 @@
         "hash": "0123456789abcdef",
         "len16": 4,
         "blocks": []
+      }
+    },
+    {
+      "name": "incremental-with-request-id",
+      "json": {
+        "t": "incremental",
+        "request_id": 7,
+        "base_version": 1,
+        "version": 2,
+        "hash": "",
+        "len16": 5,
+        "changes": [
+          {
+            "from": 2,
+            "to": 2,
+            "insert": "x"
+          }
+        ],
+        "removed_from": 0,
+        "removed_to": 1,
+        "blocks": [
+          {
+            "id": "1",
+            "kind": "paragraph",
+            "level": null,
+            "title": null,
+            "how": "Similar",
+            "from": 0,
+            "to": 5,
+            "head": "abxcd"
+          }
+        ]
       }
     }
   ]

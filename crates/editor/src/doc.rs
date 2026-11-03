@@ -671,7 +671,7 @@ impl Doc {
             p.start = (p.start as isize + delta) as usize;
             p.end = (p.end as isize + delta) as usize;
         }
-        for h in &mut hows[j + 1..] {
+        for h in &mut hows {
             h.1 = "Exact";
         }
         hows.splice(i..=j, new_hows);
@@ -1532,6 +1532,78 @@ mod tests {
             .map(|b| (b.id.clone(), b.from, b.to, b.head.clone()))
             .collect();
         assert_eq!(applied, want, "incremental blocks must equal a full result");
+    }
+
+    #[test]
+    fn random_incremental_replies_match_every_field_of_full_results() {
+        for seed in 1..=8 {
+            let mut rng = R(seed * 7919);
+            let mut doc = Doc::new();
+            doc.load(&sample_doc(&mut rng, 80));
+            let EditorOutbound::Blocks { mut blocks, .. } = doc.blocks_message() else {
+                unreachable!()
+            };
+            for step in 0..100 {
+                let offsets: Vec<_> = doc
+                    .text
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .chain([doc.text.len()])
+                    .collect();
+                let index = rng.next() % offsets.len();
+                let end = (index + rng.next() % 5).min(offsets.len() - 1);
+                let from = doc.text[..offsets[index]].encode_utf16().count();
+                let to = doc.text[..offsets[end]].encode_utf16().count();
+                let insert = ["字😀", "", "\n\n# heading\n", "- item\n", "```\n"][rng.next() % 5];
+                let base = doc.version;
+                doc.edit(base, &[(from, to, insert.to_owned())]).unwrap();
+                match doc.after_edit_message(Some(step + 1)) {
+                    EditorOutbound::Incremental {
+                        base_version,
+                        version,
+                        changes,
+                        removed_from,
+                        removed_to,
+                        blocks: fresh,
+                        ..
+                    } => {
+                        assert_eq!(base_version, base);
+                        assert_eq!(version, base + 1);
+                        assert_eq!(changes.len(), 1);
+                        let added = insert.encode_utf16().count();
+                        let map = |pos: usize, assoc: i32| {
+                            if pos < from || (pos == from && assoc < 0) {
+                                pos
+                            } else if pos > to || (pos == to && assoc > 0) {
+                                pos - (to - from) + added
+                            } else if assoc < 0 {
+                                from
+                            } else {
+                                from + added
+                            }
+                        };
+                        for block in &mut blocks {
+                            block.how = "Exact";
+                            block.from = map(block.from, -1);
+                            block.to = map(block.to, 1);
+                        }
+                        blocks.splice(removed_from..removed_to, fresh);
+                    }
+                    EditorOutbound::Blocks { blocks: all, .. } => blocks = all,
+                    _ => unreachable!(),
+                }
+                let EditorOutbound::Blocks {
+                    blocks: expected,
+                    version,
+                    ..
+                } = doc.blocks_message()
+                else {
+                    unreachable!()
+                };
+                assert_eq!(version, doc.version);
+                assert_eq!(blocks, expected, "seed {seed}, step {step}");
+            }
+        }
     }
 
     #[test]

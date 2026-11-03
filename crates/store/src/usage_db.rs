@@ -324,7 +324,11 @@ impl UsageDb {
                 now_ms().to_string()
             ],
         )?;
+        #[cfg(test)]
+        crate::crash_at("usage_before_commit");
         tx.commit()?;
+        #[cfg(test)]
+        crate::crash_at("usage_after_commit");
         let runs = imported.max(disk.runs.len());
         self.finish_import(source, runs, false)
     }
@@ -422,13 +426,7 @@ fn source_identity(source: &Path) -> String {
 }
 
 fn archive_source(source: &Path) -> Result<(), String> {
-    let mut dest = source.as_os_str().to_owned();
-    dest.push(".migrated");
-    let dest = PathBuf::from(dest);
-    if dest.exists() {
-        return Err(format!("归档目标已存在,未覆盖: {}", dest.display()));
-    }
-    std::fs::rename(source, &dest).map_err(|e| format!("归档旧 JSON: {e}"))
+    crate::archive::legacy(source)
 }
 
 fn write_json_atomic(target: &Path, disk: &OnDisk) -> Result<(), UsageDbError> {
@@ -643,5 +641,82 @@ mod tests {
         let disk: OnDisk = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
         assert_eq!(disk.runs.len(), 1);
         assert_eq!(disk.runs["r1"].tokens_in, 100);
+    }
+    #[test]
+    fn subprocess_usage_import() {
+        let Ok(root) = std::env::var("DIGGER_TEST_USAGE_CRASH_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let mut db = UsageDb::open(root.join("usage.sqlite3")).unwrap();
+        db.import_legacy_json(&root.join("usage.json")).unwrap();
+        panic!("failpoint was not reached");
+    }
+
+    #[test]
+    fn process_death_before_and_after_usage_commit_recovers_and_exports_losslessly() {
+        for point in ["usage_before_commit", "usage_after_commit"] {
+            let root = std::env::temp_dir()
+                .join(format!("digger-usage-crash-{}-{point}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let source = root.join("usage.json");
+            write_legacy(&source, &[("r1", 1000), ("r2", 2000)]);
+            let original: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "usage_db::tests::subprocess_usage_import",
+                    "--nocapture",
+                ])
+                .env("DIGGER_TEST_CRASH_AT", point)
+                .env("DIGGER_TEST_USAGE_CRASH_ROOT", &root)
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(86));
+            assert!(source.exists());
+            let mut db = UsageDb::open(root.join("usage.sqlite3")).unwrap();
+            assert_eq!(
+                db.len().unwrap(),
+                if point.ends_with("before_commit") {
+                    0
+                } else {
+                    2
+                }
+            );
+            db.import_legacy_json(&source).unwrap();
+            assert_eq!(db.len().unwrap(), 2);
+            assert_eq!(
+                db.import_legacy_json(&source).unwrap(),
+                ImportOutcome::AlreadyImported
+            );
+            let export = root.join("rollback.json");
+            db.export_legacy_json(&export).unwrap();
+            let restored: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&export).unwrap()).unwrap();
+            assert_eq!(original, restored);
+            drop(db);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn a_real_deferred_commit_failure_rolls_back_and_the_same_event_can_retry() {
+        let path = temp_path("commit-failure");
+        let mut db = UsageDb::open(path).unwrap();
+        db.conn.pragma_update(None, "foreign_keys", true).unwrap();
+        db.conn.execute_batch("CREATE TABLE commit_parent(id INTEGER PRIMARY KEY);
+            CREATE TABLE commit_child(id INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
+            CREATE TRIGGER fail_commit AFTER INSERT ON usage_runs BEGIN INSERT INTO commit_child VALUES(99); END;").unwrap();
+        let completed = event("retry-commit", "/p/a", 1000);
+        assert!(
+            db.record(completed.clone()).is_err(),
+            "deferred constraint fails COMMIT"
+        );
+        assert_eq!(db.len().unwrap(), 0);
+        assert!(db.query("/p/a", None).unwrap().is_empty());
+        db.conn.execute_batch("DROP TRIGGER fail_commit;").unwrap();
+        assert!(db.record(completed).unwrap());
+        assert_eq!(db.len().unwrap(), 1);
     }
 }

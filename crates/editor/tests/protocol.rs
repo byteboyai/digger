@@ -109,6 +109,34 @@ fn outbound_fixtures_are_the_shapes_the_page_validates() {
                     assert!(!v[key].is_null(), "{name}.{key}");
                 }
             }
+            "incremental-with-request-id" => {
+                use digger_editor::protocol::{BlockInfo, Change, EditorOutbound};
+                let reply = EditorOutbound::Incremental {
+                    request_id: Some(7),
+                    base_version: 1,
+                    version: 2,
+                    hash: String::new(),
+                    len16: 5,
+                    changes: vec![Change {
+                        from: 2,
+                        to: 2,
+                        insert: "x".into(),
+                    }],
+                    removed_from: 0,
+                    removed_to: 1,
+                    blocks: vec![BlockInfo {
+                        id: "1".into(),
+                        kind: "paragraph",
+                        level: None,
+                        title: None,
+                        how: "Similar",
+                        from: 0,
+                        to: 5,
+                        head: "abxcd".into(),
+                    }],
+                };
+                assert_eq!(serde_json::to_value(reply).unwrap(), *v);
+            }
             other => panic!("unexpected fixture {other}"),
         }
     }

@@ -407,7 +407,7 @@ test("duplicate incremental acknowledgements are ignored while idle and while se
   openText(sync);
   sync.local(insert("abcd", 4, 4, "x"));
   const ack = {
-    t: "incremental", request_id: posts[0].request_id, base_version: 1, version: 2,
+    t: "incremental", request_id: posts[0].request_id, base_version: 1, version: 2, hash: "",
     len16: 5, changes: [{ from: 4, to: 4, insert: "x" }], removed_from: 0, removed_to: 1, blocks: baseBlocks(5),
   };
   sync.receive(ack);
@@ -483,4 +483,41 @@ test("replayed old replies preserve recovering, conflict, failed and closed stat
     assert.deepEqual({ state: sync.state, version: sync.version, length: sync.len16, blocks: sync.blocks, posts: posts.length }, before);
     sync.close();
   }
+});
+
+
+test("invalid wire fields and JSON preserve drafts and converge through bounded recovery", async () => {
+  for (const reply of [null, [], {t: "unknown"}, {t: "blocks", version: -1},
+      {t: "snapshot", version: 1, text: "x", len16: 2, hash: "", blocks: []},
+      {t: "update", version: 2, len16: 4, hash: "", blocks: [], changes: [{from: 5, to: 1, insert: ""}]}]) {
+    const {sync, posts, fireLast} = harness();
+    openText(sync);
+    sync.local(insert("abcd", 4, 4, "x"));
+    const waiter = sync.settled();
+    sync.receive(reply);
+    assert.equal(sync.state, "recovering");
+    assert.equal(sync.draftText(), "local draft");
+    assert.equal(posts.at(-1).t, "snapshot");
+    fireLast(); fireLast();
+    await assert.rejects(waiter, SyncError);
+    assert.equal(sync.state, "failed");
+  }
+  const {sync} = harness();
+  sync.start("cm");
+  const waiter = sync.settled();
+  assert.doesNotThrow(() => sync.receiveJson("{invalid"));
+  await assert.rejects(waiter, e => e.code === "protocol");
+});
+
+
+test("Agent version gaps recover without applying remote text", () => {
+  let applied = 0;
+  const posts = [];
+  const sync = new RustSync(o=>posts.push(o), ()=>{}, ()=>applied++, ()=>{}, {schedule:()=>()=>{}, getText:()=>"draft"});
+  openText(sync);
+  sync.receive({t:"update",version:3,hash:"",len16:5,blocks:baseBlocks(5),changes:[{from:4,to:4,insert:"x"}]});
+  assert.equal(sync.state,"recovering");
+  assert.equal(applied,0);
+  assert.equal(sync.draftText(),"draft");
+  sync.close();
 });

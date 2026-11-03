@@ -147,7 +147,7 @@ pub enum EditorOutbound {
         blocks: Vec<BlockInfo>,
     },
     /// 局部编辑的块增量:替换 `base_version` 块列表的 `[removed_from, removed_to)` 区间,
-    /// 新块的 `from`/`to` 已是在结果版本文本里的坐标;保留块先由 `changes` 映射。
+    /// 新块的 `from`/`to` 已是在结果版本文本里的坐标;保留块先由 `changes` 映射，how 置为 Exact。
     Incremental {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,

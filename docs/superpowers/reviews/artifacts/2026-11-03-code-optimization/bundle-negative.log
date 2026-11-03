@@ -1,0 +1,2 @@
+fixtures: ok (12 fixtures match the production parser)
+已提交的 dist/cm.html 与源码不一致:请运行 scripts/build-editor-web.sh 并提交结果

@@ -1,0 +1,4 @@
+diggerd 连接失败,尝试拉起: socket 文件不存在
+2026-11-03 07:52:34.940 digger[10772:8283323] Failure on line 688 in function id scheduleApplicationNotification(LSNotificationCode, NSWorkspaceNotificationCenter *): noErr == _LSModifyNotification(notificationID, 1, &code, 0, NULL, NULL, NULL)
+2026-11-03 07:52:35.011 digger[10772:8283411] Connection Invalid error for service com.apple.hiservices-xpcservice.
+2026-11-03 07:52:35.011 digger[10772:8283323] Error received in message reply handler: Connection invalid

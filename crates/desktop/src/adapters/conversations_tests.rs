@@ -869,13 +869,23 @@ fn ten_turn_ended_events_in_a_row_leave_only_the_latest_result_applied() {
     let a = project(1, "/a");
     panel.ensure_state(&a);
     let mut senders = vec![];
-    for _ in 0..10 {
+    for expected in 1..=10 {
         let (tx, rx) = tokio::sync::oneshot::channel();
         senders.push(tx);
         fake.responses.lock().unwrap().push_back(rx);
         let _ = panel.on_turn_ended(1, Some(&a), true);
+        // Start each request before superseding it. Unpolled superseded requests may be
+        // cancelled by the shared library; this test exercises ten actual in-flight replies.
+        rt.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while fake.calls.lock().unwrap().len() < expected {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        });
     }
-    rt.block_on(async { tokio::task::yield_now().await });
     assert_eq!(fake.calls.lock().unwrap().len(), 10);
     for (index, sender) in senders.into_iter().enumerate().rev() {
         sender

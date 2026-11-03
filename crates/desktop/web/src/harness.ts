@@ -344,6 +344,23 @@ async function run(e: Engine) {
       result("T24 live theme changes preserve document and undo history",
         darkBg !== lightBg && preserved && r.doc() === beforeThemeEdit,
         `dark=${darkBg}, light=${lightBg}, preserved=${preserved}, undo=${r.doc() === beforeThemeEdit}`);
+      // T25: production IPC round trip and page paint measured separately, with raw samples.
+      for (const count of [100, 1000, 5000]) {
+        const text = Array.from({length: count}, (_, i) => `第${i}段 mixed text 😀。\n\n`).join("");
+        await within(r.load(text), `benchmark load ${count}`);
+        const samples: { ackMs: number; paintMs: number }[] = [];
+        const at = text.indexOf(`第${Math.floor(count/2)}段`);
+        for (let sample = 0; sample < 23; sample++) {
+          const start = performance.now();
+          r.replace(at, at, "字");
+          await within(r.settled(), `benchmark edit ${count}/${sample}`);
+          const ackMs = performance.now() - start;
+          await raf2();
+          if (sample >= 3) samples.push({ackMs, paintMs: performance.now()-start});
+        }
+        info(`T25 production IPC ${count} blocks`, JSON.stringify({blocks: count, samples}));
+        result(`T25 ${count} blocks keep Rust and page text identical`, r.editorHash() === r.rustHash());
+      }
       r.detach();
     }
 

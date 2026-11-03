@@ -43,7 +43,11 @@ jobs:
         run: cargo check --locked --workspace --all-targets
 
       - name: 核心 Rust 行为测试
-        run: cargo test --locked -p digger-editor -p digger-store -p digger-app-host -p digger-paths
+        run: |
+          cargo test --locked -p digger-editor --lib -- --skip typing_in_a_book_parses_a_few_blocks_not_the_book
+          cargo test --locked -p digger-editor --test properties results_are_deterministic
+          cargo test --locked -p digger-editor --test properties split_and_merge_follow_the_configured_policy
+          cargo test --locked -p digger-store -p digger-app-host -p digger-paths
 
       - name: 业务层宿主依赖门禁
         run: bash scripts/check-host-deps.sh

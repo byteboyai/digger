@@ -154,12 +154,7 @@ pub fn defaults() -> Defaults {
                 markdown_id(),
                 browser_id(),
             ],
-            vec![
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id(),
-            ],
+            vec![agent_id(), group_chat_id(), conversations_id(), usage_id()],
         ],
         selected: [markdown_id(), agent_id()],
         left_width: 640.0,
@@ -685,12 +680,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         assert_eq!(model.selected(Side::Left), &markdown_id());
         assert_eq!(model.selected(Side::Right), &agent_id());
@@ -770,12 +760,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ],
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()],
             "the new panels land on their default side"
         );
         assert_eq!(model.left_width(), 500.0);
@@ -817,12 +802,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -894,12 +874,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         assert_eq!(
             model.selected(Side::Right),
@@ -1208,12 +1183,7 @@ mod tests {
         );
         assert_eq!(
             first.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         drag_left_width_to(&mut first, 744.0);
         persist::save_atomic(&project, &first).unwrap();
@@ -1272,12 +1242,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1313,12 +1278,7 @@ mod tests {
         let d = defaults();
         assert_eq!(
             d.rails[1],
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         assert_eq!(d.selected, [markdown_id(), agent_id()]);
     }
@@ -1331,12 +1291,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         assert_eq!(model.selected(Side::Right), &conversations_id());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1350,12 +1305,7 @@ mod tests {
         );
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1432,12 +1382,7 @@ mod tests {
         assert!(model.rail(Side::Left).contains(&browser_id()));
         assert_eq!(
             model.rail(Side::Right),
-            [
-                agent_id(),
-                group_chat_id(),
-                conversations_id(),
-                usage_id()
-            ]
+            [agent_id(), group_chat_id(), conversations_id(), usage_id()]
         );
         assert_eq!(model.selected(Side::Right), &conversations_id());
         let _ = std::fs::remove_dir_all(&dir);

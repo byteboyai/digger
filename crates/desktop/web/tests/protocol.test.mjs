@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { ChangeSet } from "@codemirror/state";
-import { RustSync, PROTOCOL_VERSION } from "../.test-dist/src/rust-sync.js";
+import { RustSync, PROTOCOL_VERSION, decodeOutbound } from "../.test-dist/src/rust-sync.js";
 
 const fixtures = JSON.parse(
   readFileSync(new URL("../../../editor/tests/protocol-fixtures.json", import.meta.url), "utf8"),
@@ -35,4 +35,21 @@ test("the shared reject fixture drives the same state machine branch as Rust", (
   assert.equal(sync.state, "recovering");
   assert.equal(posts[posts.length - 1].t, "snapshot");
   sync.close("test done");
+});
+
+
+test("every shared outbound fixture passes the production decoder", () => {
+  for (const fixture of fixtures.outbound) assert.equal(decodeOutbound(fixture.json).t, fixture.json.t, fixture.name);
+});
+
+test("the shared incremental contract replaces the specified old interval", () => {
+  const fixture = fixtures.outbound.find(c => c.name === "incremental-with-request-id").json;
+  const sync = new RustSync(()=>{}, ()=>{}, ()=>{}, ()=>{}, {schedule:()=>()=>{}});
+  sync.adopt({t:"open",protocol:2,text:"abcd",version:1,hash:"",len16:4,blocks:[{...fixture.blocks[0],how:"Fresh",to:4,head:"abcd"}]});
+  sync.nextRequestId = 6;
+  sync.local(ChangeSet.of({from:2,to:2,insert:"x"},4));
+  sync.receive(fixture);
+  assert.equal(sync.state,"ready");
+  assert.equal(sync.version,2);
+  assert.deepEqual(sync.blocks,fixture.blocks);
 });

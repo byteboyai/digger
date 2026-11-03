@@ -207,6 +207,7 @@ pub enum Message {
     NativeSynced,
     NativeOperationDone,
     RetryCleanup(String),
+    FlushCleanups,
     /// 一次浏览器数据存储清除的结果(窗口线程 `remove_data_store` 回调回传)。
     StoreRemovalResult(String, StoreRemovalOutcome),
     /// 一次用量写入的确认结果(后台 worker 返回;失败必须可见,事件可原样重试)。
@@ -561,6 +562,16 @@ impl AppsState {
                 iced::Task::none()
             }
             Message::NativeOperationDone => iced::Task::none(),
+            Message::FlushCleanups => {
+                if let Err(error) = self.store.flush() {
+                    self.push_notice(
+                        bytehost_panel::notice::NoticeLevel::Error,
+                        error,
+                        "cleanup-persist".into(),
+                    );
+                }
+                iced::Task::none()
+            }
             Message::RetryCleanup(id) => {
                 if let Err(e) = self.store.request(&id) {
                     self.push_notice(

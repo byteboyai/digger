@@ -1385,7 +1385,13 @@ impl ProductShell {
         let Some(result) = &self.shutdown_result else {
             return Task::none();
         };
-        if let Some(usage_error) = self.apps.usage_persistence_error() {
+        let cleanup_error = self.apps.store_dirty().then(|| {
+            format!(
+                "清理台账尚未保存，退出可能丢失清理意图：{}。请重试保存，或明确选择强制退出。",
+                self.apps.store_last_error().unwrap_or("未知写入错误")
+            )
+        });
+        if let Some(usage_error) = self.apps.usage_persistence_error().or(cleanup_error) {
             self.shutdown_error = Some(match result {
                 Ok(()) => usage_error,
                 Err(error) => format!("{error}\n{usage_error}"),
@@ -3321,6 +3327,12 @@ impl Product<Msg> for ProductShell {
                             .push(text(error))
                             .push(button("强制退出").on_press(Msg::ForceExit));
                     }
+                    if self.apps.store_dirty() {
+                        body = body.push(
+                            button("重试保存清理台账")
+                                .on_press(Msg::Apps(crate::apps::Message::FlushCleanups)),
+                        );
+                    }
                     return body.into();
                 }
                 // 名称编辑框的"失焦保存"钩子:库的 `text_input` 焦点态只能借 Operation 在渲染时读到,
@@ -4313,6 +4325,36 @@ mod tests {
             "operation",
         );
         digger_store::complete_run(&clock, run, digger_store::TaskOutcome::default())
+    }
+
+    #[test]
+    fn unsaved_cleanup_intent_blocks_exit_until_explicit_persistence_retry() {
+        let mut shell = fresh("cleanup-exit-dirty");
+        let root = test_temp_dir("cleanup-exit-dirty-path");
+        let parent = root.join("blocked");
+        shell.apps = crate::apps::AppsState::with_ledger_path(parent.join("cleanups.json"));
+        std::fs::write(&parent, b"not a directory").unwrap();
+        let _ = shell
+            .apps
+            .update(crate::apps::Message::RetryCleanup("notes".into()));
+        assert!(shell.apps.store_dirty());
+        shell.closing = true;
+        shell.shutdown_result = Some(Ok(()));
+        assert!(iced_runtime::task::into_stream(shell.finish_shutdown_if_safe()).is_none());
+        assert!(
+            shell
+                .shutdown_error
+                .as_deref()
+                .unwrap()
+                .contains("清理台账尚未保存")
+        );
+        std::fs::remove_file(&parent).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        let _ = shell.apps.update(crate::apps::Message::FlushCleanups);
+        assert!(!shell.apps.store_dirty());
+        assert!(parent.join("cleanups.json").exists());
+        let _ = shell.finish_shutdown_if_safe();
+        assert!(shell.shutdown_error.is_none());
     }
 
     #[tokio::test]
@@ -6032,7 +6074,6 @@ mod tests {
         assert_eq!((r.x, r.y, r.w, r.h), (10.0, 196.0, 300.0, 304.0));
         assert_eq!(below_header(Rect::new(0.0, 0.0, 50.0, 40.0), 96.0).h, 1.0);
     }
-
 
     /// 评审关注点 4:库的 `update` 对 `ToggleListCollapse` / `CollapseHover` 是 `unreachable!`(它们必须由宿主拦截)。
     /// 任何一条漏进去都会让进程崩溃,所以产品在 `Msg::Usage` 入口先拦截。

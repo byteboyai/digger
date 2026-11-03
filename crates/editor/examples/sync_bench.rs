@@ -1,72 +1,87 @@
-//! Repeatable full-path benchmark for the editor bridge.
-//!
-//!   cargo run -q --release -p digger-editor --example sync_bench
-//!
-//! Fixed corpus sizes: 100 / 1000 / 5000 blocks, mixed Chinese / English / emoji. For each size it
-//! reports Doc load, one local edit (incremental parse), and full `blocks` + JSON serialisation.
-//! These are Debug/Release numbers for the same machine; do not use them as CI latency gates.
-
+//! Production Bridge + JSON benchmark. Fixed corpus; JSONL raw samples and p50/p95.
+//! Run in release, outside other workloads. DIGGER_BENCH_LABEL identifies the revision.
+use digger_editor::bridge::{Bridge, Handled, Mode};
 use digger_editor::doc::Doc;
-use std::time::{Duration, Instant};
+use serde_json::json;
+use std::time::Instant;
 
 fn corpus(blocks: usize) -> String {
-    let mut out = String::new();
+    let mut text = String::new();
     for i in 0..blocks {
-        match i % 5 {
-            0 => out.push_str(&format!("# 第{i}章 Chapter {i}\n\n")),
-            1 => out.push_str(&format!(
-                "第{i}段正文，讲述第 {i} 个故事，包含中英文 mixed text and emoji 😀。\n\n"
-            )),
-            2 => out.push_str(&format!("- 项目 {i} alpha\n- 项目 {i} beta\n\n")),
-            3 => out.push_str(&format!(
-                "> 引用第 {i} 段，the quick brown fox jumps over the lazy dog.\n\n"
-            )),
-            _ => out.push_str(&format!("```\ncode block {i}\nlet x = {i};\n```\n\n")),
-        }
+        text.push_str(&match i % 5 {
+            0 => format!("# 第{i}章 Chapter {i}\n\n"),
+            1 => format!("第{i}段正文，中英文 mixed text and emoji 😀。\n\n"),
+            2 => format!("- 项目 {i} alpha\n- 项目 {i} beta\n\n"),
+            3 => format!("> 引用第 {i} 段，the quick brown fox.\n\n"),
+            _ => format!("```\ncode block {i}\nlet x = {i};\n```\n\n"),
+        });
     }
-    out
+    text
 }
-
-fn median(mut v: Vec<Duration>) -> Duration {
-    v.sort();
-    v[v.len() / 2]
+fn percentile(values: &mut [u64], p: usize) -> u64 {
+    values.sort_unstable();
+    values[(values.len() * p).div_ceil(100) - 1]
 }
-
 fn main() {
-    for blocks in [100usize, 1_000, 5_000] {
+    let label = std::env::var("DIGGER_BENCH_LABEL").unwrap_or_else(|_| "working-tree".into());
+    for blocks in [100usize, 1000, 5000] {
         let text = corpus(blocks);
-        let runs = 12;
-        let mut load = Vec::with_capacity(runs);
-        let mut edit = Vec::with_capacity(runs);
-        let mut message = Vec::with_capacity(runs);
-        let mut bytes = 0usize;
-        for _ in 0..runs {
-            let t = Instant::now();
+        let mut samples = Vec::new();
+        let mut sizes = Vec::new();
+        for sample in 0..44 {
+            let mut bridge = Bridge::new(&text, Mode::Normal, "bench");
+            let heading = (blocks / 4 * (1 + sample % 3)) / 5 * 5;
+            let at_byte = text.find(&format!("# 第{heading}章")).unwrap() + 2;
+            let at = text[..at_byte].encode_utf16().count();
+            let load_start = Instant::now();
             let mut doc = Doc::new();
             doc.load(&text);
-            load.push(t.elapsed());
-
-            // type one character in the middle of the document (UTF-16 coordinate)
-            let at = doc.len16() / 2;
-            let t = Instant::now();
-            doc.edit(doc.version, &[(at, at, "字".to_string())])
-                .unwrap();
-            edit.push(t.elapsed());
-
-            let t = Instant::now();
-            let json = doc.blocks_message().to_json();
-            message.push(t.elapsed());
-            bytes = json.len();
+            let doc_load_ns = load_start.elapsed().as_nanos() as u64;
+            let edit_start = Instant::now();
+            doc.edit(doc.version, &[(at, at, "字".into())]).unwrap();
+            let doc_edit_ns = edit_start.elapsed().as_nanos() as u64;
+            let raw = json!({"n":"bench", "t":"edit", "request_id":1, "base":bridge.doc().version,
+                "changes":[{"from":at,"to":at,"insert":"字"}]})
+            .to_string();
+            let initial = if std::env::var_os("DIGGER_BENCH_REPLIES_DIR").is_some() && sample == 3 {
+                Some(bridge.doc().blocks_message().to_json())
+            } else {
+                None
+            };
+            let start = Instant::now();
+            let Handled::Reply(reply) = bridge.handle(&raw) else {
+                panic!("not a reply")
+            };
+            let json = reply.to_json();
+            let nanos = start.elapsed().as_nanos() as u64;
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert!(
+                value["t"] == "blocks" || value["t"] == "incremental",
+                "{json}"
+            );
+            if let Some(initial) = initial {
+                let dir = std::env::var("DIGGER_BENCH_REPLIES_DIR").unwrap();
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(format!("{dir}/{blocks}.json"), json!({"text":text,"initial":serde_json::from_str::<serde_json::Value>(&initial).unwrap(),"reply":value}).to_string()).unwrap();
+            }
+            if sample < 3 {
+                continue;
+            }
+            samples.push(nanos);
+            sizes.push(json.len());
+            println!(
+                "{}",
+                json!({"kind":"sample","label":label,"blocks":blocks,"sample":sample-3,
+                "ns":nanos,"doc_load_ns":doc_load_ns,"doc_edit_ns":doc_edit_ns,"reply_bytes":json.len(),"reply_type":value["t"],
+                "returned_blocks":value["blocks"].as_array().unwrap().len()})
+            );
         }
+        let p50 = percentile(&mut samples, 50);
+        let p95 = percentile(&mut samples, 95);
         println!(
-            "blocks={blocks:5} bytes={} len16={} blocks_in_doc={} | load={:?} edit={:?} blocks+json={:?}",
-            text.len(),
-            text.encode_utf16().count(),
-            blocks,
-            median(load),
-            median(edit),
-            median(message)
+            "{}",
+            json!({"kind":"summary","label":label,"blocks":blocks,"samples":samples.len(),
+            "p50_ns":p50,"p95_ns":p95,"max_reply_bytes":sizes.iter().max().unwrap()})
         );
-        println!("  message_bytes={bytes}");
     }
 }

@@ -5,6 +5,8 @@
 - Plan：[实施计划](../plans/2026-11-02-code-reliability-and-performance.md)
 - 基线：[Task 0 记录](../notes/2026-11-02-code-optimization-baseline.md)
 
+最新补齐结果见 [2026-11-03 复验报告](2026-11-03-code-optimization-completion.md)：Rust 性能门槛、崩溃 / 竞争 / COMMIT 故障、规模与回退、协议校验和退出保护均有新证据；实机、无 patch 发行依赖、远端 CI 仍受限。以下 §1–§8 保留前轮历史结论。
+
 本报告只记录本轮实际执行过的检查。标注为“部分 / 未执行”的项不能当作通过。
 
 ## 1. 总结
@@ -104,3 +106,25 @@ cargo run --release -p digger-editor --example sync_bench 见 baseline §4
 最终执行：26 项 web 测试、48 项 store lib 测试、726 项 desktop lib 测试（显式临时产品数据根、串行）通过；全 workspace all-targets 编译、格式、diff、host-deps、12 组 parser fixtures 与嵌入 bundle 一致性检查通过。原工作区 lock / 本地 patch 保留，Rust 验证使用隔离副本；无 patch / --locked 的发行验证仍未完成。
 
 并行桌面回归中一次宿主启动 / 关闭测试失败，单项重跑和最终串行全量均通过，详见 review。真实 webview、A7 固定环境性能门槛、规模与回退演练、GitHub Actions 和发行依赖验证仍未完成，不将整体标记为验收通过。
+
+
+## 9. 2026-11-03 补齐复验
+
+以 [补齐复验报告](2026-11-03-code-optimization-completion.md) 和 [原始证据](artifacts/2026-11-03-code-optimization/environment.json) 为准。
+
+| 验收 | 最新状态 |
+|---|---|
+| A1 | 项目迁移提交前后真实进程退出、双迁移竞争、归档不覆盖 / 中断恢复通过 |
+| A2 | Debug / Release 计数和块身份回归通过 |
+| A3 | 统一运行时校验 / 判别联合 / 共享增量 fixture，30 Node 测试通过；真实页面自检受限 |
+| A4 | write / sync / rename 原文件保护、幂等、显式重试与未落盘退出保护通过 |
+| A5 | 创建状态单测与失败注入入口完成；真实 Retry 按钮 / IME 验收受限 |
+| A6 | 缓存、坐标与增量逐字段对照通过（800 次固定随机编辑） |
+| A7 | 5000 块生产 Rust 回包减少 99.91%，p95 改善 4.69×，小语料无回退；Node 独立数据具备，真实 webview 仍缺 |
+| A8 | 56 store 测试含子进程导入 / 回退 / 真实 COMMIT 失败，10 万条索引与 upsert 验证完成 |
+| A9 | barrier 慢写、QueueFull、失败重试、关闭排空和未确认保护通过；桌面全量 726 通过 |
+| A10 | 现有组合根职责拆分保留，桌面自动回归通过；真实焦点 / 主题切换受限，历史提交拆分不追溯宣称完成 |
+| A11 | 快慢 CI 实际分离，Bash 3.2 兼容，慢任务含前后性能判定 / 原始样本；无 remote，未执行 Actions |
+| A12 | 记录和恢复说明补齐；干净 locked 检查发现共享钉版缺 API，尚不具备发行通过结论 |
+
+不能因实现和库层性能通过而把整个计划标记为全部验收完成。

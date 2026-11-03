@@ -13,6 +13,7 @@
 //! - **单位/时区**:时刻一律 Unix 毫秒(UTC),不带本地时区;面板侧再按需格式化。
 //! - **读失败 ≠ 空**:账本损坏是 `Err`,与"确实没有记录"(`Ok(vec![])`)区分开,不静默吞。
 
+mod archive;
 mod ledger;
 mod migrate;
 mod projects;
@@ -30,3 +31,11 @@ pub use runner::{
 pub use service::{LedgerUsageService, UnavailableUsageService, UsageDbService};
 pub use usage_db::{ImportOutcome, UsageDb, UsageDbError};
 pub use usage_worker::{SubmitError, UsageHandle, UsageWorker, spawn as spawn_usage_worker};
+
+// Compiled only into unit-test executables; production cannot enable these failpoints.
+#[cfg(test)]
+fn crash_at(point: &str) {
+    if std::env::var("DIGGER_TEST_CRASH_AT").as_deref() == Ok(point) {
+        std::process::exit(86);
+    }
+}

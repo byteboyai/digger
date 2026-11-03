@@ -32,3 +32,21 @@
 - 随时手动跑:`scripts/check-shared-deps.sh`(检查工作区)或 `scripts/check-shared-deps.sh --rev HEAD`(检查已提交内容)。
 - 本地联调共享库:复制 `scripts/dev-patch.example.toml` 到 `.cargo/config.toml`(已被忽略,不入库)。
 - 脚本正本在 bytehost 的 `tools/shared-deps-guard/`,本仓库是 vendor 副本(见 `scripts/check_shared_deps.py` 里的 `SOURCE_TAG`)。
+
+
+## Code reliability checks
+
+See [the implementation checklist](docs/superpowers/plans/2026-11-02-code-reliability-and-performance.md) and [latest verification with raw samples](docs/superpowers/reviews/2026-11-03-code-optimization-completion.md).
+
+PR CI runs editor unit tests (excluding the book stress test), representative properties, store/app-host/paths tests, web checks and embedded bundle consistency. The scheduled/manual slow workflow retains the full Release property suite and book stress test, compares production Bridge timings with the pre-optimization revision, and measures SQLite at 1k/10k/100k records.
+
+```bash
+cargo test -p digger-editor --lib -- --skip typing_in_a_book_parses_a_few_blocks_not_the_book
+cargo test --release -p digger-editor
+(cd crates/desktop/web && npm ci && npm run check && npm test)
+bash scripts/build-editor-web.sh --check
+CARGO_TARGET_DIR="$PWD/target" bash scripts/bench-editor-sync.sh /private/tmp/digger-performance
+cargo run --release -p digger-store --example usage_bench
+```
+
+The GUI harness includes separate production IPC/paint samples (T25). Run `bash scripts/run-editor-selftest.sh` in a normal macOS graphical session; set `DIGGER_EDITOR_FAIL_FIRST_BUILD=1` to verify the visible Retry button. Process recovery tests require process-query permissions. Release checks must use the declared dependencies without personal path patches; the current shared-version blockers are recorded in the latest verification.

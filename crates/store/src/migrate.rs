@@ -230,7 +230,11 @@ fn copy_and_mark(
 
     // 锁内重新检查标记:两个迁移调用(线程 / 进程)只有一个会真正复制。
     if let Some(counts) = marker_counts(&tx, identity)? {
+        #[cfg(test)]
+        crate::crash_at("projects_before_commit");
         tx.commit().map_err(|e| unavailable("COMMIT", e))?;
+        #[cfg(test)]
+        crate::crash_at("projects_after_commit");
         return Ok(counts);
     }
 
@@ -303,19 +307,17 @@ fn copy_and_mark(
         ],
     )
     .map_err(|e| unavailable("写迁移完成标记", e))?;
+    #[cfg(test)]
+    crate::crash_at("projects_before_commit");
     tx.commit().map_err(|e| unavailable("COMMIT", e))?;
+    #[cfg(test)]
+    crate::crash_at("projects_after_commit");
     Ok((projects, memories))
 }
 
 /// 把 legacy 改名为 `*.migrated`,不覆盖已有归档文件。
 fn archive_legacy(legacy: &Path) -> Result<(), String> {
-    let mut dest = legacy.as_os_str().to_owned();
-    dest.push(".migrated");
-    let dest = PathBuf::from(dest);
-    if dest.exists() {
-        return Err(format!("归档目标已存在,未覆盖: {}", dest.to_string_lossy()));
-    }
-    std::fs::rename(legacy, &dest).map_err(|e| format!("改名 legacy 为 .migrated: {e}"))
+    crate::archive::legacy(legacy)
 }
 
 /// 把 `legacy`(`projects.db`)的项目与记忆行按原 id 拷入 `target`(`digger.db`)。
@@ -909,5 +911,113 @@ mod tests {
         set_wal_mode(&db).unwrap();
         let mode_after = journal_mode(&db).unwrap();
         assert_eq!(mode_after, "wal");
+    }
+    #[test]
+    fn subprocess_project_migration() {
+        let Ok(root) = std::env::var("DIGGER_TEST_PROJECT_CRASH_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        migrate_legacy_projects(&root.join("projects.db"), &root.join("digger.db")).unwrap();
+        panic!("failpoint was not reached");
+    }
+
+    #[test]
+    fn process_death_before_and_after_project_commit_recovers_without_duplicate_rows() {
+        for point in ["projects_before_commit", "projects_after_commit"] {
+            let root = std::env::temp_dir().join(format!(
+                "digger-project-crash-{}-{point}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let legacy = root.join("projects.db");
+            let target = root.join("digger.db");
+            seed_legacy(&legacy, 2, 3);
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "migrate::tests::subprocess_project_migration",
+                    "--nocapture",
+                ])
+                .env("DIGGER_TEST_CRASH_AT", point)
+                .env("DIGGER_TEST_PROJECT_CRASH_ROOT", &root)
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(86));
+            assert!(legacy.exists());
+            let conn = Connection::open(&target).unwrap();
+            let count: i64 = conn
+                .query_row("SELECT count(*) FROM projects", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                count,
+                if point.ends_with("before_commit") {
+                    0
+                } else {
+                    2
+                }
+            );
+            drop(conn);
+            migrate_legacy_projects(&legacy, &target).unwrap();
+            assert!(!legacy.exists());
+            assert_eq!(
+                migrate_legacy_projects(&legacy, &target).unwrap(),
+                MigrationOutcome::AlreadyMigrated
+            );
+            let conn = Connection::open(&target).unwrap();
+            assert_eq!(
+                conn.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                conn.query_row("SELECT count(*) FROM memories", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                6
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn two_concurrent_migrations_commit_one_copy_and_keep_the_archive() {
+        let root =
+            std::env::temp_dir().join(format!("digger-migration-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("projects.db");
+        let target = root.join("digger.db");
+        seed_legacy(&source, 2, 3);
+        let original = std::fs::read(&source).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let (source, target, barrier) = (source.clone(), target.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    migrate_legacy_projects(&source, &target)
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        let conn = Connection::open(&target).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM memories", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            6
+        );
+        assert_eq!(
+            std::fs::read(root.join("projects.db.migrated")).unwrap(),
+            original
+        );
+        drop(conn);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

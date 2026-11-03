@@ -54,6 +54,15 @@ pub fn build(
     mode: Mode,
     tx: tokio::sync::mpsc::UnboundedSender<Message>,
 ) -> Result<(), String> {
+    // Explicit self-test-only failure: exercise the visible Retry button with a real window.
+    if mode == Mode::SelfTest && std::env::var_os("DIGGER_EDITOR_FAIL_FIRST_BUILD").is_some() {
+        static FAILED_ONCE: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !FAILED_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            eprintln!("digger selftest: injected build failure generation={generation}"); // cli-output
+            return Err("自检注入：首次创建失败，请点击重试".into());
+        }
+    }
     let view = wry::WebViewBuilder::new()
         .with_bounds(bounds(rect))
         .with_devtools(false)

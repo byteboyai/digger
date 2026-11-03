@@ -68,7 +68,15 @@ pub struct StoreCleanups {
     dirty: bool,
     last_error: Option<String>,
     #[cfg(test)]
-    fail_persist: std::cell::Cell<bool>,
+    fail_persist: std::cell::Cell<Option<PersistStage>>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersistStage {
+    Write,
+    Sync,
+    Rename,
 }
 
 /// 磁盘上的形状:`{ "apps": { "<id>": {"state": "pending"} | {"state":"failed","reason":"…"} } }`。
@@ -113,7 +121,7 @@ impl StoreCleanups {
             dirty: false,
             last_error: None,
             #[cfg(test)]
-            fail_persist: std::cell::Cell::new(false),
+            fail_persist: std::cell::Cell::new(None),
         }
     }
 
@@ -163,10 +171,14 @@ impl StoreCleanups {
     /// 落盘失败返回错误,但内存状态仍已更新(标记为 dirty),调用方据此提示并可重试。
     pub fn request(&mut self, app_id: &str) -> io::Result<bool> {
         self.writable()?;
-        let added = self
-            .entries
-            .insert(app_id.to_owned(), CleanupState::Pending)
-            .is_none();
+        let added = if let std::collections::btree_map::Entry::Vacant(entry) =
+            self.entries.entry(app_id.to_owned())
+        {
+            entry.insert(CleanupState::Pending);
+            true
+        } else {
+            false
+        };
         self.commit(self.persist())?;
         Ok(added)
     }
@@ -261,10 +273,6 @@ impl StoreCleanups {
 
     /// 原子落盘:同目录唯一临时文件 + 文件同步 + rename。失败保留旧版本并清理本次临时文件。
     fn persist(&self) -> io::Result<()> {
-        #[cfg(test)]
-        if self.fail_persist.replace(false) {
-            return Err(io::Error::other("injected persist failure"));
-        }
         let disk = OnDisk {
             apps: self.entries.clone(),
         };
@@ -290,9 +298,15 @@ impl StoreCleanups {
                 .write(true)
                 .create_new(true)
                 .open(&tmp)?;
+            #[cfg(test)]
+            self.inject_failure(PersistStage::Write)?;
             file.write_all(&bytes)?;
+            #[cfg(test)]
+            self.inject_failure(PersistStage::Sync)?;
             file.sync_all()?;
             drop(file);
+            #[cfg(test)]
+            self.inject_failure(PersistStage::Rename)?;
             std::fs::rename(&tmp, &self.path)
         })();
         if result.is_err() {
@@ -301,10 +315,25 @@ impl StoreCleanups {
         result
     }
 
+    /// Retry only persistence; retain every pending/failed intent exactly as it is.
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.writable()?;
+        self.commit(self.persist())
+    }
+
+    #[cfg(test)]
+    fn inject_failure(&self, stage: PersistStage) -> io::Result<()> {
+        if self.fail_persist.get() == Some(stage) {
+            self.fail_persist.set(None);
+            return Err(io::Error::other(format!("injected {stage:?} failure")));
+        }
+        Ok(())
+    }
+
     /// 测试故障注入:让下一次 persist 失败(不触碰磁盘)。
     #[cfg(test)]
     pub(crate) fn fail_next_persist(&self) {
-        self.fail_persist.set(true);
+        self.fail_persist.set(Some(PersistStage::Write));
     }
 }
 
@@ -449,5 +478,40 @@ mod tests {
         assert!(s.failed().is_empty());
         s.fail("notes", "boom").unwrap();
         assert_eq!(s.failed().len(), 1);
+    }
+    #[test]
+    fn each_atomic_write_stage_preserves_the_original_and_can_retry() {
+        for stage in [
+            PersistStage::Write,
+            PersistStage::Sync,
+            PersistStage::Rename,
+        ] {
+            let path = temp_path(&format!("stage-{stage:?}"));
+            let mut ledger = StoreCleanups::load(&path).unwrap();
+            ledger.request("first").unwrap();
+            let original = std::fs::read(&path).unwrap();
+            ledger.fail_persist.set(Some(stage));
+            assert!(ledger.request("second").is_err());
+            assert!(ledger.dirty());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert_eq!(
+                std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+                1
+            );
+            ledger.flush().unwrap();
+            assert!(!ledger.dirty());
+            assert!(StoreCleanups::load(&path).unwrap().is_pending("second"));
+        }
+    }
+    #[test]
+    fn repeated_request_keeps_a_terminal_failure_until_explicit_retry() {
+        let path = temp_path("request-failed");
+        let mut ledger = StoreCleanups::load(path).unwrap();
+        ledger.request("notes").unwrap();
+        ledger.fail("notes", "unsupported").unwrap();
+        assert!(!ledger.request("notes").unwrap());
+        assert_eq!(ledger.failed(), vec![("notes", "unsupported")]);
+        ledger.retry("notes").unwrap();
+        assert_eq!(ledger.pending(), vec!["notes"]);
     }
 }
