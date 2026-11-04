@@ -11,7 +11,7 @@ pub(crate) fn preview_display(
     epoch: u64,
 ) -> crate::adapters::preview_display::PreviewDisplay<'static> {
     crate::adapters::preview_display::PreviewDisplay {
-        locale: PREVIEW_LOCALE,
+        locale: crate::settings::language::code(),
         tab_bar_px,
         list_on_left: true,
         project_id,

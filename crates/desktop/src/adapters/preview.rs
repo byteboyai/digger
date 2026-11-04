@@ -52,7 +52,6 @@ pub struct PreviewHub {
     safe_startup: bool,
     /// 页签条的真实可用宽度;由 `product.rs` 在算配对几何后每帧写回。
     tab_bar_px: (f32, f32),
-    locale: &'static str,
     persistence: Arc<DiggerPersistence>,
     /// 原生宿主:Diger 只用一个共享实例,白名单/脚本注入都走它。
     host: Host,
@@ -88,7 +87,6 @@ impl PreviewHub {
             project_root: None,
             safe_startup: true,
             tab_bar_px: (0.0, 0.0),
-            locale: "en",
             persistence,
             host,
             handle: None,
@@ -311,14 +309,20 @@ impl PreviewHub {
         let Some(state) = self.state(panel, project.id) else {
             return Vec::new();
         };
-        crate::adapters::preview_native::desired(&state.pane, project.id, panel, self.locale, rect)
-            .into_iter()
-            // 能力集只在路由阶段生效;扩展名兜底会绕过它(图片直落
-            // image-annotate,`.puml` 直落渲染器)。Digger 一期没有这两套渲染
-            // 资源,这里按 URL 身份再筛一遍;被筛掉的页签留降级页 + "用系统
-            // 应用打开"。
-            .filter(|(spec, _)| digger_hosts_url(&spec.url))
-            .collect()
+        crate::adapters::preview_native::desired(
+            &state.pane,
+            project.id,
+            panel,
+            crate::settings::language::code(),
+            rect,
+        )
+        .into_iter()
+        // 能力集只在路由阶段生效;扩展名兜底会绕过它(图片直落
+        // image-annotate,`.puml` 直落渲染器)。Digger 一期没有这两套渲染
+        // 资源,这里按 URL 身份再筛一遍;被筛掉的页签留降级页 + "用系统
+        // 应用打开"。
+        .filter(|(spec, _)| digger_hosts_url(&spec.url))
+        .collect()
     }
 
     pub fn state(&self, panel: ViewerPanel, project_id: i64) -> Option<&PreviewPanelState> {
@@ -385,7 +389,7 @@ impl PreviewHub {
         let recovery_dir = self.persistence.recovery_dir();
         let failures_path = self.persistence.failures_path();
         let safe_startup = self.safe_startup;
-        let locale = self.locale;
+        let locale = crate::settings::language::code();
         let project_root = self.project_root.clone();
         let avail_px = match panel {
             ViewerPanel::Project => self.tab_bar_px.1,
@@ -511,7 +515,7 @@ impl PreviewHub {
         let recovery_dir = self.persistence.recovery_dir();
         let failures_path = self.persistence.failures_path();
         let safe_startup = self.safe_startup;
-        let locale = self.locale;
+        let locale = crate::settings::language::code();
         let project_root = self.project_root.clone();
         let avail_px = match panel {
             ViewerPanel::Project => self.tab_bar_px.1,

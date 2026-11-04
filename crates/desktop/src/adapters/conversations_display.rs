@@ -41,7 +41,7 @@ impl PanelDisplay<Msg> for ConversationsDisplay {
         Msg::Conversations(self.pid, message)
     }
     fn locale(&self) -> &str {
-        "zh-CN"
+        crate::settings::language::code()
     }
     fn cursor_position(&self) -> (f32, f32) {
         let at = crate::CURRENT_CURSOR.get();

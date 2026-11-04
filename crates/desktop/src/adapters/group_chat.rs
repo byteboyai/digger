@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use bytehost_chrome::{BodyArea, Divider, ShellMsg, pair_view};
-use dozer_model::{Locale, LocaleStamp, LocalizedText, ProjectInfo};
+use dozer_model::{LocalizedText, ProjectInfo};
 use dozer_panel_group_chat::{
     Message, WebviewPushState, WorkspaceState, host, on_activate, poll_if_due, run_effect, update,
 };
@@ -100,16 +100,19 @@ impl GroupChatPanel {
             run_effect(state.requests(), effect, pid, &io);
         }
         for notice in state.take_outbox() {
-            let text = dozer_panel_group_chat::i18n::render(&notice.text, "zh-CN");
+            let text = dozer_panel_group_chat::i18n::render(
+                &notice.text,
+                crate::settings::language::code(),
+            );
             self.notice.push(text);
         }
         Task::none()
     }
     /// Why the chat page is replaced by the failure shell, if it is.
     pub fn page_failure(&self) -> Option<String> {
-        self.push
-            .failed()
-            .map(|reason| dozer_panel_group_chat::i18n::render(reason, "zh-CN"))
+        self.push.failed().map(|reason| {
+            dozer_panel_group_chat::i18n::render(reason, crate::settings::language::code())
+        })
     }
     /// Retry after a load failure: forget it; the next sync recreates the page.
     pub fn retry_page(&mut self) {
@@ -160,11 +163,8 @@ impl GroupChatPanel {
                 pid,
                 available,
                 now,
-                LocaleStamp {
-                    ui_locale: Locale::default_locale(),
-                    locale_revision: 0,
-                },
-                "zh-CN",
+                crate::settings::language::stamp(),
+                crate::settings::language::code(),
             ),
             _ => {
                 self.push.observe_availability(false, now);
@@ -191,7 +191,10 @@ impl GroupChatPanel {
         };
         let action = host::handle_webview_event(state, &mut self.push, pid, page, &io);
         for notice in state.take_outbox() {
-            let text = dozer_panel_group_chat::i18n::render(&notice.text, "zh-CN");
+            let text = dozer_panel_group_chat::i18n::render(
+                &notice.text,
+                crate::settings::language::code(),
+            );
             self.notice.push(text);
         }
         (

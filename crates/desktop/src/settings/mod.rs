@@ -1,15 +1,16 @@
 //! Digger 设置窗口:产品状态、消息与打开目标。
 //!
 //! 共享层(`bytehost-settings` / `bytehost-settings-ui`)负责页面身份、导航状态、
-//! 对话框生命周期、几何与视图;本模块只做产品适配:注册 Theme / Git / Apps、
+//! 对话框生命周期、几何与视图;本模块只做产品适配:注册 Theme / Language / Git / Apps、
 //! 记住窗口句柄、把共享事件翻成产品消息。
 //!
 //! 设置窗从 2026-11-03 起走统一的父所属 overlay:窗口由 iced 创建,再由
 //! `bytehost-desktop::dialog` 挂成主窗的 AppKit 子窗口;生命周期由共享
 //! `DialogController` 决定,不再由产品散落维护重开 / 失败 / 关闭策略。
 //!
-//! 本期**不注册**语言 / 高级页:Digger 还没有对应的产品服务与文案能力。
+//! 语言偏好由产品本地持久化，高级页尚未注册。
 
+pub mod language;
 pub mod theme;
 pub mod window;
 
@@ -50,6 +51,7 @@ pub enum Message {
     Select(PageId),
     /// 主题页选择;产品负责即时应用与落盘。
     ThemeSelected(crate::settings::theme::Scheme),
+    LanguageSelected(language::Preference),
     /// 设置窗口收到 Esc。
     Escape(iced_window::Id),
     /// Git 页的类型化意图(连接 / 取消 / 断开 / 重试 / 打开 PAT 页)。
@@ -97,6 +99,8 @@ pub struct State {
     pub theme_error: Option<String>,
     /// 启动读盘失败等一次性提示(与保存失败共用一行展示)。
     pub theme_notice: Option<String>,
+    pub language: bytehost_settings::SelectionState<language::Preference>,
+    pub language_notice: Option<String>,
 }
 
 impl Default for State {
@@ -107,9 +111,10 @@ impl Default for State {
 
 impl State {
     pub fn new() -> Self {
-        // 首批 Theme / Git / Apps;顺序即导航顺序。
+        // 顺序即导航顺序。
         let registry = PageRegistry::new(vec![
             bytehost_settings::PageDescriptor::built_in(theme_page_id(), "Theme"),
+            bytehost_settings::PageDescriptor::built_in(language_page_id(), "Language"),
             bytehost_settings::PageDescriptor::built_in(git_page_id(), "Git"),
             bytehost_settings::PageDescriptor::built_in(apps_page_id(), "Apps"),
         ])
@@ -126,12 +131,48 @@ impl State {
             registry,
             theme_error: None,
             theme_notice: None,
+            language: bytehost_settings::SelectionState::default(),
+            language_notice: None,
         }
     }
 
     /// 启动时读取并应用主题;失败只记录提示,不阻断启动。
     pub fn load_theme(&mut self) {
         self.theme_notice = theme::init_notice();
+    }
+
+    pub fn load_language(&mut self) {
+        match language::load_from(&language::path()) {
+            Ok(preference) => {
+                self.language.applied(preference);
+                language::apply(preference);
+            }
+            Err(reason) => {
+                language::apply(language::Preference::default());
+                self.language_notice = Some(reason);
+            }
+        }
+    }
+
+    pub fn select_language_at(
+        &mut self,
+        preference: language::Preference,
+        path: &std::path::Path,
+    ) -> bool {
+        if !self.language.select(preference) {
+            return false;
+        }
+        match language::save_to(path, preference) {
+            Ok(()) => {
+                self.language.applied(preference);
+                self.language_notice = None;
+                true
+            }
+            Err(reason) => {
+                self.language.failed(reason);
+                false
+            }
+        }
     }
 
     pub fn registry(&self) -> &PageRegistry {
@@ -357,8 +398,15 @@ impl State {
     }
 }
 
-/// 共享设置视图的文案:Digger 本期没有 i18n,这里给常用键中文映射,未命中落英文。
+/// 共享视图的英文来自库内 fallback，中文映射由产品提供。
 pub fn shared_text(key: &str, fallback: &str) -> String {
+    shared_text_for(language::code(), key, fallback)
+}
+
+fn shared_text_for(locale: &str, key: &str, fallback: &str) -> String {
+    if locale != "zh-CN" {
+        return fallback.to_owned();
+    }
     let chinese = match key {
         "settings.title" => "设置",
         "settings.close" => "关闭",
@@ -454,6 +502,11 @@ pub fn theme_page_id() -> PageId {
     PageId::new(bytehost_settings::THEME_ID).expect("static built-in id")
 }
 
+/// `bytehost.language` 的校验 ID。
+pub fn language_page_id() -> PageId {
+    PageId::new(bytehost_settings::LANGUAGE_ID).expect("static built-in id")
+}
+
 /// `bytehost.git` 的校验 ID。
 pub fn git_page_id() -> PageId {
     PageId::new(bytehost_settings::GIT_ID).expect("static built-in id")
@@ -482,6 +535,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn language_can_be_opened_directly_and_selected_after_reopening() {
+        let mut state = State::new();
+        let language = language_page_id();
+        state.open(Some(&language));
+        assert_eq!(state.current(), Some(&language));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("language.json");
+        assert!(state.select_language_at(language::Preference::English, &path));
+        state.close();
+        state.open(Some(&language));
+        assert_eq!(state.language.confirmed(), &language::Preference::English);
+        assert_eq!(
+            language::load_from(&path),
+            Ok(language::Preference::English)
+        );
+    }
+
+    #[test]
+    fn failed_language_save_keeps_confirmed_value_and_can_be_retried() {
+        let mut state = State::new();
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "file").unwrap();
+        assert!(!state.select_language_at(
+            language::Preference::English,
+            &blocked.join("language.json")
+        ));
+        assert_eq!(state.language.confirmed(), &language::Preference::System);
+        assert!(matches!(
+            state.language.status(),
+            bytehost_settings::SaveStatus::Failed(_)
+        ));
+        let path = dir.path().join("language.json");
+        assert!(state.select_language_at(language::Preference::English, &path));
+        assert_eq!(
+            state.language.status(),
+            &bytehost_settings::SaveStatus::Idle
+        );
+    }
+
+    #[test]
+    fn settings_text_follows_the_selected_language() {
+        assert_eq!(
+            shared_text_for("en", "settings.language.title", "Language"),
+            "Language"
+        );
+        assert_eq!(
+            shared_text_for("zh-CN", "settings.language.title", "Language"),
+            "语言"
+        );
+        assert_eq!(shared_text_for("zh-CN", "unknown", "Fallback"), "Fallback");
+    }
+
+    #[test]
     fn token_input_message_debug_is_redacted() {
         let message = Message::GitToken(
             GitProvider::GitHub,
@@ -493,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn first_batch_registers_theme_git_then_apps() {
+    fn registers_language_between_theme_and_git() {
         let state = State::new();
         let ids: Vec<_> = state
             .registry()
@@ -501,7 +608,15 @@ mod tests {
             .iter()
             .map(|p| p.id.as_str())
             .collect();
-        assert_eq!(ids, ["bytehost.theme", "bytehost.git", "bytehost.apps"]);
+        assert_eq!(
+            ids,
+            [
+                "bytehost.theme",
+                "bytehost.language",
+                "bytehost.git",
+                "bytehost.apps"
+            ]
+        );
     }
 
     #[test]

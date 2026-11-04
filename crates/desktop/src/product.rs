@@ -33,7 +33,6 @@ use crate::{paths, shell};
 const USAGE_HEADER_HEIGHT: f32 = 80.0;
 /// 预览展示上下文的常量部分:Digger 面板外观固定(无悬停动画 D2、列表恒在左 D3)。
 /// 页签条宽度与项目 id 每帧随当前状态构造,见 [`preview_display`]。
-const PREVIEW_LOCALE: &str = "en";
 
 /// 产品消息。**不进入**宿主 enum(宿主只认 `HostMessage<M>`)。
 mod routing;
@@ -1661,6 +1660,18 @@ impl ProductShell {
                 let _ = provider;
                 Task::none()
             }
+            Message::LanguageSelected(preference) => {
+                if self
+                    .settings
+                    .select_language_at(preference, &crate::settings::language::path())
+                {
+                    crate::settings::language::apply(preference);
+                    if let Some(preview) = self.preview.as_mut() {
+                        preview.reload_for_theme();
+                    }
+                }
+                Task::none()
+            }
             Message::ThemeSelected(scheme) => {
                 self.settings.theme_error = crate::settings::theme::select(scheme);
                 if let Some(preview) = self.preview.as_mut() {
@@ -1761,6 +1772,7 @@ impl ProductShell {
         let page = current.map(|id| id.as_str()).unwrap_or_default();
 
         let content: Element<'_, Msg> = match page {
+            bytehost_settings::LANGUAGE_ID => self.settings_language_view(text),
             bytehost_settings::GIT_ID => self.settings_git_view(text),
             bytehost_settings::APPS_ID => self.settings_apps_view(text),
             _ => self.settings_theme_view(text),
@@ -1903,6 +1915,49 @@ impl ProductShell {
             on_intent: &|intent| Msg::Settings(crate::settings::Message::Git(intent)),
             text,
         })
+    }
+
+    fn settings_language_view<'a>(
+        &'a self,
+        text: bytehost_settings_ui::Text<'a>,
+    ) -> Element<'a, Msg> {
+        use crate::settings::language::Preference;
+        use bytehost_settings_ui::LanguageOption;
+        let options = [
+            LanguageOption::new(
+                Preference::System,
+                "settings.language.follow_system",
+                "Follow system",
+            ),
+            LanguageOption::new(Preference::English, "settings.language.english", "English"),
+            LanguageOption::new(
+                Preference::SimplifiedChinese,
+                "settings.language.simplified_chinese",
+                "简体中文",
+            ),
+        ];
+        let mut extra = Vec::new();
+        let error = self.settings.language_notice.as_deref().or_else(|| {
+            match self.settings.language.status() {
+                bytehost_settings::SaveStatus::Failed(reason) => Some(reason.as_str()),
+                _ => None,
+            }
+        });
+        if let Some(reason) = error {
+            extra.push(
+                iced::widget::text(reason)
+                    .size(byteui::theme::font::caption())
+                    .color(byteui::theme::color::current().gold)
+                    .into(),
+            );
+        }
+        bytehost_settings_ui::language_page(
+            &self.settings.language,
+            &options,
+            text,
+            &|preference| Msg::Settings(crate::settings::Message::LanguageSelected(preference)),
+            extra,
+        )
     }
 
     fn settings_theme_view<'a>(&'a self, text: bytehost_settings_ui::Text<'a>) -> Element<'a, Msg> {
@@ -2252,7 +2307,7 @@ impl ProductShell {
             panel: &self.agent,
             pid,
             term_style: &self.term_style,
-            locale: "en",
+            locale: crate::settings::language::code(),
             tab_bar_px,
             list_on_left: area.pair.is_some_and(|p| p.first.x <= p.second.x),
         };
@@ -4173,6 +4228,7 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
     let mut shell = ProductShell::new();
     // 用户上次选的主题(缺失 → 保持上面的默认值;损坏 → 回退并显示提示)。
     shell.settings.load_theme();
+    shell.settings.load_language();
     let size = default_window_size_for_boot();
     // 用量面板要 iced 运行时句柄在后台取数:`boot` 在 iced 运行时内执行,这里补挂。
     attach_all_handles(&mut shell);
@@ -4355,6 +4411,52 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_settings_renders_all_three_choices_in_the_actual_settings_shell() {
+        use iced_core::{Layout, Pixels, Rectangle, Size, layout, widget};
+        #[derive(Default)]
+        struct Texts(Vec<String>);
+        impl widget::Operation for Texts {
+            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+                operate(self);
+            }
+            fn text(&mut self, _: Option<&widget::Id>, _: Rectangle, text: &str) {
+                self.0.push(text.into());
+            }
+        }
+        let mut shell = fresh("language-settings-view");
+        shell
+            .settings
+            .open(Some(&crate::settings::language_page_id()));
+        let mut view = shell.settings_view();
+        let renderer = iced_renderer::fallback::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            iced::Font::DEFAULT,
+            Pixels(14.),
+        ));
+        let mut tree = widget::Tree::new(view.as_widget());
+        let node = view.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(800., 600.)),
+        );
+        let mut texts = Texts::default();
+        view.as_widget_mut()
+            .operate(&mut tree, Layout::new(&node), &renderer, &mut texts);
+        for (key, fallback) in [
+            ("settings.language.title", "Language"),
+            ("settings.language.follow_system", "Follow system"),
+            ("settings.language.english", "English"),
+            ("settings.language.simplified_chinese", "简体中文"),
+        ] {
+            let expected = crate::settings::shared_text(key, fallback);
+            assert!(
+                texts.0.iter().any(|text| text == &expected),
+                "Missing {expected}: {:?}",
+                texts.0
+            );
+        }
+    }
 
     #[test]
     fn stale_binding_failure_cannot_close_the_current_dialog() {

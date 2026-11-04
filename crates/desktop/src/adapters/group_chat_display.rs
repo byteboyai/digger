@@ -33,7 +33,7 @@ impl PanelDisplay<Message> for GroupChatDisplay {
         message
     }
     fn locale(&self) -> &str {
-        "zh-CN"
+        crate::settings::language::code()
     }
     fn panel_head<'a>(
         &self,

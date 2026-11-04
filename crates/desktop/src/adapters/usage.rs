@@ -108,13 +108,16 @@ impl UsagePanel {
     /// 排空待发提示(库的 outbox)。Digger 尚无 Toast 机制,一期由调用方落地(见
     /// [`UsagePanel::take_notices`] 的说明);返回文本供调用方处理。
     ///
-    /// 库的文案是 [`dozer_model::LocalizedText`]:Digger 一期无 i18n 解析器,
-    /// 取 `fallback`(spec §6.1 保证非空的官方英文兜底)当纯文本,不引入 locale。
     pub fn take_notices(&mut self) -> Vec<(String, String)> {
         self.state
             .take_outbox()
             .into_iter()
-            .map(|n| (format!("{:?}", n.level), n.text.fallback))
+            .map(|n| {
+                (
+                    format!("{:?}", n.level),
+                    dozer_panel_usage::i18n::resolve(&n.text, crate::settings::language::code()),
+                )
+            })
             .collect()
     }
 
@@ -138,20 +141,26 @@ impl UsagePanel {
         if let Some(error) = &self.native.error {
             return iced::widget::text(format!("用量视图创建失败：{error}；切换页签可重试")).into();
         }
-        // 区域外框已由骨架画,这里不再加边框。Digger 一期无 locale 切换,传 "en"。
+        // 区域外框已由骨架绘制，语言取已保存的产品偏好。
         dozer_panel_usage::view::content_pane(
             self,
             collapsed,
             &self.state,
             Length::Fill,
             Border::default(),
-            "en",
+            crate::settings::language::code(),
         )
     }
 
     /// agent 筛选列表。
     pub fn list_view(&self) -> Element<'_, Msg> {
-        dozer_panel_usage::view::list_pane(self, &self.state, Length::Fill, Border::default(), "en")
+        dozer_panel_usage::view::list_pane(
+            self,
+            &self.state,
+            Length::Fill,
+            Border::default(),
+            crate::settings::language::code(),
+        )
     }
 }
 

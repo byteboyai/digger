@@ -264,7 +264,7 @@ impl FilesPanel {
             },
             &self.external_apps,
             &self.caps,
-            "en",
+            crate::settings::language::code(),
         );
         iced::Task::none()
     }
@@ -334,9 +334,9 @@ impl FilesPanel {
     pub fn delete_confirm(
         &self,
     ) -> Option<byteui::feedback::dialog::ConfirmDialog<dozer_panel_files::Message>> {
-        self.state
-            .as_ref()
-            .and_then(|s| dozer_panel_files::dialogs::delete_confirm_spec(s, "en"))
+        self.state.as_ref().and_then(|s| {
+            dozer_panel_files::dialogs::delete_confirm_spec(s, crate::settings::language::code())
+        })
     }
 
     /// 移动/重命名卡片(库内已有的 `files_move_card`)。库在没有待办移动时返回空列。
@@ -346,7 +346,10 @@ impl FilesPanel {
     ) -> Option<iced::Element<'_, Msg, iced_widget::Theme, iced_renderer::Renderer>> {
         let state = self.state.as_ref()?;
         state.pending_move.as_ref()?;
-        Some(dozer_panel_files::view::files_move_card(state, "en").map(Msg::Files))
+        Some(
+            dozer_panel_files::view::files_move_card(state, crate::settings::language::code())
+                .map(Msg::Files),
+        )
     }
 
     /// 此刻是否有面板内弹窗(删除确认 / 移动卡片)。产品据此订阅 Esc。
@@ -561,7 +564,7 @@ impl PanelDisplay for FilesPanel {
     }
 
     fn locale(&self) -> &str {
-        "en"
+        crate::settings::language::code()
     }
 
     fn window_size(&self) -> (f32, f32) {

@@ -136,11 +136,7 @@ impl Native {
             return self.host.destroy(id, generation, Event::Done);
         }
         self.surface.set_desired(dozer_model::Stamped::new(
-            // Digger 一期无语言切换:固定 `en` + 本地显示代 0。
-            dozer_model::LocaleStamp {
-                ui_locale: dozer_model::Locale::default_locale(),
-                locale_revision: 0,
-            },
+            crate::settings::language::stamp(),
             dozer_panel_usage::current_view_payload(state),
         ));
         if !self.live {

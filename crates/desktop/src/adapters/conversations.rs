@@ -297,7 +297,7 @@ impl ConversationsPanel {
             rect,
             spec: dozer_panel_conversations::snapshot::review_webview_spec(
                 state.and_then(|s| s.review.as_ref()),
-                "zh-CN",
+                crate::settings::language::code(),
                 "digger-review",
             ),
             project_id,
@@ -339,7 +339,7 @@ impl ConversationsPanel {
             summary: &self.summary,
             handle,
             caps: self.caps,
-            locale: "zh-CN",
+            locale: crate::settings::language::code(),
             now_ms: now_ms(),
             relative_time: &relative_time,
         };
@@ -504,7 +504,7 @@ impl ConversationsPanel {
             summary: &self.summary,
             handle,
             caps: self.caps,
-            locale: "zh-CN",
+            locale: crate::settings::language::code(),
             now_ms: now_ms(),
             relative_time: &relative_time,
         };
@@ -516,7 +516,10 @@ impl ConversationsPanel {
         self.requests
             .extend(state.take_requests().into_iter().map(|r| (pid, r)));
         for notice in notices {
-            let message = dozer_panel_conversations::i18n::render(&notice.text, "zh-CN");
+            let message = dozer_panel_conversations::i18n::render(
+                &notice.text,
+                crate::settings::language::code(),
+            );
             eprintln!("digger: conversations {:?}: {message}", notice.level);
             self.notice.push_quiet(message);
         }

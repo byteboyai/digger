@@ -355,6 +355,10 @@ pub(crate) struct TodoDisplay {
 }
 
 impl dozer_panel_todo::adapter::PanelDisplay for TodoDisplay {
+    fn locale(&self) -> &str {
+        crate::settings::language::code()
+    }
+
     fn hover_progress(&self, _slot: bytehost_desktop::HoverSlot) -> f32 {
         0.0
     }

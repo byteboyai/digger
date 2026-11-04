@@ -6,7 +6,9 @@
 //! `WebviewPushState` 去重,再用双重 JSON 编码的 `dispatch` 脚本下发。
 
 use bytehost_core::LogicalRect;
-use dozer_model::{AgentKind, Locale, LocaleStamp, Stamped};
+#[cfg(test)]
+use dozer_model::Locale;
+use dozer_model::{AgentKind, Stamped};
 use dozer_panel_todo::{
     TodoWebviewEvent, WebviewPushState, WorkspaceState, current_view_payload, encode_todo_push,
     parse_todo_event,
@@ -143,13 +145,7 @@ impl Native {
             dozer_panel_todo::today_ymd(),
             &agent_icon_data,
         );
-        let desired = Stamped::new(
-            LocaleStamp {
-                ui_locale: Locale::default_locale(),
-                locale_revision: 0,
-            },
-            payload,
-        );
+        let desired = Stamped::new(crate::settings::language::stamp(), payload);
         self.push.observe_availability(self.live, Instant::now());
 
         if !self.live {
@@ -239,10 +235,7 @@ impl Native {
     #[cfg(test)]
     pub(crate) fn pending_project(&self, state: &WorkspaceState) -> Option<i64> {
         let desired = Stamped::new(
-            LocaleStamp {
-                ui_locale: Locale::default_locale(),
-                locale_revision: 0,
-            },
+            crate::settings::language::stamp(),
             current_view_payload(
                 state,
                 &|_| false,

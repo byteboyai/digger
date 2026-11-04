@@ -480,7 +480,7 @@ impl AgentPanel {
         let tabs_empty = state.tabs.is_empty();
         for notice in notices {
             let text = dozer_panel_agent::i18n::resolver()
-                .resolve(&notice.text, "en")
+                .resolve(&notice.text, crate::settings::language::code())
                 .text;
             eprintln!(
                 "digger: agent 面板/{:?}: {text}", // cli-output
@@ -1255,7 +1255,12 @@ pub(crate) mod tests {
         );
         assert!(fake.get().kills.is_empty());
         assert!(
-            dozer_panel_agent::picker::close_confirm_spec(&panel.states[&7], "en", |m| m).is_some()
+            dozer_panel_agent::picker::close_confirm_spec(
+                &panel.states[&7],
+                crate::settings::language::code(),
+                |m| m
+            )
+            .is_some()
         );
         // 取消:什么都不变。
         let _ = panel.update(7, Message::CloseCancel, Some(&project), (80, 24));

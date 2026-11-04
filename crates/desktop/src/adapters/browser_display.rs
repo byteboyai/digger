@@ -18,7 +18,7 @@ impl BrowserDisplay for DiggerBrowserDisplay {
     }
 
     fn locale(&self) -> &str {
-        "zh-CN"
+        crate::settings::language::code()
     }
 
     fn line_height_factor(&self) -> f32 {
@@ -75,7 +75,10 @@ mod tests {
             region.background,
             Some(byteui::theme::color::current().panel)
         );
-        assert_eq!(DiggerBrowserDisplay.locale(), "zh-CN");
+        assert_eq!(
+            DiggerBrowserDisplay.locale(),
+            crate::settings::language::code()
+        );
     }
 
     /// 页签必须走 byteui 的统一页签部件,并把库给的悬停进度与 tooltip 标志原样透传

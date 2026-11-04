@@ -859,7 +859,7 @@ impl ProjectPanel {
                     remote_add: 0.0,
                     memory_add: 0.0,
                 },
-                "en",
+                crate::settings::language::code(),
             ),
             // 还没有状态(尚未切入):给一个空盒子,切入后会立刻建出来。
             None => iced::widget::container(iced::widget::Space::new())
@@ -876,8 +876,12 @@ impl ProjectPanel {
         let state = self.states.get(&project_id)?;
         state.scaffold_run.as_ref()?;
         Some(
-            dozer_panel_project::view::project_scaffold_card(state, "en", CARD_OPTIONS)
-                .map(Msg::Project),
+            dozer_panel_project::view::project_scaffold_card(
+                state,
+                crate::settings::language::code(),
+                CARD_OPTIONS,
+            )
+            .map(Msg::Project),
         )
     }
 
@@ -886,8 +890,12 @@ impl ProjectPanel {
         let state = self.states.get(&project_id)?;
         state.delete_pending?;
         Some(
-            dozer_panel_project::view::project_delete_card(state, "en", CARD_OPTIONS)
-                .map(Msg::Project),
+            dozer_panel_project::view::project_delete_card(
+                state,
+                crate::settings::language::code(),
+                CARD_OPTIONS,
+            )
+            .map(Msg::Project),
         )
     }
 

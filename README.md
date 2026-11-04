@@ -26,6 +26,10 @@
 - [Markdown editor initial requirements (Dozer and Digger)](docs/byteboy_markdown_editor_initial_requirements.md)
 - [GitHub projects code feature analysis v0.1](docs/ByteBoy_Digger_GitHub_Projects_Code_Feature_Analysis_v0.1.md)
 
+## 界面语言
+
+设置面板的「语言 / Language」页提供「跟随系统 / English / 简体中文」，选择后立即应用到设置和已接入多语言的共享面板，并保存到 Digger 配置目录的 `language.json`，重启后恢复。跟随系统使用 macOS 首选语言；不支持的语言回退英文。部分 Digger 自有文案仍为中文。
+
 ## 共享库依赖守卫
 
 `scripts/check-shared-deps.sh` 检查 bytehost / byteui / bytegit / dozer 等 `byteboyai/*` 共享库的依赖:拦下本地路径 `[patch]`、指向本地路径的 `Cargo.lock`、远端不存在的 tag/rev、同一共享库的多份版本,并提示落后。规则与设计见 `docs/superpowers/specs/2026-10-16-shared-deps-guard-design.md`。
