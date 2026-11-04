@@ -17,6 +17,8 @@
 - [S1 窗口骨架:共享 bytehost-chrome](docs/superpowers/specs/2026-10-14-window-shell-design.md)
 - [S2 用量面板接入"列表 | 内容"配对](docs/superpowers/specs/2026-10-15-usage-pair-design.md)
 - [共享设置：Dozer 抽取到 bytehost，Digger 接入](docs/superpowers/specs/2026-10-29-shared-settings-design.md)（[实施计划](docs/superpowers/plans/2026-10-29-shared-settings.md)）
+- [统一设置模块与对话框宿主](docs/superpowers/specs/2026-11-03-unified-settings-dialog-design.md)（[实施计划](docs/superpowers/plans/2026-11-03-unified-settings-dialog.md)）
+- [统一设置共享版本发布记录](docs/superpowers/reviews/2026-11-04-shared-settings-release.md)：bytehost `v0.4.23` / Dozer `libs-2026-11-04a`；无 patch 发行验证与实机边界。
 - [代码恢复性、性能与工程质量优化](docs/superpowers/specs/2026-11-02-code-reliability-and-performance-design.md)（[实施计划](docs/superpowers/plans/2026-11-02-code-reliability-and-performance.md)）
 - Engine spike: `spike/md-engine` (CodeMirror 6 vs ProseMirror under ADR-012)
 - Block identity spike: `spike/block-identity` (stable block ids across edits, with property tests)

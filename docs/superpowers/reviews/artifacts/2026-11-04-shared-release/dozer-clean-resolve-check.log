@@ -1,0 +1,1141 @@
+    Updating git repository `https://github.com/byteboyai/bytegit`
+    Updating git repository `https://github.com/byteboyai/bytehost`
+From https://github.com/byteboyai/bytehost
+ * [new tag]         v0.4.23    -> origin/tags/v0.4.23
+    Updating git repository `https://github.com/byteboyai/byteui`
+     Locking 11 packages to latest Rust 1.98.1 compatible versions
+      Adding bytegit v0.9.2 (https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa55)
+      Adding bytehost-apps v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-client v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-core v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-desktop v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-git-accounts v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-panel v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-settings v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-settings-ui v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-webview v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling libc v0.2.191
+    Checking cfg-if v1.0.5
+   Compiling serde_core v1.0.229
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.15
+   Compiling serde v1.0.229
+    Checking log v0.4.35
+    Checking subtle v2.6.1
+    Checking typenum v1.20.1
+    Checking memchr v2.8.3
+    Checking rand_core v0.10.1
+   Compiling getrandom v0.4.3
+    Checking scopeguard v1.2.0
+   Compiling autocfg v1.5.1
+    Checking once_cell v1.21.4
+   Compiling parking_lot_core v0.9.12
+   Compiling version_check v0.9.5
+    Checking bytes v1.12.1
+    Checking lock_api v0.4.14
+    Checking pin-project-lite v0.2.17
+    Checking equivalent v1.0.3
+    Checking hashbrown v0.17.1
+    Checking itoa v1.0.18
+   Compiling zmij v1.0.23
+   Compiling libm v0.2.16
+    Checking foldhash v0.2.0
+    Checking futures-core v0.3.34
+   Compiling thiserror v2.0.21
+    Checking futures-sink v0.3.34
+    Checking futures-task v0.3.34
+    Checking slab v0.4.12
+    Checking futures-io v0.3.34
+   Compiling serde_json v1.0.154
+   Compiling num-traits v0.2.19
+    Checking futures-channel v0.3.34
+    Checking simd-adler32 v0.3.10
+   Compiling crc32fast v1.5.4
+    Checking adler2 v2.0.1
+    Checking zlib-rs v0.6.8
+   Compiling zerocopy v0.8.63
+    Checking miniz_oxide v0.9.1
+   Compiling jobserver v0.1.35
+    Checking aho-corasick v1.1.5
+   Compiling cc v1.10.0
+    Checking regex-syntax v0.8.11
+    Checking tracing-core v0.1.36
+   Compiling generic-array v0.14.7
+    Checking const-oid v0.9.6
+    Checking objc2-encode v4.1.0
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+    Checking percent-encoding v2.3.2
+    Checking errno v0.3.14
+    Checking mio v1.2.4
+    Checking signal-hook-registry v1.4.8
+    Checking socket2 v0.6.5
+    Checking regex-automata v0.4.18
+    Checking base64 v0.23.1
+   Compiling objc2-exception-helper v0.1.1
+    Checking http v1.5.0
+   Compiling time-core v0.1.9
+   Compiling num-conv v0.2.2
+   Compiling time-macros v0.2.32
+    Checking powerfmt v0.2.1
+    Checking bitflags v2.13.2
+    Checking indexmap v2.14.2
+    Checking deranged v0.5.9
+   Compiling objc2 v0.6.5
+   Compiling httparse v1.10.1
+   Compiling serde_derive v1.0.229
+   Compiling tokio-macros v2.7.2
+   Compiling thiserror-impl v2.0.21
+   Compiling futures-macro v0.3.34
+   Compiling zeroize_derive v1.5.0
+   Compiling zerocopy-derive v0.8.63
+   Compiling tracing-attributes v0.1.31
+    Checking futures-util v0.3.34
+    Checking zeroize v1.9.1
+    Checking cpufeatures v0.2.17
+    Checking time v0.3.55
+    Checking uuid v1.29.0
+    Checking tracing v0.1.44
+    Checking http-body v1.1.0
+    Checking tower-service v0.3.3
+    Checking try-lock v0.2.5
+    Checking atomic-waker v1.1.2
+    Checking httpdate v1.0.3
+    Checking want v0.3.2
+    Checking ipnet v2.12.2
+    Checking http-body-util v0.1.5
+    Checking bumpalo v3.20.3
+    Checking base64 v0.22.1
+    Checking typed-path v0.12.4
+    Checking winnow v0.5.40
+    Checking filetime v0.2.29
+    Checking getrandom v0.2.17
+    Checking option-ext v0.2.0
+    Checking tar v0.4.46
+    Checking same-file v1.0.6
+    Checking core-foundation-sys v0.8.7
+    Checking dirs-sys v0.5.0
+    Checking walkdir v2.5.0
+    Checking flate2 v1.1.10
+    Checking zopfli v0.8.4
+    Checking bitflags v1.3.2
+   Compiling rustix v1.1.6
+   Compiling crossbeam-utils v0.8.23
+   Compiling pkg-config v0.3.34
+    Checking fastrand v2.5.0
+    Checking spin v0.9.9
+    Checking cmov v0.5.4
+    Checking zip v8.6.0
+   Compiling tree-sitter-language v0.1.9
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking ctutils v0.4.7
+    Checking digest v0.10.7
+    Checking lazy_static v1.5.1
+   Compiling vcpkg v0.2.15
+   Compiling anyhow v1.0.104
+   Compiling bytemuck_derive v1.12.1
+    Checking sha2 v0.10.9
+    Checking arrayvec v0.7.8
+    Checking sharded-slab v0.1.7
+    Checking matchers v0.2.0
+    Checking tracing-log v0.2.0
+    Checking bytemuck v1.25.2
+    Checking thread_local v1.1.10
+    Checking hybrid-array v0.4.15
+   Compiling cfg_aliases v0.2.2
+    Checking nu-ansi-term v0.50.3
+   Compiling libz-sys v1.1.31
+    Checking symlink v0.1.0
+    Checking directories v6.0.0
+   Compiling libgit2-sys v0.18.8+1.9.7
+   Compiling synstructure v0.14.0
+   Compiling getrandom v0.3.4
+    Checking crypto-common v0.2.2
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+    Checking zerofrom v0.1.8
+    Checking notify-types v2.2.0
+    Checking stable_deref_trait v1.2.1
+    Checking futures-executor v0.3.34
+    Checking byteorder v1.5.0
+   Compiling zerovec-derive v0.11.7
+    Checking futures v0.3.34
+   Compiling ahash v0.8.12
+    Checking rand_core v0.6.4
+   Compiling displaydoc v0.2.7
+    Checking tinyvec v1.13.3
+    Checking block-buffer v0.12.1
+    Checking core_maths v0.1.1
+    Checking raw-window-handle v0.6.2
+    Checking core-foundation v0.10.1
+    Checking winnow v1.0.4
+    Checking unicode-width v0.2.3
+    Checking unicode-bidi v0.3.18
+    Checking smallvec v1.16.4
+    Checking dozer-model v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-model)
+    Checking toml_datetime v0.6.3
+    Checking serde_spanned v0.6.9
+    Checking tracing-subscriber v0.3.23
+    Checking toml_parser v1.1.5+spec-1.1.0
+    Checking toml_edit v0.20.2
+    Checking parking_lot v0.12.5
+   Compiling libsqlite3-sys v0.30.1
+    Checking tokio v1.54.1
+    Checking euclid v0.22.14
+    Checking bit-vec v0.8.0
+    Checking dozer-i18n v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-i18n)
+    Checking writeable v0.6.4
+    Checking toml v0.8.2
+    Checking smol_str v0.2.2
+    Checking litemap v0.8.3
+    Checking utf_types v1.0.0
+    Checking toml_writer v1.1.3+spec-1.1.0
+    Checking crossbeam-channel v0.5.17
+    Checking bit-set v0.8.0
+   Compiling foreign-types-macros v0.2.4
+    Checking utf8_iter v1.1.0
+    Checking tempfile v3.27.0
+   Compiling slotmap v1.1.1
+    Checking rustc-hash v1.1.0
+    Checking ppv-lite86 v0.2.21
+    Checking tracing-appender v0.2.5
+    Checking half v2.7.1
+    Checking foreign-types-shared v0.3.1
+   Compiling icu_normalizer_data v2.4.0
+   Compiling icu_properties_data v2.4.0
+    Checking foreign-types v0.5.0
+    Checking rand_chacha v0.3.1
+    Checking ttf-parser v0.25.1
+    Checking memmap2 v0.9.12
+    Checking rand v0.8.8
+   Compiling ring v0.17.14
+    Checking rustc-hash v2.1.3
+    Checking objc2-core-foundation v0.3.2
+    Checking block2 v0.6.2
+    Checking web-time v1.1.0
+    Checking font-types v0.10.1
+    Checking font-types v0.12.7
+    Checking lilt v0.8.2
+    Checking rustls-pki-types v1.15.1
+    Checking sha1 v0.10.7
+    Checking serde_spanned v1.1.2
+    Checking objc2-core-services v0.3.2
+    Checking toml_datetime v0.7.5+spec-1.1.0
+    Checking dozer-file-io v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-file-io)
+    Checking glam v0.25.0
+   Compiling thiserror v1.0.69
+    Checking quick-error v2.0.1
+   Compiling paste v1.0.15
+    Checking weezl v0.1.12
+    Checking notify v8.2.1
+    Checking unicode-script v0.5.8
+    Checking winnow v0.7.15
+    Checking unicode-properties v0.1.5
+    Checking yoke v0.8.4
+    Checking objc2-foundation v0.3.2
+    Checking read-fonts v0.41.0
+    Checking hashbrown v0.14.5
+    Checking toml v0.9.12+spec-1.1.0
+    Checking iced_core v0.14.0
+    Checking read-fonts v0.35.0
+    Checking lyon_geom v1.0.20
+   Compiling naga v27.0.3
+   Compiling thiserror-impl v1.0.69
+    Checking malloc_buf v0.0.6
+    Checking byteorder-lite v0.1.0
+    Checking untrusted v0.9.0
+    Checking zune-core v0.5.3
+    Checking const-oid v0.10.2
+    Checking data-encoding v2.11.1
+    Checking zune-jpeg v0.5.15
+    Checking objc v0.2.7
+    Checking fontdb v0.23.0
+    Checking lyon_path v1.0.19
+    Checking hyper v1.12.0
+    Checking dozer-services v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-services)
+    Checking skrifa v0.44.0
+    Checking codespan-reporting v0.12.0
+    Checking core-graphics-types v0.2.0
+   Compiling wgpu-hal v27.0.4
+    Checking form_urlencoded v1.2.2
+    Checking hashbrown v0.16.1
+   Compiling memoffset v0.6.5
+    Checking hexf-parse v0.2.1
+    Checking yazi v0.2.2
+    Checking fax v0.2.7
+    Checking zeno v0.3.3
+    Checking block v0.1.6
+    Checking hyper-util v0.1.21
+   Compiling litrs v1.0.1
+   Compiling rustls v0.23.46
+    Checking pxfm v0.1.30
+    Checking tiff v0.11.3
+    Checking harfrust v0.3.2
+    Checking skrifa v0.37.0
+   Compiling document-features v0.2.12
+    Checking swash v0.2.10
+    Checking iced_futures v0.14.0
+    Checking bytehost-apps v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking hashlink v0.9.1
+    Checking wgpu-types v27.0.1
+    Checking metal v0.32.0
+    Checking ioctl-rs v0.1.6
+    Checking serial-core v0.4.0
+    Checking moxcms v0.8.1
+    Checking termios v0.2.2
+    Checking rangemap v1.8.0
+    Checking fallible-iterator v0.3.0
+    Checking float-cmp v0.9.0
+    Checking zerovec v0.11.9
+    Checking zerotrie v0.2.5
+    Checking unicode-segmentation v1.13.3
+    Checking rustls-webpki v0.103.16
+    Checking sys-locale v0.3.2
+    Checking fallible-streaming-iterator v0.1.9
+    Checking profiling v1.0.18
+    Checking unicode-linebreak v0.1.5
+    Checking self_cell v1.3.0
+    Checking dozer-core v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-core)
+    Checking bytehost-client v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking linebender_resource_handle v0.1.1
+    Checking rusqlite v0.32.1
+    Checking strict-num v0.1.1
+    Checking cosmic-text v0.15.0
+    Checking serial-unix v0.4.0
+    Checking webpki-roots v1.0.11
+   Compiling wgpu-core v27.0.3
+    Checking image v0.25.10
+   Compiling objc-sys v0.3.5
+    Checking pin-utils v0.1.1
+    Checking utf-8 v0.7.6
+    Checking arrayref v0.3.9
+    Checking mutate_once v0.1.2
+    Checking nix v0.25.1
+    Checking serial v0.4.0
+    Checking tiny-skia-path v0.11.4
+    Checking dozer-client v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-client)
+    Checking kamadak-exif v0.6.1
+    Checking kurbo v0.11.3
+   Compiling wgpu v27.0.1
+    Checking miniz_oxide v0.8.9
+    Checking fdeflate v0.3.7
+    Checking svg_fmt v0.4.5
+    Checking filedescriptor v0.8.3
+    Checking tungstenite v0.24.0
+    Checking unicode-ccc v0.4.0
+    Checking shell-words v1.1.1
+    Checking siphasher v1.0.4
+    Checking downcast-rs v1.2.1
+    Checking unicode-bidi-mirroring v0.4.0
+    Checking png v0.17.16
+    Checking objc2-metal v0.3.2
+    Checking iced_graphics v0.14.0
+    Checking tokio-tungstenite v0.24.0
+    Checking portable-pty v0.8.1
+    Checking digest v0.11.3
+    Checking svgtypes v0.15.3
+    Checking rustybuzz v0.20.1
+    Checking objc2-core-graphics v0.3.2
+    Checking objc2-core-video v0.3.2
+    Checking quick-xml v0.42.0
+    Checking simplecss v0.2.2
+    Checking unicode-vo v0.1.0
+    Checking float_next_after v1.0.0
+    Checking linked-hash-map v0.5.6
+    Checking imagesize v0.13.0
+    Checking color_quant v1.1.0
+    Checking xmlwriter v0.1.0
+    Checking tinystr v0.8.5
+    Checking potential_utf v0.1.6
+    Checking roxmltree v0.20.0
+    Checking zune-core v0.4.12
+    Checking data-url v0.3.2
+    Checking static_assertions v1.1.0
+    Checking pico-args v0.5.0
+    Checking plist v1.10.3
+    Checking objc2-quartz-core v0.3.2
+    Checking yaml-rust v0.4.5
+    Checking wgpu-core-deps-apple v27.0.0
+    Checking objc2 v0.5.3
+    Checking gif v0.13.3
+    Checking lyon_tessellation v1.0.23
+    Checking icu_collections v2.4.0
+    Checking icu_locale_core v2.4.0
+    Checking zune-jpeg v0.4.21
+    Checking tiny-skia v0.11.4
+    Checking objc2-cloud-kit v0.3.2
+    Checking objc2-core-image v0.3.2
+    Checking usvg v0.45.1
+    Checking objc2-core-data v0.3.2
+    Checking etagere v0.2.15
+    Checking iced_debug v0.14.0
+    Checking lyon_algorithms v1.0.22
+    Checking image-webp v0.2.4
+    Checking objc2-core-text v0.3.2
+    Checking rgb v0.8.53
+    Checking fancy-regex v0.16.2
+    Checking bincode v1.3.3
+    Checking lru v0.16.4
+    Checking icu_provider v2.4.0
+    Checking fnv v1.0.7
+    Checking block2 v0.5.1
+    Checking guillotiere v0.6.2
+    Checking dispatch v0.2.0
+    Checking lyon v1.0.19
+    Checking objc2-app-kit v0.3.2
+    Checking ryu v1.0.23
+   Compiling pulldown-cmark v0.12.2
+    Checking cursor-icon v1.2.0
+    Checking getopts v0.2.24
+    Checking unicase v2.10.0
+    Checking base64ct v1.8.3
+    Checking syntect v5.3.0
+    Checking resvg v0.45.1
+    Checking pulldown-cmark-escape v0.11.0
+    Checking icu_properties v2.4.0
+    Checking icu_normalizer v2.4.0
+    Checking objc2-foundation v0.2.2
+    Checking tokio-rustls v0.26.6
+    Checking security-framework-sys v2.17.0
+    Checking serde_urlencoded v0.7.1
+    Checking core-foundation v0.9.4
+    Checking sync_wrapper v1.0.2
+    Checking tower-layer v0.3.3
+    Checking block-padding v0.4.2
+   Compiling winit v0.30.13
+    Checking keyring-core v1.0.1
+    Checking dpi v0.1.2
+    Checking security-framework v3.7.0
+    Checking hyper-rustls v0.27.10
+    Checking iced_runtime v0.14.0
+    Checking tower v0.5.3
+    Checking core-graphics-types v0.1.3
+    Checking inout v0.2.5
+    Checking idna_adapter v1.2.2
+    Checking two-face v0.4.5
+    Checking iana-time-zone v0.1.65
+    Checking cpufeatures v0.3.1
+   Compiling cookie v0.18.2
+    Checking core-graphics v0.23.2
+    Checking cpubits v0.1.1
+    Checking cipher v0.5.2
+    Checking iced_program v0.14.0
+    Checking idna v1.1.0
+   Compiling wry v0.55.1
+    Checking chrono v0.4.45
+    Checking iced_highlighter v0.14.0
+    Checking apple-native-keyring-store v1.0.2
+    Checking dirs v6.0.0
+    Checking url v2.5.8
+    Checking keyring v4.2.0
+    Checking objc2-app-kit v0.2.2
+    Checking bytehost-core v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling ident_case v1.0.1
+   Compiling strsim v0.11.1
+    Checking pem-rfc7468 v1.0.0
+    Checking hmac v0.13.0
+    Checking universal-hash v0.6.1
+   Compiling ref-cast v1.0.27
+    Checking tokio-util v0.7.20
+   Compiling darling_core v0.24.1
+   Compiling ref-cast-impl v1.0.27
+    Checking tower-http v0.6.11
+    Checking bytehost-webview v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling serde_derive_internals v0.30.0
+    Checking der v0.8.3
+    Checking pbkdf2 v0.13.0
+    Checking polyval v0.7.3
+    Checking crypto-bigint v0.7.10
+    Checking reqwest v0.12.28
+    Checking sha2 v0.11.1
+    Checking dyn-clone v1.0.20
+    Checking cryoglyph v0.1.0
+   Compiling schemars_derive v1.2.3
+   Compiling rmcp v3.8.0
+    Checking aes v0.9.3
+    Checking ghash v0.6.0
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+   Compiling pastey v0.2.3
+    Checking iced_wgpu v0.14.0
+   Compiling rustversion v1.0.23
+    Checking toml_datetime v1.1.2+spec-1.1.0
+    Checking spki v0.8.1
+   Compiling darling_macro v0.24.1
+    Checking bytehost-git-accounts v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking salsa20 v0.11.0
+    Checking aes-gcm v0.11.1
+    Checking cbc v0.2.1
+    Checking ff v0.14.0
+   Compiling darling v0.24.1
+    Checking toml_edit v0.25.17+spec-1.1.0
+   Compiling semver v1.0.28
+   Compiling crunchy v0.2.4
+    Checking scrypt v0.12.0
+   Compiling crossbeam-epoch v0.9.21
+   Compiling tiny-keccak v2.0.2
+    Checking bytehost-settings v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking iced_renderer v0.14.0
+    Checking schemars v1.2.3
+    Checking clipboard_macos v0.1.1
+    Checking foldhash v0.1.5
+   Compiling rustc_version v0.4.1
+    Checking allocator-api2 v0.2.21
+    Checking pkcs5 v0.8.1
+    Checking group v0.14.0
+   Compiling encoding_rs v0.8.44
+    Checking window_clipboard v0.5.1
+    Checking signature v3.0.0
+    Checking either v1.19.0
+    Checking iced_widget v0.14.2
+    Checking hashbrown v0.15.5
+    Checking pkcs8 v0.11.0
+   Compiling rmcp-macros v3.8.0
+   Compiling crossbeam-deque v0.8.8
+    Checking base16ct v1.0.0
+    Checking hkdf v0.13.0
+    Checking num-integer v0.1.47
+   Compiling multiversion_no_op v1.0.0
+    Checking simdutf8 v0.1.5
+    Checking sec1 v0.8.1
+    Checking primefield v0.14.0
+    Checking pem-rfc7468 v0.7.0
+    Checking bstr v1.13.1
+   Compiling rust_decimal v1.43.0
+    Checking iced_winit v0.14.1
+    Checking hex v0.4.3
+    Checking home v0.5.12
+   Compiling signal-hook v0.4.6
+    Checking elliptic-curve v0.14.3
+    Checking der v0.7.10
+    Checking wnaf v0.14.1
+    Checking rfc6979 v0.6.0
+   Compiling tree-sitter v0.27.1
+    Checking regex v1.13.1
+    Checking iced v0.14.0
+   Compiling macro_magic_core_macros v0.5.1
+   Compiling derive-syn-parse v0.2.0
+   Compiling cmake v0.1.58
+    Checking crc-catalog v2.5.0
+   Compiling fs_extra v1.3.0
+    Checking parking v2.2.1
+   Compiling dunce v1.0.5
+    Checking spki v0.7.3
+    Checking crc v3.4.0
+    Checking primeorder v0.14.0
+    Checking ecdsa v0.17.0
+   Compiling aws-lc-sys v0.47.0
+   Compiling convert_case v0.10.0
+    Checking event-listener v5.4.2
+    Checking hashlink v0.10.0
+   Compiling curve25519-dalek v5.0.0
+    Checking chacha20 v0.10.2
+    Checking vte v0.15.0
+    Checking webpki-roots v0.26.11
+   Compiling const-random-macro v0.1.16
+    Checking tokio-stream v0.1.19
+    Checking rustix-openpty v0.2.0
+    Checking polling v3.11.0
+    Checking crossbeam-queue v0.3.14
+   Compiling const-random v0.1.18
+    Checking futures-intrusive v0.5.0
+    Checking unicode-normalization v0.1.26
+   Compiling tree-sitter-md v0.5.4
+   Compiling tree-sitter-rust v0.24.2
+   Compiling tree-sitter-javascript v0.25.0
+   Compiling tree-sitter-php v0.24.2
+   Compiling tree-sitter-python v0.25.0
+   Compiling tree-sitter-css v0.25.0
+   Compiling tree-sitter-dart v0.2.0
+   Compiling tree-sitter-swift v0.7.4
+    Checking git2 v0.21.0
+   Compiling tree-sitter-lua v0.5.0
+   Compiling tree-sitter-kotlin-sg v0.4.1
+   Compiling tree-sitter-yaml v0.7.2
+   Compiling tree-sitter-c-sharp v0.23.5
+   Compiling tree-sitter-json v0.24.8
+   Compiling tree-sitter-solidity v1.2.13
+   Compiling tree-sitter-haskell v0.23.1
+   Compiling tree-sitter-scala v0.26.4
+   Compiling tree-sitter-typescript v0.23.2
+   Compiling tree-sitter-java v0.23.5
+   Compiling tree-sitter-elixir v0.3.5
+   Compiling tree-sitter-cpp v0.23.4
+   Compiling tree-sitter-html v0.23.2
+   Compiling tree-sitter-bash v0.25.1
+   Compiling tree-sitter-c v0.24.2
+   Compiling tree-sitter-hcl v1.1.0
+   Compiling tree-sitter-go v0.25.0
+   Compiling tree-sitter-nix v0.3.0
+   Compiling tree-sitter-ruby v0.23.1
+   Compiling unicode-xid v0.2.6
+    Checking streaming-iterator v0.1.9
+   Compiling signal-hook v0.3.18
+    Checking bit-vec v0.10.1
+   Compiling num-bigint-dig v0.8.6
+   Compiling camino v1.2.6
+   Compiling radium v0.7.0
+    Checking alacritty_terminal v0.26.0
+    Checking bit-set v0.11.1
+    Checking sqlx-core v0.8.6
+    Checking bytegit v0.9.2 (https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa55)
+   Compiling derive_more-impl v2.1.1
+    Checking dozer-store-project v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-store-project)
+    Checking dozerd v0.3.3 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozerd)
+   Compiling macro_magic_core v0.5.1
+    Checking objc2-web-kit v0.3.2
+    Checking byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+    Checking bytehost-desktop v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking dozer-panel-host v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-host)
+    Checking dozer-panel-conversations v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-conversations)
+    Checking stringprep v0.1.5
+    Checking dozer-mcp v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-mcp)
+    Checking pkcs8 v0.10.2
+    Checking globset v0.4.21
+    Checking num-iter v0.1.46
+    Checking ssh-encoding v0.3.0
+   Compiling macro_magic_macros v0.5.1
+    Checking keccak v0.2.2
+    Checking trash v5.2.9
+    Checking rand_core v0.9.5
+   Compiling nix v0.31.3
+    Checking hmac v0.12.1
+    Checking atoi v2.0.0
+    Checking tap v1.0.1
+    Checking debug_unsafe v0.1.4
+    Checking sponge-cursor v0.1.0
+   Compiling rayon-core v1.13.0
+    Checking hkdf v0.12.4
+    Checking atoi_simd v0.18.1
+    Checking wyz v0.5.1
+    Checking rand_chacha v0.9.0
+    Checking ignore v0.4.34
+    Checking pkcs1 v0.7.5
+    Checking quick-xml v0.41.0
+    Checking codepage v0.1.3
+    Checking ast-grep-core v0.45.3
+    Checking derive_more v2.1.1
+    Checking ed25519 v3.0.0
+   Compiling rustc_version_runtime v0.3.0
+    Checking crypto-primes v0.7.2
+    Checking pkcs1 v0.8.0-rc.4
+    Checking poly1305 v0.9.1
+    Checking blowfish v0.10.0
+    Checking sha1 v0.11.0
+    Checking blake2 v0.11.0
+    Checking dozer-hook v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-hook)
+    Checking cargo-platform v0.1.9
+    Checking signature v2.2.0
+    Checking md-5 v0.10.6
+    Checking serde_bytes v0.11.19
+    Checking csv-core v0.1.13
+   Compiling aws-lc-rs v1.19.0
+    Checking fast-float2 v0.2.4
+    Checking funty v2.0.0
+    Checking fixedbitset v0.5.7
+    Checking whoami v1.6.1
+    Checking dotenvy v0.15.7
+    Checking csv v1.4.0
+    Checking rsa v0.9.10
+    Checking rsa v0.10.0-rc.18
+    Checking cargo_metadata v0.19.2
+    Checking calamine v0.36.1
+    Checking petgraph v0.8.3
+    Checking argon2 v0.6.0
+    Checking bitvec v1.1.1
+    Checking bcrypt-pbkdf v0.11.0
+    Checking ssh-cipher v0.3.0
+    Checking signal-hook-mio v0.2.5
+    Checking rand v0.9.5
+    Checking sha3 v0.12.0
+    Checking shake v0.1.0
+   Compiling macro_magic v0.5.1
+    Checking dozer-panel-term v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-term)
+    Checking rand v0.10.3
+    Checking p521 v0.14.0
+    Checking ast-grep-language v0.45.3
+    Checking p256 v0.14.0
+    Checking ed25519-dalek v3.0.0
+    Checking p384 v0.14.0
+   Compiling serde_with_macros v3.24.0
+    Checking dozer-preview-core v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-preview-core)
+    Checking kem v0.3.0
+    Checking module-lattice v0.2.4
+    Checking flume v0.11.1
+   Compiling typed-builder-macro v0.22.0
+    Checking grep-matcher v0.1.9
+   Compiling rfd v0.15.4
+    Checking untrusted v0.7.1
+    Checking serde_with v3.24.0
+    Checking rayon v1.12.0
+    Checking ml-kem v0.3.4
+    Checking bson v2.15.0
+    Checking sqlx-sqlite v0.8.6
+    Checking internal-russh-num-bigint v0.5.0
+    Checking sqlx-mysql v0.8.6
+    Checking typed-builder v0.22.0
+    Checking russh-cryptovec v0.62.0
+    Checking crossterm v0.29.0
+    Checking sqlx-postgres v0.8.6
+    Checking encoding_rs_io v0.1.8
+    Checking dozer-git-runtime v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-git-runtime)
+    Checking num-bigint v0.4.8
+    Checking itertools v0.14.0
+    Checking generic-array v1.4.5
+   Compiling mongodb-internal-macros v3.9.1
+   Compiling enum_dispatch v0.3.13
+    Checking md-5 v0.11.0
+    Checking bytehost-panel v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking russh-util v0.52.0
+    Checking dashmap v6.2.1
+    Checking dispatch2 v0.3.1
+    Checking textwrap v0.16.4
+   Compiling delegate v0.13.5
+   Compiling derive-where v1.7.0
+    Checking atty v0.2.14
+    Checking yansi v1.0.1
+    Checking hex-literal v1.1.0
+    Checking take_mut v0.2.2
+    Checking md5 v0.8.1
+   Compiling dozer-app v0.5.316 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-app)
+    Checking russh-sftp v2.4.0
+    Checking bytehost-settings-ui v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking grep-searcher v0.1.17
+    Checking sysinfo v0.32.1
+    Checking ssh-key v0.7.0-rc.11
+    Checking grep-regex v0.1.14
+    Checking gleisbau v0.7.5
+    Checking dozer-panel-preview v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-preview)
+    Checking dozer-codehealth v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-codehealth)
+    Checking sqlx v0.8.6
+    Checking dozer-panel-agent v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-agent)
+    Checking dozer-panel-project v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-project)
+    Checking dozer-panel-files v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-files)
+    Checking mongodb v3.9.1
+    Checking dozer-panel-group-chat v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-group-chat)
+    Checking dozer-panel-browser v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-browser)
+    Checking dozer-panel-todo v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-todo)
+    Checking dozer-panel-usage v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/dozer/crates/dozer-panel-usage)
+    Checking arboard v3.7.0
+warning: unused import: `crate::external_apps::ExternalAppsConfig`
+ --> crates/dozer-panel-files/src/tests.rs:6:9
+  |
+6 |     use crate::external_apps::ExternalAppsConfig;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `t_args` and `t`
+ --> crates/dozer-panel-files/src/tests.rs:8:23
+  |
+8 |     use crate::i18n::{t, t_args};
+  |                       ^  ^^^^^^
+
+warning: unused import: `tab_context_menu_items`
+ --> crates/dozer-panel-files/src/tests.rs:9:66
+  |
+9 |     use crate::menu::{FileContextMenuParams, context_menu_items, tab_context_menu_items};
+  |                                                                  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `TabContextMenu`
+  --> crates/dozer-panel-files/src/tests.rs:12:9
+   |
+12 |         TabContextMenu, TreeEdit, TreeEditMode, WorkspaceState, take_search_focused,
+   |         ^^^^^^^^^^^^^^
+
+warning: `dozer-panel-files` (lib test) generated 4 warnings (run `cargo fix --lib -p dozer-panel-files --tests` to apply 4 suggestions)
+    Checking russh v0.62.7
+warning: unused imports: `CaptureFindFocus` and `take_find_focused`
+  --> crates/dozer-app/src/extensions/browser.rs:39:23
+   |
+39 |     CaptureAddrFocus, CaptureFindFocus, FindRequest, addr_field_id, find_field_id,
+   |                       ^^^^^^^^^^^^^^^^
+40 |     take_addr_focused, take_find_focused,
+   |                        ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CREATABLE_AGENTS`, `POLL_BACKOFF`, and `POLL_LIMIT`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:6:5
+  |
+6 |     CREATABLE_AGENTS, POLL_BACKOFF, POLL_INTERVAL, POLL_LIMIT,
+  |     ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^                 ^^^^^^^^^^
+
+warning: unused imports: `keyed_args`, `keyed`, `t_args`, and `t`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:8:40
+  |
+8 | pub use dozer_panel_group_chat::i18n::{keyed, keyed_args, t, t_args};
+  |                                        ^^^^^  ^^^^^^^^^^  ^  ^^^^^^
+
+warning: unused imports: `Effect`, `current_view_payload`, `encode_group_chat_push`, `i18n`, `route_event`, `spawn_fetch_messages`, and `spawn_load_groups`
+  --> crates/dozer-app/src/extensions/group_chat/mod.rs:11:14
+   |
+11 |     Command, Effect, GroupChatWebviewEvent, Message, WebviewPushState, WorkspaceState,
+   |              ^^^^^^
+12 |     current_view_payload, encode_group_chat_push, host, i18n, on_activate, parse_group_chat_event,
+   |     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^        ^^^^
+13 |     poll_if_due, route_event, run_effect, select_group, spawn_command, spawn_fetch_messages,
+   |                  ^^^^^^^^^^^                                           ^^^^^^^^^^^^^^^^^^^^
+14 |     spawn_load_groups, update,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_panel_group_chat::protocol::*`
+  --> crates/dozer-app/src/extensions/group_chat/mod.rs:21:13
+   |
+21 |     pub use dozer_panel_group_chat::protocol::*;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `run_open_command`
+ --> crates/dozer-app/src/external_apps.rs:4:58
+  |
+4 |     ExternalAppsConfig, OpenError, open_failure_message, run_open_command,
+  |                                                          ^^^^^^^^^^^^^^^^
+
+warning: unused import: `ConnectedAccount`
+  --> crates/dozer-app/src/git_accounts.rs:21:5
+   |
+21 |     ConnectedAccount, GitAccountError, GitAccountsState, GitProvider, RemoteRepo,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `scope_of`
+  --> crates/dozer-app/src/panel_host.rs:16:34
+   |
+16 |     RequestTrackers, project_of, scope_of,
+   |                                  ^^^^^^^^
+
+warning: unused imports: `Element` and `Length`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:17:25
+   |
+17 | use iced_widget::core::{Element, Length};
+   |                         ^^^^^^^  ^^^^^^
+
+warning: unused imports: `button`, `column`, `container`, and `row`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:18:19
+   |
+18 | use iced_widget::{button, column, container, row};
+   |                   ^^^^^^  ^^^^^^  ^^^^^^^^^  ^^^
+
+warning: unused import: `self`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:26:37
+   |
+26 | use crate::extensions::group_chat::{self, Message as GroupChatMessage};
+   |                                     ^^^^
+
+warning: unused import: `crate::ui_text::text`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:29:5
+   |
+29 | use crate::ui_text::text;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `agent_dot_color` and `agent_icon`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:30:24
+   |
+30 | use crate::workspace::{agent_dot_color, agent_icon};
+   |                        ^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::backend::*`
+  --> crates/dozer-app/src/preview/mod.rs:14:16
+   |
+14 | pub(crate) use dozer_preview_core::backend::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::file_profile::*`
+  --> crates/dozer-app/src/preview/mod.rs:17:16
+   |
+17 | pub(crate) use dozer_preview_core::file_profile::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::router::*`
+  --> crates/dozer-app/src/preview/mod.rs:26:16
+   |
+26 | pub(crate) use dozer_preview_core::router::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::text_save::*`
+  --> crates/dozer-app/src/preview/mod.rs:29:16
+   |
+29 | pub(crate) use dozer_preview_core::text_save::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ReviewEntry` and `review_entries_from_turns`
+ --> crates/dozer-app/src/transcript.rs:2:45
+  |
+2 | pub use dozer_panel_conversations::review::{ReviewEntry, review_entries_from_turns};
+  |                                             ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Path`
+  --> crates/dozer-app/src/workspace/state.rs:59:17
+   |
+59 | use std::path::{Path, PathBuf};
+   |                 ^^^^
+
+warning: unused import: `CREATABLE_AGENTS`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:6:5
+  |
+6 |     CREATABLE_AGENTS, POLL_BACKOFF, POLL_INTERVAL, POLL_LIMIT,
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `keyed`, `t_args`, and `t`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:8:40
+  |
+8 | pub use dozer_panel_group_chat::i18n::{keyed, keyed_args, t, t_args};
+  |                                        ^^^^^              ^  ^^^^^^
+
+warning: unused imports: `current_view_payload`, `encode_group_chat_push`, and `route_event`
+  --> crates/dozer-app/src/extensions/group_chat/mod.rs:12:5
+   |
+12 |     current_view_payload, encode_group_chat_push, host, i18n, on_activate, parse_group_chat_event,
+   |     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+13 |     poll_if_due, route_event, run_effect, select_group, spawn_command, spawn_fetch_messages,
+   |                  ^^^^^^^^^^^
+
+warning: methods `browser_find_focused`, `set_browser_find_focused`, `browser_find_open`, `close_browser_find_bar`, and `active_browser_state` are never used
+    --> crates/dozer-app/src/app/app.rs:2618:12
+     |
+ 751 | impl App {
+     | -------- methods in this implementation
+...
+2618 |     pub fn browser_find_focused(&self) -> bool {
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+2625 |     pub fn set_browser_find_focused(&mut self, focused: bool) {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2632 |     pub fn browser_find_open(&self) -> bool {
+     |            ^^^^^^^^^^^^^^^^^
+...
+2637 |     pub fn close_browser_find_bar(&mut self) {
+     |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+2658 |     pub(crate) fn active_browser_state(&self) -> Option<&browser::State> {
+     |                   ^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `builtin_kind_by_token` is never used
+  --> crates/dozer-app/src/app/state.rs:59:15
+   |
+59 | pub(crate) fn builtin_kind_by_token(token: &str) -> Option<PanelKind> {
+   |               ^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `group_chat_command` is never used
+    --> crates/dozer-app/src/app/update.rs:3354:8
+     |
+  54 | impl App {
+     | -------- method in this implementation
+...
+3354 |     fn group_chat_command(&mut self, project_id: i64, cmd: crate::extensions::group_chat::Command) {
+     |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `kinds_require_disk_refresh` is never used
+    --> crates/dozer-app/src/app/update.rs:5021:4
+     |
+5021 | fn kinds_require_disk_refresh(kinds: bytegit::WorkspaceChangeKind) -> bool {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `revision` is never read
+  --> crates/dozer-app/src/extensions/codehealth/surface.rs:39:5
+   |
+36 | pub(crate) struct CodeHealthSurface {
+   |                   ----------------- field in this struct
+...
+39 |     revision: Arc<AtomicU64>,
+   |     ^^^^^^^^
+
+warning: associated functions `load`, `load_with_tab`, and `load_with_page` are never used
+   --> crates/dozer-app/src/extensions/settings.rs:237:12
+    |
+225 | impl State {
+    | ---------- associated functions in this implementation
+...
+237 |     pub fn load(daemon_unavailable: bool) -> State {
+    |            ^^^^
+...
+242 |     pub fn load_with_tab(daemon_unavailable: bool, tab: SettingsTab) -> State {
+    |            ^^^^^^^^^^^^^
+...
+247 |     pub fn load_with_page(daemon_unavailable: bool, page: Option<PageId>) -> State {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `failure_message` is never used
+   --> crates/dozer-app/src/extensions/toast.rs:111:8
+    |
+111 | pub fn failure_message<T, E: std::fmt::Display>(
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `load` is never used
+  --> crates/dozer-app/src/git_accounts.rs:54:8
+   |
+54 | pub fn load() -> GitAccountsState {
+   |        ^^^^
+
+warning: function `save` is never used
+  --> crates/dozer-app/src/git_accounts.rs:58:8
+   |
+58 | pub fn save(state: &GitAccountsState) -> io::Result<()> {
+   |        ^^^^
+
+warning: function `load_from` is never used
+  --> crates/dozer-app/src/git_accounts.rs:63:4
+   |
+63 | fn load_from(path: &Path) -> GitAccountsState {
+   |    ^^^^^^^^^
+
+warning: function `save_to` is never used
+  --> crates/dozer-app/src/git_accounts.rs:67:4
+   |
+67 | fn save_to(path: &Path, state: &GitAccountsState) -> io::Result<()> {
+   |    ^^^^^^^
+
+warning: function `set_token` is never used
+  --> crates/dozer-app/src/git_accounts.rs:80:8
+   |
+80 | pub fn set_token(provider: GitProvider, token: &str) -> Result<(), GitAccountError> {
+   |        ^^^^^^^^^
+
+warning: function `delete_token` is never used
+  --> crates/dozer-app/src/git_accounts.rs:85:8
+   |
+85 | pub fn delete_token(provider: GitProvider) -> Result<(), GitAccountError> {
+   |        ^^^^^^^^^^^^
+
+warning: function `extract_username` is never used
+  --> crates/dozer-app/src/git_accounts.rs:89:15
+   |
+89 | pub(crate) fn extract_username(
+   |               ^^^^^^^^^^^^^^^^
+
+warning: function `parse_repo_list` is never used
+  --> crates/dozer-app/src/git_accounts.rs:98:15
+   |
+98 | pub(crate) fn parse_repo_list(
+   |               ^^^^^^^^^^^^^^^
+
+warning: function `validate_token` is never used
+   --> crates/dozer-app/src/git_accounts.rs:106:14
+    |
+106 | pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String, GitAccountError> {
+    |              ^^^^^^^^^^^^^^
+
+warning: method `window_arc` is never used
+  --> crates/dozer-app/src/platform/confirm_overlay.rs:92:19
+   |
+81 | impl ConfirmOverlay {
+   | ------------------- method in this implementation
+...
+92 |     pub(crate) fn window_arc(&self) -> Arc<Window> {
+   |                   ^^^^^^^^^^
+
+warning: constant `TOPIC_AREA_HEIGHT` is never used
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:37:7
+   |
+37 | const TOPIC_AREA_HEIGHT: f32 = 72.0;
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: methods `preview_pane_tabular_action` and `preview_find_set_webview_state` are never used
+   --> crates/dozer-app/src/workspace/preview_panel.rs:202:19
+    |
+ 40 | impl Workspace {
+    | -------------- methods in this implementation
+...
+202 |     pub(crate) fn preview_pane_tabular_action(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+241 |     pub(crate) fn preview_find_set_webview_state(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `preview_tab_first_mut` is never used
+    --> crates/dozer-app/src/workspace/state.rs:1508:19
+     |
+ 394 | impl Workspace {
+     | -------------- method in this implementation
+...
+1508 |     pub(crate) fn preview_tab_first_mut(&mut self, kind: PanelKind) -> &mut usize {
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `dozer-app` (bin "dozer") generated 39 warnings (run `cargo fix --bin "dozer" -p dozer-app` to apply 19 suggestions)
+warning: function `conversation_row` is never used
+   --> crates/dozer-app/src/service_fakes.rs:689:15
+    |
+689 | pub(crate) fn conversation_row(
+    |               ^^^^^^^^^^^^^^^^
+
+warning: associated items `with_rows`, `failing`, and `into_services` are never used
+   --> crates/dozer-app/src/service_fakes.rs:751:19
+    |
+728 | impl FakeConversation {
+    | --------------------- associated items in this implementation
+...
+751 |     pub(crate) fn with_rows(self, rows: ConversationRows) -> Self {
+    |                   ^^^^^^^^^
+...
+755 |     pub(crate) fn failing(kind: ServiceErrorKind, message: &str) -> Self {
+    |                   ^^^^^^^
+...
+761 |     pub(crate) fn into_services(self) -> Services {
+    |                   ^^^^^^^^^^^^^
+
+warning: methods `with_items`, `with_list_error`, `with_write_error`, `calls`, and `into_services` are never used
+    --> crates/dozer-app/src/service_fakes.rs:1177:19
+     |
+1176 | impl FakeBookmark {
+     | ----------------- methods in this implementation
+1177 |     pub(crate) fn with_items(self, items: Vec<BookmarkInfo>) -> Self {
+     |                   ^^^^^^^^^^
+...
+1181 |     pub(crate) fn with_list_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+     |                   ^^^^^^^^^^^^^^^
+...
+1186 |     pub(crate) fn with_write_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+     |                   ^^^^^^^^^^^^^^^^
+...
+1190 |     pub(crate) fn calls(&self) -> Vec<String> {
+     |                   ^^^^^
+...
+1193 |     pub(crate) fn into_services(self) -> Services {
+     |                   ^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> crates/dozer-app/src/service_fakes.rs:1462:19
+     |
+1461 | impl FakeSession {
+     | ---------------- methods in this implementation
+1462 |     pub(crate) fn calls(&self) -> Vec<String> {
+     |                   ^^^^^
+...
+1466 |     pub(crate) fn with_sessions(self, sessions: Vec<SessionInfo>) -> Self {
+     |                   ^^^^^^^^^^^^^
+...
+1471 |     pub(crate) fn with_attach(
+     |                   ^^^^^^^^^^^
+...
+1483 |     pub(crate) fn with_create_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+1488 |     pub(crate) fn with_attach_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+1493 |     pub(crate) fn with_write_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^
+...
+1498 |     pub(crate) fn with_resize_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+1503 |     pub(crate) fn with_kill_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^
+...
+1508 |     pub(crate) fn with_close_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^
+...
+1513 |     pub(crate) fn into_services(self) -> Services {
+     |                   ^^^^^^^^^^^^^
+
+warning: `dozer-app` (bin "dozer" test) generated 31 warnings (24 duplicates) (run `cargo fix --bin "dozer" -p dozer-app --tests` to apply 3 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 15s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 2`

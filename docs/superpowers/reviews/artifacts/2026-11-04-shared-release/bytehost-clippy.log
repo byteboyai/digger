@@ -1,0 +1,14 @@
+    Checking objc2-app-kit v0.3.2
+    Checking iced_renderer v0.14.0
+    Checking bytehost-settings v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-settings)
+    Checking iced_widget v0.14.2
+    Checking iced v0.14.0
+    Checking objc2-web-kit v0.3.2
+    Checking byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+    Checking bytehost-settings-ui v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-settings-ui)
+    Checking bytehost-chrome v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-chrome)
+    Checking wry v0.55.1
+    Checking bytehost-desktop v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-desktop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.85s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

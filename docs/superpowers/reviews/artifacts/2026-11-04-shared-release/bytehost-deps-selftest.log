@@ -1,0 +1,10 @@
+bytehost deps check: ok
+运行门禁变异测试…
+  变异 1 通过:core→iced 被拦下
+  变异 2 通过:apps→digger-* 被拦下
+  变异 4:chrome→dozer-* 被拦下
+  变异 5:chrome→tauri-* 被拦下
+  变异 6:settings→iced 被拦下
+  变异 7:settings-ui→digger-* 被拦下
+  变异 3 通过:byteui 钉版落后于远程最新被拦下
+门禁变异测试:ok(注入即失败、恢复即通过)

@@ -1,0 +1,54 @@
+{
+  "bytehost": {
+    "crates/bytehost-desktop/src/dialog.rs": {
+      "before_sha256": "5235cad2f5f36d7bdc99516e5b62d03073a5e3fce519e2943769fa36a89640bf",
+      "after_sha256": "cb3816e8a65f6337135da94dcab4e42689ff4fdaebeb573ad65ba3888ddb2771"
+    },
+    "crates/bytehost-desktop/src/overlay.rs": {
+      "before_sha256": "f916d411a9f36d477db1528dc8b6d25b0bdb3f3de0725c136e56646fb772e773",
+      "after_sha256": "9d5a21d2433ff155c69d5f213f2ffa34f46c7ee1ebddcc4fbea5520516486279"
+    },
+    "crates/bytehost-desktop/src/overlay_gpu.rs": {
+      "before_sha256": "3bc18c572b283daab405866a3c207bcab817cb3ae31389d286214055fbfb2cc8",
+      "after_sha256": "d1f790aaecc2a83e586e4f015275559e8ba76aa1deecb9172a24f1e34717c0be"
+    },
+    "crates/bytehost-git-accounts/src/model.rs": {
+      "before_sha256": "35e7bd8e1959471473892c85449335e09734c9a13e2d34186ac5735224dee027",
+      "after_sha256": "de4e0fe74352359d7210bfb68199e79796714b62b8b5608990d39e2ee5d45a7b"
+    },
+    "crates/bytehost-git-accounts/src/service.rs": {
+      "before_sha256": "8ad9d82ddc4801d0e0f93b0bfcea0abfaff11dc3f974e6bf9f17675139a159c5",
+      "after_sha256": "6d732a05019d90aa9e3d710427bf1e1512768221852d2f3d8f5379d4f3f448a9"
+    },
+    "crates/bytehost-panel/src/install.rs": {
+      "before_sha256": "90878c32e6c64cb83035cb703958cf78733fcfa06ef63187e621bddea9a6d1f5",
+      "after_sha256": "bcd46cea9a0c393033b64277779b857c349a0cb73efe2d2415f73fa934f983a2"
+    },
+    "crates/bytehost-settings/src/git.rs": {
+      "before_sha256": "b6bb365305f6a09cee814d93076672ea8c1c29c196613760a4c57f4770d8b55c",
+      "after_sha256": "680fdd3648080ce416d99b2d14c38130cd81046171eb2d50ee2a0f293a7f8d3d"
+    },
+    "crates/bytehost-settings-ui/src/git_accounts.rs": {
+      "before_sha256": "8dae24f8d54a8445d96a01381d0743d92b06abe54f6e413b630b721e025f84cc",
+      "after_sha256": "bc4db68b21bba527d4fdeb15d5fec2f5878edd9e5938852489beb80182a708e0"
+    }
+  },
+  "dozer": {
+    "crates/dozer-app/src/app/app.rs": {
+      "before_sha256": "4815a182f54285b8f844a463887e04ddab3c1c2b861b7e4b98182b7d67797823",
+      "after_sha256": "5e0b12ef92bf0e6c27d1d9f1d52b9de2db36ec7bef596fe9ac33a6a20dd5e20b"
+    },
+    "crates/dozer-app/src/extensions/settings.rs": {
+      "before_sha256": "030c9e322c8705ef6dc1ce671828d73e20ff9aef7e4418484d26f6c0b4760174",
+      "after_sha256": "5047a015dc2217e90116cf748313bc37e53ee2c260c60b6263c4631fec291a3a"
+    },
+    "crates/dozer-app/src/platform/settings_overlay.rs": {
+      "before_sha256": "15ff809365c2a8c37727b8777ceba07943f05cb7b107c11f2000d117d8e6c86e",
+      "after_sha256": "b62563bcf62ab6fb48e071f5711c81a270eafd23e46a78916d7f05b287d8550f"
+    },
+    "crates/dozer-app/src/platform/window_events.rs": {
+      "before_sha256": "cb375bfcb50d56827be9784e386b47f9be78bed4887f145e59ce91e34da83db5",
+      "after_sha256": "5dda38a25b3636229e9c8fc88254b55ee2a86f983b1cf38f130df45a93fdf005"
+    }
+  }
+}

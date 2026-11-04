@@ -1,0 +1,13 @@
+{
+  "bytegit": "git+https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa553ab34d97d9a1e4055c89d03b48eb4848",
+  "bytehost-apps": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-client": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-core": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-desktop": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-git-accounts": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-panel": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-settings": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-settings-ui": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "bytehost-webview": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+  "byteui": "git+https://github.com/byteboyai/byteui?tag=v0.5.2#e33824578d0f6fa10f168657fe08d882ad6fadc4"
+}

@@ -1,0 +1,405 @@
+    Updating git repository `https://github.com/byteboyai/bytehost`
+    Updating git repository `https://github.com/byteboyai/bytegit`
+    Updating git repository `https://github.com/byteboyai/byteui`
+    Updating git repository `https://github.com/byteboyai/dozer`
+From https://github.com/byteboyai/dozer
+ * [new tag]           libs-2026-11-04a -> origin/tags/libs-2026-11-04a
+     Locking 35 packages to latest Rust 1.98.1 compatible versions
+      Adding bytegit v0.9.2 (https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa55)
+      Adding bytehost-apps v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-chrome v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-client v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-core v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-desktop v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-git-accounts v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-panel v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-settings v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-settings-ui v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding bytehost-webview v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+      Adding byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+      Adding dozer-client v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-file-io v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-git-runtime v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-hook v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-i18n v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-mcp v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-model v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-agent v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-browser v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-conversations v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-files v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-group-chat v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-host v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-preview v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-term v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-todo v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-panel-usage v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-preview-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-services v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozer-store-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+      Adding dozerd v0.3.3 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling serde_core v1.0.229
+    Checking smallvec v1.16.4
+   Compiling num-traits v0.2.19
+   Compiling crc32fast v1.5.3
+    Checking futures-io v0.3.34
+    Checking mio v1.2.4
+   Compiling serde_json v1.0.154
+   Compiling getrandom v0.4.3
+    Checking tracing v0.1.44
+    Checking typenum v1.20.1
+   Compiling time-macros v0.2.32
+   Compiling bitflags v2.13.2
+   Compiling memchr v2.8.3
+    Checking time-core v0.1.9
+   Compiling libm v0.2.16
+   Compiling objc2-encode v4.1.0
+   Compiling bytemuck v1.25.2
+    Checking futures-util v0.3.34
+    Checking parking_lot_core v0.9.12
+    Checking bit-vec v0.8.0
+    Checking aho-corasick v1.1.5
+    Checking regex-syntax v0.8.11
+    Checking time v0.3.55
+   Compiling objc2-exception-helper v0.1.1
+    Checking generic-array v0.14.7
+    Checking bit-set v0.8.0
+    Checking parking_lot v0.12.5
+   Compiling log v0.4.35
+    Checking kurbo v0.11.3
+    Checking unicode-properties v0.1.5
+    Checking tokio v1.54.1
+   Compiling core_maths v0.1.1
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+   Compiling pin-project-lite v0.2.17
+    Checking euclid v0.22.14
+    Checking half v2.7.1
+   Compiling crossbeam-utils v0.8.23
+    Checking regex-automata v0.4.18
+    Checking digest v0.10.7
+    Checking uuid v1.29.0
+    Checking svgtypes v0.15.3
+    Checking futures-executor v0.3.34
+    Checking sha2 v0.10.9
+    Checking icu_normalizer v2.4.0
+   Compiling zerofrom v0.1.8
+    Checking lyon_geom v1.0.20
+   Compiling bytes v1.12.1
+    Checking futures v0.3.34
+    Checking lazy_static v1.5.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling rustix v1.1.6
+   Compiling yoke v0.8.4
+    Checking etagere v0.2.15
+    Checking idna_adapter v1.2.2
+    Checking sharded-slab v0.1.7
+   Compiling thiserror v2.0.21
+    Checking lyon_path v1.0.19
+   Compiling scopeguard v1.2.0
+    Checking flate2 v1.1.10
+    Checking zopfli v0.8.4
+    Checking serde v1.0.229
+    Checking indexmap v2.14.2
+    Checking lyon_algorithms v1.0.22
+    Checking hyper v1.12.0
+    Checking objc2-core-foundation v0.3.2
+    Checking iced_core v0.14.0
+    Checking harfrust v0.3.2
+    Checking core-graphics-types v0.2.0
+    Checking wgpu-types v27.0.1
+    Checking toml_datetime v0.6.3
+    Checking serde_spanned v0.6.9
+    Checking dozer-model v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking zip v8.6.0
+    Checking metal v0.32.0
+    Checking naga v27.0.3
+    Checking toml_edit v0.20.2
+    Checking hyper-util v0.1.21
+    Checking iced_futures v0.14.0
+    Checking png v0.17.16
+    Checking objc2-foundation v0.3.2
+    Checking objc2-core-graphics v0.3.2
+    Checking objc2-core-video v0.3.2
+    Checking rustybuzz v0.20.1
+   Compiling objc2 v0.6.5
+    Checking iced_debug v0.14.0
+    Checking objc2-core-services v0.3.2
+    Checking tiny-skia v0.11.4
+    Checking cosmic-text v0.15.0
+    Checking dozer-services v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking toml v0.8.2
+    Checking notify-types v2.2.0
+    Checking lyon_tessellation v1.0.23
+    Checking matchers v0.2.0
+   Compiling arrayvec v0.7.8
+    Checking dozer-i18n v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking objc2-core-text v0.3.2
+    Checking git2 v0.21.0
+    Checking tracing-subscriber v0.3.23
+    Checking notify v8.2.1
+    Checking crossbeam-channel v0.5.17
+   Compiling lock_api v0.4.14
+    Checking bytehost-apps v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking idna v1.1.0
+    Checking iced_graphics v0.14.0
+    Checking lyon v1.0.19
+    Checking guillotiere v0.6.2
+    Checking kurbo v0.10.4
+   Compiling errno v0.3.14
+    Checking usvg v0.45.1
+   Compiling ahash v0.8.12
+   Compiling futures-core v0.3.34
+   Compiling futures-sink v0.3.34
+   Compiling rustls v0.23.46
+   Compiling smol_str v0.2.2
+   Compiling futures-channel v0.3.34
+    Checking objc2-foundation v0.2.2
+    Checking url v2.5.8
+   Compiling signal-hook-registry v1.4.8
+    Checking tracing-appender v0.2.5
+   Compiling zerovec v0.11.9
+   Compiling ttf-parser v0.25.1
+   Compiling slotmap v1.1.1
+   Compiling socket2 v0.6.5
+   Compiling web-time v1.1.0
+   Compiling futures-task v0.3.34
+    Checking wgpu-hal v27.0.4
+   Compiling slab v0.4.12
+    Checking subtle v2.6.1
+   Compiling lilt v0.8.2
+    Checking resvg v0.45.1
+   Compiling font-types v0.12.7
+   Compiling font-types v0.10.1
+   Compiling libsqlite3-sys v0.30.1
+   Compiling memmap2 v0.9.12
+    Checking bytegit v0.9.2 (https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa55)
+   Compiling rustc-hash v2.1.3
+   Compiling glam v0.25.0
+   Compiling unicode-script v0.5.8
+   Compiling tinyvec v1.13.3
+   Compiling raw-window-handle v0.6.2
+    Checking hashbrown v0.14.5
+    Checking dozer-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking bytehost-client v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking tower v0.5.3
+   Compiling read-fonts v0.35.0
+   Compiling read-fonts v0.41.0
+    Checking wgpu-core-deps-apple v27.0.0
+   Compiling fontdb v0.23.0
+    Checking security-framework v3.7.0
+    Checking wgpu-core v27.0.3
+   Compiling block2 v0.6.2
+   Compiling objc-sys v0.3.5
+   Compiling unicode-bidi v0.3.18
+    Checking objc2-app-kit v0.2.2
+    Checking tower-http v0.6.11
+    Checking serde_urlencoded v0.7.1
+    Checking hashlink v0.9.1
+    Checking tokio-rustls v0.26.6
+    Checking apple-native-keyring-store v1.0.2
+   Compiling tinystr v0.8.5
+    Checking iced_runtime v0.14.0
+   Compiling zerocopy v0.8.63
+   Compiling yazi v0.2.2
+   Compiling writeable v0.6.4
+    Checking hyper-rustls v0.27.10
+   Compiling utf_types v1.0.0
+   Compiling litemap v0.8.3
+   Compiling zeno v0.3.3
+   Compiling bitflags v1.3.2
+   Compiling utf8_iter v1.1.0
+    Checking reqwest v0.12.28
+   Compiling icu_locale_core v2.4.0
+    Checking iced_program v0.14.0
+    Checking keyring v4.2.0
+   Compiling objc2 v0.5.3
+   Compiling potential_utf v0.1.6
+   Compiling zerotrie v0.2.5
+   Compiling rangemap v1.8.0
+   Compiling linebender_resource_handle v0.1.1
+   Compiling self_cell v1.3.0
+   Compiling unicode-linebreak v0.1.5
+   Compiling rustc-hash v1.1.0
+   Compiling sys-locale v0.3.2
+    Checking bytehost-git-accounts v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling icu_collections v2.4.0
+   Compiling icu_provider v2.4.0
+   Compiling icu_normalizer_data v2.4.0
+   Compiling icu_properties_data v2.4.0
+    Checking clipboard_macos v0.1.1
+    Checking winit v0.30.13
+   Compiling block2 v0.5.1
+   Compiling dispatch v0.2.0
+   Compiling simd-adler32 v0.3.10
+    Checking rusqlite v0.32.1
+    Checking bytehost-settings v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking wgpu v27.0.1
+    Checking cookie v0.18.2
+    Checking window_clipboard v0.5.1
+    Checking bytehost-core v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling core-foundation-sys v0.8.7
+   Compiling adler2 v2.0.1
+   Compiling icu_properties v2.4.0
+   Compiling core-foundation v0.9.4
+    Checking tempfile v3.27.0
+    Checking digger-paths v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/paths)
+    Checking bytehost-webview v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling tracing-core v0.1.36
+    Checking dozer-file-io v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-store-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling foreign-types-shared v0.3.1
+   Compiling core-graphics-types v0.1.3
+   Compiling skrifa v0.44.0
+   Compiling foreign-types v0.5.0
+   Compiling skrifa v0.37.0
+    Checking iced_winit v0.14.1
+   Compiling miniz_oxide v0.9.1
+    Checking chrono v0.4.45
+   Compiling dpi v0.1.2
+   Compiling float-cmp v0.9.0
+   Compiling percent-encoding v2.3.2
+   Compiling core-graphics v0.23.2
+   Compiling strict-num v0.1.1
+   Compiling rmcp-macros v3.8.0
+    Checking cryoglyph v0.1.0
+   Compiling form_urlencoded v1.2.2
+    Checking tokio-util v0.7.20
+    Checking sha1 v0.10.7
+   Compiling arrayref v0.3.9
+    Checking iced_wgpu v0.14.0
+   Compiling pulldown-cmark v0.13.6
+   Compiling option-ext v0.2.0
+   Compiling powerfmt v0.2.1
+    Checking schemars v1.2.3
+   Compiling deranged v0.5.9
+   Compiling cursor-icon v1.2.0
+    Checking toml_edit v0.25.17+spec-1.1.0
+   Compiling dirs-sys v0.5.0
+    Checking tungstenite v0.24.0
+   Compiling tiny-skia-path v0.11.4
+    Checking digger-store v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/store)
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+    Checking dozer-client v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking serde_spanned v1.1.2
+    Checking toml_datetime v0.7.5+spec-1.1.0
+    Checking rmcp v3.8.0
+    Checking objc2-metal v0.3.2
+    Checking objc2-cloud-kit v0.3.2
+    Checking objc2-core-image v0.3.2
+    Checking objc2-core-data v0.3.2
+   Compiling zeroize v1.9.1
+   Compiling unicode-ccc v0.4.0
+   Compiling siphasher v1.0.4
+   Compiling swash v0.2.10
+   Compiling unicode-bidi-mirroring v0.4.0
+    Checking toml v0.9.12+spec-1.1.0
+    Checking tokio-tungstenite v0.24.0
+   Compiling dirs v6.0.0
+    Checking objc2-quartz-core v0.3.2
+   Compiling http v1.5.0
+   Compiling wry v0.55.1
+   Compiling simplecss v0.2.2
+   Compiling quick-error v2.0.1
+   Compiling pico-args v0.5.0
+   Compiling roxmltree v0.20.0
+   Compiling xmlwriter v0.1.0
+   Compiling zune-core v0.4.12
+   Compiling color_quant v1.1.0
+   Compiling data-url v0.3.2
+   Compiling base64 v0.22.1
+   Compiling byteorder-lite v0.1.0
+   Compiling imagesize v0.13.0
+   Compiling weezl v0.1.12
+   Compiling unicode-vo v0.1.0
+    Checking similar v2.7.0
+   Compiling zune-jpeg v0.4.21
+    Checking dozerd v0.3.3 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling image-webp v0.2.4
+   Compiling gif v0.13.3
+    Checking softbuffer v0.4.8
+    Checking objc2-app-kit v0.3.2
+    Checking bytehost-panel v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling rgb v0.8.53
+    Checking iced_tiny_skia v0.14.1
+    Checking digger-editor v0.0.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/editor)
+    Checking vte v0.15.0
+    Checking rustix-openpty v0.2.0
+    Checking digger-app-host v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/app-host)
+    Checking polling v3.11.0
+    Checking trash v5.2.9
+    Checking iced_renderer v0.14.0
+    Checking dozer-preview-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dispatch2 v0.3.1
+    Checking dozer-git-runtime v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-hook v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking alacritty_terminal v0.26.0
+    Checking iced_widget v0.14.2
+    Checking digger-hook v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/digger-hook)
+    Checking diggerd v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/diggerd)
+    Checking iced v0.14.0
+    Checking dozer-mcp v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking digger-mcp v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/digger-mcp)
+    Checking objc2-web-kit v0.3.2
+    Checking byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+    Checking rfd v0.15.4
+    Checking dozer-panel-term v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking bytehost-settings-ui v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking bytehost-chrome v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking bytehost-desktop v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking dozer-panel-host v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-conversations v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-agent v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-todo v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-group-chat v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-browser v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-usage v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-files v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-preview v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling digger-desktop v0.1.7 (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/crates/desktop)
+warning: field `catalog` is never read
+   --> crates/desktop/src/product.rs:216:5
+    |
+211 | pub struct ProductShell {
+    |            ------------ field in this struct
+...
+216 |     catalog: PanelCatalog,
+    |     ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-desktop` (lib) generated 1 warning
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:971:4
+    |
+971 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+    --> crates/desktop/src/apps/mod.rs:1245:19
+     |
+ 275 | impl AppsState {
+     | -------------- method in this implementation
+...
+1245 |     pub(crate) fn opened(&self) -> bool {
+     |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 46.07s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 2`

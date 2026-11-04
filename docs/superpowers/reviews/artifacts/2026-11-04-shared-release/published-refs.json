@@ -1,0 +1,12 @@
+{
+  "bytehost": {
+    "refs/heads/main": "386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+    "refs/tags/v0.4.23": "832c20392658d9a4b1450b146576367d76bbc805",
+    "refs/tags/v0.4.23^{}": "386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  "dozer": {
+    "refs/heads/main": "15c61c9b2ef043525c45926e6647429dc9324aa7",
+    "refs/tags/libs-2026-11-04a": "6e7e1f8ebec7baeff7b19dee1c81dc92233fd3ab",
+    "refs/tags/libs-2026-11-04a^{}": "15c61c9b2ef043525c45926e6647429dc9324aa7"
+  }
+}

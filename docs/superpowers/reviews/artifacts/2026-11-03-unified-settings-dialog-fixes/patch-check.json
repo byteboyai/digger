@@ -1,0 +1,14 @@
+[
+  {
+    "repo": "bytehost",
+    "command": "git apply --check bytehost.patch",
+    "exit_code": 0,
+    "output": ""
+  },
+  {
+    "repo": "dozer",
+    "command": "git apply --check dozer.patch",
+    "exit_code": 0,
+    "output": ""
+  }
+]

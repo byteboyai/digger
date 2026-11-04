@@ -1,0 +1,40 @@
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:971:4
+    |
+971 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+    --> crates/desktop/src/apps/mod.rs:1245:19
+     |
+ 275 | impl AppsState {
+     | -------------- method in this implementation
+...
+1245 |     pub(crate) fn opened(&self) -> bool {
+     |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/digger_desktop-965be85b8a39c930)
+
+running 4 tests
+test adapters::preview::tests::a_late_ipc_event_with_a_foreign_binding_is_dropped ... ok
+test adapters::preview_native::tests::desired_appends_host_binding_for_rendered_hosts ... ok
+test product::tests::current_binding_failure_keeps_a_retryable_visible_state ... ok
+test product::tests::stale_binding_failure_cannot_close_the_current_dialog ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 738 filtered out; finished in 0.01s
+

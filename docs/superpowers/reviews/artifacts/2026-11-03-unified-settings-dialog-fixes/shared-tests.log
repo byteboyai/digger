@@ -1,0 +1,205 @@
+   Compiling bytehost-git-accounts v0.1.0 (/private/tmp/digger-unified-fix/bytehost/crates/bytehost-git-accounts)
+   Compiling bytehost-settings v0.1.0 (/private/tmp/digger-unified-fix/bytehost/crates/bytehost-settings)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.56s
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_git_accounts-4df1170400949f95)
+
+running 32 tests
+test model::tests::provider_keys_are_stable ... ok
+test model::tests::accounts_state_routes_by_provider ... ok
+test model::tests::secret_token_debug_is_redacted_and_drop_clears ... ok
+test providers::tests::gitee_uses_query_token ... ok
+test model::tests::legacy_json_shape_round_trips ... ok
+test providers::tests::github_uses_bearer_header ... ok
+test providers::tests::extract_username_reads_login ... ok
+test providers::tests::gitlab_uses_private_token_header ... ok
+test providers::tests::debug_and_error_redaction_never_expose_tokens ... ok
+test providers::tests::parse_repo_list_per_provider ... ok
+test providers::tests::repo_list_skips_dirty_items_and_rejects_non_arrays ... ok
+test service::tests::connect_validates_then_persists ... ok
+test service::tests::cancelled_request_never_writes_credentials_or_metadata ... ok
+test service::tests::disconnect_of_unknown_account_is_idempotent ... ok
+test service::tests::disconnect_removes_credential_and_metadata ... ok
+test service::tests::credential_without_metadata_is_visible_and_can_be_disconnected_after_reopening ... ok
+test service::tests::cancelling_during_the_network_phase_never_starts_persisting ... ok
+test service::tests::invalid_token_never_writes_credentials ... ok
+test service::tests::metadata_failure_is_a_visible_partial_commit ... ok
+test service::tests::query_drops_metadata_without_credentials ... ok
+test service::tests::repo_list_parses_provider_shape ... ok
+test service::tests::request_ledger_accepts_only_the_latest_ticket ... ok
+test service::tests::repo_list_rejects_expired_token ... ok
+test service::tests::superseded_request_cannot_overwrite_the_newer_connection ... ok
+test service::tests::unused_http_response_helper_is_available ... ok
+test stores::tests::memory_credential_store_round_trips_and_deletes ... ok
+test service::tests::a_provider_commit_finishes_before_its_newer_request_can_write ... ok
+test service::tests::concurrent_connects_to_two_providers_keep_both_accounts ... ok
+test stores::tests::json_metadata_corrupt_file_is_reported_not_silently_reset ... ok
+test stores::tests::json_metadata_missing_file_is_empty_and_round_trips ... ok
+test stores::tests::failed_publish_keeps_the_previous_file_intact ... ok
+test stores::tests::concurrent_json_updates_keep_every_provider ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_panel-9f8ad730a850a522)
+
+running 103 tests
+test host::tests::a_disconnected_host_keeps_polling_until_the_daemon_answers ... ok
+test host::tests::a_change_triggers_exactly_one_refetch_even_in_a_storm ... ok
+test host::tests::a_disconnected_panel_with_no_known_apps_says_so_instead_of_claiming_the_app_is_gone ... ok
+test host::tests::a_failed_action_notices_with_the_verb_and_still_refreshes ... ok
+test host::tests::a_failed_app_with_a_runtime_issue_shows_the_issue_page_not_the_crash_page ... ok
+test host::tests::a_failed_launch_notices_once_and_is_not_retried_until_the_panel_is_shown_again ... ok
+test host::tests::a_late_logs_result_after_hiding_does_not_reopen_the_viewer ... ok
+test host::tests::a_live_subscription_slows_polling_to_the_safety_interval ... ok
+test host::tests::a_launch_url_that_arrives_after_the_app_stopped_is_dropped ... ok
+test host::tests::a_late_logs_result_after_the_app_recovered_is_dropped_not_kept_stale ... ok
+test host::tests::a_subscription_that_never_became_live_does_not_announce_a_loss ... ok
+test host::tests::a_single_blip_is_not_announced_either_way ... ok
+test host::tests::a_recovered_subscription_starts_the_backoff_over ... ok
+test host::tests::a_transport_failure_keeps_the_known_apps_and_stays_quiet ... ok
+test host::tests::a_log_viewer_whose_panel_is_not_visible_is_not_refreshed ... ok
+test host::tests::a_running_app_whose_panel_is_not_visible_is_not_opened ... ok
+test host::tests::a_version_change_while_still_running_reloads_the_panel ... ok
+test host::tests::a_visible_running_app_gets_exactly_one_launch_url_fetch ... ok
+test host::tests::actions_on_unknown_apps_are_ignored ... ok
+test host::tests::an_app_id_the_key_cannot_map_is_skipped_from_the_order ... ok
+test host::tests::an_app_that_stops_or_disappears_loses_its_address ... ok
+test host::tests::an_open_log_viewer_is_refreshed_on_tick_and_closed_ones_are_not ... ok
+test host::tests::an_unavailable_host_is_a_persistent_panel_state_not_a_notice ... ok
+test host::tests::dozerd_restart_is_recovered ... ok
+test host::tests::issue_texts_cover_missing_and_version_mismatch ... ok
+test host::tests::logs_are_hidden_again_when_the_app_leaves_the_failed_state ... ok
+test host::tests::logs_failure_is_kept_in_place_not_a_notice ... ok
+test host::tests::losing_the_subscription_goes_back_to_fast_polling_and_retries_with_backoff ... ok
+test host::tests::open_runtime_settings_emits_exactly_one_effect ... ok
+test host::tests::refresh_fetches_the_list_unless_one_is_already_in_flight ... ok
+test host::tests::resubscribe_backoff_escalates_through_the_real_retry_flow ... ok
+test host::tests::resubscribing_after_an_announced_loss_announces_restored_once_and_resets ... ok
+test host::tests::retry_from_the_issue_page_starts_the_app ... ok
+test host::tests::showing_logs_fetches_once_and_stores_the_result ... ok
+test host::tests::showing_the_panel_discards_the_old_address_so_a_fresh_one_is_fetched ... ok
+test host::tests::start_and_stop_are_deduplicated_and_refresh_the_list_when_done ... ok
+test host::tests::subscribe_is_requested_once_until_it_resolves ... ok
+test host::tests::the_first_list_syncs_even_if_an_unavailable_answer_came_first ... ok
+test host::tests::the_first_poll_is_due_and_later_ones_only_while_an_app_panel_is_visible ... ok
+test host::tests::the_first_successful_list_always_syncs_the_rail_even_when_empty ... ok
+test host::tests::the_rail_is_synced_when_the_installed_set_changes_and_not_otherwise ... ok
+test host::tests::the_same_version_keeps_the_address ... ok
+test host::tests::the_second_consecutive_loss_of_a_live_subscription_announces_connection_lost_once ... ok
+test host::tests::the_view_model_covers_every_observed_state ... ok
+test host::tests::two_visible_app_panels_each_get_their_launch_url_fetch ... ok
+test install::tests::a_bad_sha256_blocks_the_url_plan_with_an_inline_hint ... ok
+test install::tests::a_failed_install_is_shown_in_the_flow_and_does_not_touch_the_host ... ok
+test install::tests::a_failed_rollback_notices_the_conflict_text_and_still_refreshes ... ok
+test install::tests::a_finished_job_notices_once_and_a_failed_one_notices_its_reason_once ... ok
+test install::tests::a_finished_uninstall_clears_dedup_and_refreshes ... ok
+test install::tests::a_plan_failure_stays_in_the_flow_not_a_notice ... ok
+test install::tests::a_rejected_plan_stays_inside_the_flow_as_an_inline_failure ... ok
+test install::tests::a_rejected_url_plan_stays_inline_and_keeps_input_then_archive_retries ... ok
+test install::tests::a_second_url_plan_click_while_in_flight_is_ignored ... ok
+test install::tests::a_source_picked_outside_the_picking_step_is_ignored ... ok
+test install::tests::a_successful_install_notices_refreshes_and_tells_the_host ... ok
+test install::tests::a_tick_without_an_open_viewer_does_nothing ... ok
+test install::tests::an_installed_managed_version_offers_uninstall_with_the_warning ... ok
+test install::tests::approve_outside_reviewing_does_nothing ... ok
+test install::tests::approving_is_only_possible_while_reviewing ... ok
+test install::tests::approving_sends_back_exactly_the_plan_that_was_shown_and_starts_polling ... ok
+test install::tests::approving_sends_exactly_the_plan_that_was_shown ... ok
+test install::tests::clicking_install_plans_then_reviewing_shows_every_download_with_its_checksum ... ok
+test install::tests::dismissing_reviews_cancels_but_in_flight_steps_cannot_be_cancelled ... ok
+test install::tests::docker_never_offers_install ... ok
+test install::tests::escape_dismisses_an_inner_confirmation_without_triggering_its_action ... ok
+test install::tests::hiding_logs_closes_the_open_viewer ... ok
+test install::tests::load_failures_are_kept_as_text_not_raised ... ok
+test install::tests::observed_labels_cover_every_state ... ok
+test install::tests::only_install_and_action_results_are_handled_without_a_window ... ok
+test install::tests::only_one_tick_is_ever_armed_until_it_fires ... ok
+test install::tests::opening_the_page_probes_runtimes_and_lists_apps ... ok
+test install::tests::poll_probes_outside_the_settings_window_does_nothing_bad ... ok
+test install::tests::polling_continues_only_while_a_job_is_unfinished_and_stops_after ... ok
+test install::tests::results_that_arrive_after_the_settings_window_closed_still_refresh_the_host_and_notice ... ok
+test install::tests::rollback_click_is_ignored_when_there_is_no_previous_version ... ok
+test install::tests::rollback_goes_through_an_inline_confirmation_then_fires_the_effect ... ok
+test install::tests::rollback_note_labels_automatic_and_manual_differently ... ok
+test install::tests::runtime_lines_distinguish_available_unavailable_and_missing ... ok
+test install::tests::runtime_rows_show_progress_percent_or_megabytes ... ok
+test install::tests::sha256_input_shows_an_inline_format_hint_only ... ok
+test install::tests::showing_logs_asks_for_the_shared_fetch_line_budget ... ok
+test install::tests::showing_logs_fetches_once_and_only_one_viewer_is_open ... ok
+test install::tests::stop_is_deduplicated_and_always_refreshes_with_a_notice_only_on_failure ... ok
+test install::tests::switching_source_keeps_typed_input_but_clears_a_stale_plan ... ok
+test install::tests::the_install_flow_goes_pick_plan_review_and_cancelling_the_picker_returns_to_idle ... ok
+test install::tests::the_plan_view_marks_a_missing_enforcement_entry_as_unknown_and_shows_upgrades ... ok
+test install::tests::the_plan_view_shows_every_requested_change_with_its_real_enforcement ... ok
+test install::tests::the_provenance_fact_is_a_channel_label_and_never_says_directory ... ok
+test install::tests::the_review_card_discloses_each_source_shape ... ok
+test install::tests::uninstall_asks_which_mode_first_and_can_be_cancelled ... ok
+test install::tests::uninstall_confirmation_is_ignored_outside_its_step ... ok
+test install::tests::unloading_an_app_closes_its_log_viewer ... ok
+test install::tests::url_plan_clicked_validates_locally_without_sending_an_effect ... ok
+test logs::tests::a_late_result_after_hiding_is_dropped ... ok
+test logs::tests::a_refresh_failure_keeps_the_old_text_but_first_failure_is_failed ... ok
+test logs::tests::identical_results_leave_the_view_unchanged ... ok
+test logs::tests::loaded_then_tick_refreshes_after_the_interval_and_keeps_old_text ... ok
+test logs::tests::new_content_asks_to_scroll_to_bottom_while_following ... ok
+test logs::tests::re_expanding_restarts_following ... ok
+test logs::tests::reset_drops_old_content_and_refetches_on_next_show ... ok
+test logs::tests::scrolling_up_stops_auto_follow_until_back_at_the_bottom ... ok
+test logs::tests::show_fetches_once_and_enters_loading ... ok
+
+test result: ok. 103 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_settings-f5e04a99b92a7be5)
+
+running 49 tests
+test dialog::tests::default_geometry_matches_the_shared_spec ... ok
+test dialog::tests::close_before_creation_completes_destroys_late_window ... ok
+test dialog::tests::close_is_idempotent_and_waits_for_closed ... ok
+test dialog::tests::first_open_creates_and_repeat_open_only_activates ... ok
+test dialog::tests::destroy_timeout_forces_closed ... ok
+test dialog::tests::invalid_geometry_configuration_is_sanitized ... ok
+test dialog::tests::duplicate_opened_for_another_window_is_destroyed ... ok
+test dialog::tests::failed_close_returns_to_closed_without_effects ... ok
+test dialog::tests::failure_is_visible_and_retry_increments_attempt_in_the_same_session ... ok
+test dialog::tests::parent_close_always_reaches_closed_and_destroys_known_window ... ok
+test dialog::tests::large_parent_keeps_fractions ... ok
+test dialog::tests::small_parent_clamps_card_inside_margins ... ok
+test dialog::tests::stale_open_and_failure_do_not_touch_current_session ... ok
+test dialog::tests::reopen_during_closing_waits_for_destroy_then_starts_a_new_session ... ok
+test dialog::tests::tiny_parent_never_produces_negative_or_zero_sizes ... ok
+test git::tests::close_clears_sensitive_input_and_freezes_results ... ok
+test git::tests::blank_token_and_connected_rows_cannot_connect ... ok
+test git::tests::cancel_clears_input_and_invalidates_in_flight_request ... ok
+test git::tests::connect_flow_clears_sensitive_input_and_sets_account ... ok
+test git::tests::disconnect_flow_removes_account ... ok
+test git::tests::partial_metadata_warning_is_visible_after_connect ... ok
+test git::tests::query_is_owner_scoped_and_ignores_late_results ... ok
+test git::tests::reopened_partial_commit_is_recoverable_and_disconnect_is_not_disabled ... ok
+test git::tests::stale_requests_cannot_modify_new_state ... ok
+test page::tests::accepts_product_and_builtin_ids ... ok
+test page::tests::rejects_empty_and_malformed_ids ... ok
+test page::tests::reserved_namespace_is_detected ... ok
+test page::tests::serde_round_trip_revalidates ... ok
+test registry::tests::alias_maps_a_legacy_entry_to_the_real_page_without_adding_nav_entries ... ok
+test registry::tests::aliases_reject_collisions_and_missing_targets ... ok
+test registry::tests::builtin_ids_must_match_their_kind ... ok
+test registry::tests::git_is_a_known_builtin_page ... ok
+test registry::tests::default_and_fallback_prefer_theme_then_first ... ok
+test registry::tests::known_builtin_cannot_be_registered_as_custom ... ok
+test registry::tests::preserves_registration_order_and_looks_pages_up ... ok
+test registry::tests::products_cannot_use_the_reserved_namespace ... ok
+test registry::tests::rejects_duplicate_ids ... ok
+test selection::tests::applied_clears_pending_and_updates_confirmed ... ok
+test selection::tests::conflict_adopts_the_server_value_and_clears_pending ... ok
+test selection::tests::external_confirmation_does_not_touch_pending_or_status ... ok
+test selection::tests::failure_keeps_pending_for_retry ... ok
+test selection::tests::selecting_enters_saving_and_ignores_repeats ... ok
+test selection::tests::unsupported_blocks_further_selection ... ok
+test state::tests::empty_registry_opens_with_an_empty_selection ... ok
+test state::tests::closed_state_ignores_registry_updates_and_selection ... ok
+test state::tests::removing_the_selected_page_falls_back_without_closing ... ok
+test state::tests::repeated_open_does_not_bump_the_generation ... ok
+test state::tests::select_rejects_unknown_pages_and_no_ops_on_the_current_page ... ok
+test state::tests::unknown_target_falls_back_to_theme_then_first ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

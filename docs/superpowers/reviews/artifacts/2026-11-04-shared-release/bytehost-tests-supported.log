@@ -1,0 +1,1170 @@
+   Compiling bytehost-panel v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-panel)
+   Compiling bytehost-git-accounts v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-git-accounts)
+   Compiling bytehost-settings v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-settings)
+   Compiling bytehost-desktop v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-desktop)
+   Compiling bytehost-settings-ui v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-settings-ui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.36s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_apps-e08462b3189f5184)
+
+running 485 tests
+test archive::tests::a_tar_with_too_many_entries_is_refused_while_scanning_headers ... ok
+test archive::tests::a_tar_bomb_is_refused_at_its_header_without_reading_the_body ... ok
+test archive::tests::kind_from_path_is_case_insensitive ... ok
+test archive::tests::duplicate_paths_are_refused_case_insensitively ... ok
+test archive::tests::non_empty_target_is_refused ... ok
+test archive::tests::archive_larger_than_limit_is_refused ... ok
+test archive::tests::extracted_files_have_fixed_permissions_regardless_of_archived_mode ... ok
+test archive::tests::multiple_top_dirs_without_root_manifest_is_refused ... ok
+test archive::tests::nul_in_name_is_refused ... ok
+test archive::tests::a_macos_tar_with_dot_slash_entries_installs ... ok
+test digest::tests::data_store_id_is_deterministic_per_app_and_differs_between_apps ... ok
+test digest::tests::non_utf8_names_are_refused_not_converted_lossily ... ok
+test digest::tests::sha256_matches_the_known_empty_and_abc_vectors ... ok
+test archive::tests::root_dot_entries_are_skipped_not_rejected ... ok
+test archive::tests::corrupt_archives_are_refused ... ok
+test archive::tests::a_leading_dot_slash_is_stripped_from_entry_names ... ok
+test archive::tests::too_deep_path_is_refused ... ok
+test archive::tests::github_style_single_top_dir_is_stripped ... ok
+test event::tests::events_round_trip_through_json_with_tagged_names ... ok
+test event::tests::every_event_reports_its_app ... ok
+test event::tests::manifest_changed_reports_only_real_permission_differences ... ok
+test gateway::proxy::tests::client_headers_drop_hop_by_hop_but_a_101_keeps_the_upgrade_pair ... ok
+test gateway::proxy::tests::cookies_are_forwarded_minus_the_session_cookie ... ok
+test gateway::proxy::tests::forwarded_headers_are_set_by_the_gateway_not_the_client ... ok
+test gateway::proxy::tests::hop_by_hop_headers_and_connection_listed_headers_are_not_forwarded ... ok
+test gateway::proxy::tests::the_gateway_session_cookie_never_reaches_the_application ... ok
+test gateway::proxy::tests::websocket_upgrades_are_detected_precisely_and_re_asserted_upstream ... ok
+test gateway::proxy::tests::writes_and_websockets_must_be_same_origin_but_plain_reads_are_not_checked ... ok
+test archive::tests::zip_symlink_entry_is_refused ... ok
+test digest::tests::tree_digest_cannot_be_confused_by_moving_bytes_between_name_and_content ... ok
+test archive::tests::tar_symlink_hardlink_device_fifo_are_refused ... ok
+test archive::tests::declared_size_lies_but_actual_bytes_are_capped ... ok
+test digest::tests::tree_digest_refuses_symlinks_because_they_can_point_outside_the_package ... ok
+test digest::tests::tree_digest_changes_with_content_name_addition_and_removal ... ok
+test gateway::proxy_tests::a_post_is_forwarded_with_its_body_and_the_apps_status_and_headers_come_back ... ok
+test gateway::proxy_tests::a_websocket_upgrade_becomes_a_two_way_tunnel ... ok
+test digest::tests::tree_digest_is_stable_and_independent_of_creation_order ... ok
+test gateway::proxy_tests::removing_the_app_stops_proxying_to_it ... ok
+test gateway::proxy_tests::a_site_and_an_upstream_replace_each_other_for_the_same_app ... ok
+test gateway::static_files::tests::mime_types_cover_what_web_apps_ship_and_default_to_octet_stream ... ok
+test archive::tests::zip_and_targz_extract_the_same_tree ... ok
+test gateway::proxy_tests::unauthenticated_requests_never_reach_the_app ... ok
+test gateway::static_files::tests::percent_decoding_handles_valid_invalid_and_non_utf8_input ... ok
+test digest::tests::tree_digest_refuses_fifos_instead_of_blocking_on_them ... ok
+test gateway::tests::a_101_upgrade_keeps_connection_exactly_upgrade_and_still_tunnels_bytes ... ok
+test archive::tests::path_traversal_and_absolute_paths_are_refused ... ok
+test gateway::static_files::tests::missing_files_and_directories_without_an_index_are_not_found ... ok
+test gateway::static_files::tests::no_spelling_of_a_parent_reference_can_leave_the_site_root ... ok
+test archive::tests::dot_segments_elsewhere_and_traversal_are_still_rejected ... ok
+test gateway::tests::a_cookie_or_token_for_one_app_does_not_work_on_another_app ... ok
+test gateway::static_files::tests::a_symlink_pointing_outside_the_root_is_forbidden ... ok
+test gateway::static_files::tests::the_root_and_directories_resolve_to_their_index_html ... ok
+test gateway::tests::a_port_that_is_already_taken_is_a_clear_error_never_a_silent_new_port ... ok
+test gateway::tests::duplicate_host_headers_and_absolute_form_targets_are_bad_requests ... ok
+test gateway::tests::a_csp_that_cannot_be_a_header_value_fails_closed ... ok
+test gateway::proxy_tests::a_cross_origin_websocket_upgrade_is_refused ... ok
+test gateway::tests::a_directory_without_a_trailing_slash_is_redirected ... ok
+test gateway::tests::a_poisoned_sites_lock_does_not_take_the_gateway_down ... ok
+test gateway::tests::non_101_responses_close_the_connection_so_idle_ones_do_not_pile_up ... ok
+test gateway::proxy_tests::a_cross_origin_write_is_refused_before_it_reaches_the_app ... ok
+test gateway::tests::any_matching_bh_session_value_is_enough ... ok
+test gateway::tests::query_helpers_split_the_token_and_read_cookies_precisely ... ok
+test archive::tests::a_real_system_tar_of_a_directory_installs ... ok
+test gateway::tests::stop_is_idempotent_and_marks_the_gateway_stopped ... ok
+test gateway::tests::files_are_served_with_the_right_type_length_and_hardening_headers ... ok
+test gateway::tests::shutdown_never_hangs_even_when_called_before_the_accept_loop_first_runs ... ok
+test gateway::tests::malformed_request_shapes_are_rejected_on_the_wire ... ok
+test gateway::tests::tokens_are_random_per_gateway_and_launch_urls_carry_them ... ok
+test gateway::tests::redirect_locations_never_become_protocol_relative ... ok
+test gateway::tests::only_get_and_head_are_allowed_and_head_carries_no_body ... ok
+test i18n::resources::tests::absolute_strings_dir_is_rejected ... ok
+test gateway::tests::the_csp_follows_the_granted_outbound_network_permission ... ok
+test gateway::tests::every_non_101_response_still_closes_the_connection ... ok
+test i18n::resources::tests::dot_dot_in_strings_dir_is_rejected ... ok
+test gateway::tests::the_host_header_must_be_exactly_a_valid_app_dot_localhost_with_the_gateways_port ... ok
+test gateway::tests::the_token_in_the_query_becomes_a_host_only_strict_cookie_and_is_stripped_by_a_redirect ... ok
+test i18n::resources::tests::default_and_one_translation_load_into_bundle ... ok
+test i18n::resources::tests::empty_value_is_rejected ... ok
+test gateway::tests::traversal_attempts_return_403_or_400_and_never_the_secret ... ok
+test i18n::resources::tests::duplicate_key_is_rejected ... ok
+test gateway::tests::without_the_token_every_request_is_403_even_for_apps_that_do_not_exist ... ok
+test i18n::resources::tests::invalid_key_charset_is_rejected ... ok
+test i18n::resources::tests::extra_unrelated_file_is_ignored ... ok
+test gateway::tests::one_port_serves_several_apps_each_by_its_own_host_name ... ok
+test i18n::resources::tests::invalid_utf8_is_rejected ... ok
+test i18n::resources::tests::project_only_declared_titles_per_locale ... ok
+test i18n::resources::tests::projection_budget_constants_are_defensive_upper_bounds ... ok
+test i18n::resources::tests::nested_value_is_rejected ... ok
+test i18n::resources::tests::missing_default_locale_file_is_rejected ... ok
+test i18n::resources::tests::non_canonical_filename_is_rejected ... ok
+test i18n::resources::tests::non_string_value_is_rejected ... ok
+test i18n::resources::tests::missing_non_default_locale_is_allowed ... ok
+test i18n::resources::tests::key_too_long_is_rejected ... ok
+test i18n::resources::tests::single_file_over_byte_cap_is_rejected ... ok
+test i18n::resources::tests::too_many_keys_per_file_is_rejected ... ok
+test i18n::resources::tests::project_rejects_too_many_title_entries ... ok
+test id::tests::app_id_accepts_lowercase_digits_and_inner_hyphens ... ok
+test id::tests::app_id_rejects_everything_that_could_escape_a_hostname_or_a_directory ... ok
+test id::tests::app_id_serde_round_trips_as_a_plain_string_and_validates_on_read ... ok
+test id::tests::version_orders_numerically_not_lexically ... ok
+test id::tests::version_parses_three_numeric_parts_only ... ok
+test id::tests::version_parts_cannot_have_leading_zeros ... ok
+test id::tests::version_serde_round_trips_as_a_string ... ok
+test launch::tests::install_commands_follow_the_lockfile ... ok
+test i18n::resources::tests::symlink_escape_outside_package_is_rejected ... ok
+test i18n::resources::tests::symlinked_resource_file_is_rejected ... ok
+test launch::tests::reserved_port_variable_names_are_refused ... ok
+test launch::tests::the_command_must_start_with_the_runtimes_own_interpreter ... ok
+test i18n::resources::tests::too_many_declared_locales_is_rejected ... ok
+test i18n::resources::tests::symlinked_parent_dir_inside_package_is_rejected ... ok
+test i18n::resources::tests::total_over_byte_cap_is_rejected ... ok
+test i18n::resources::tests::value_too_long_is_rejected ... ok
+test logs::tests::a_missing_log_is_empty_not_an_error ... ok
+test i18n::resources::tests::symlinked_parent_dir_escape_is_rejected ... ok
+test digest::tests::the_streaming_file_hash_equals_the_in_memory_hash_across_buffer_boundaries ... ok
+test archive::tests::too_many_entries_is_refused ... ok
+test logs::tests::invalid_utf8_is_replaced_not_fatal ... ok
+test logs::tests::sanitize_strips_ansi_osc_and_control_characters_but_keeps_text ... ok
+test logs::tests::an_ansi_progress_line_and_an_overlong_line_are_cleaned_and_cut ... ok
+test logs::tests::an_overlong_line_is_cut_and_marked ... ok
+test launch::tests::only_known_lockfiles_that_exist_in_the_package_are_accepted ... ok
+test logs::tests::rotation_mid_read_shows_the_rotated_content_without_error ... ok
+test manager::tests::a_failed_download_leaves_no_part_files ... ok
+test gateway::proxy_tests::closing_the_client_side_of_a_websocket_closes_the_apps_connection ... ok
+test logs::tests::a_short_current_log_is_topped_up_from_the_rotated_one ... ok
+test manager::tests::a_forged_approved_payload_with_widened_permissions_is_refused ... ok
+test manager::tests::a_failure_after_the_rename_rolls_the_package_back_so_a_retry_works ... ok
+test manager::tests::a_launch_url_is_only_given_for_a_running_app ... ok
+test archive::tests::compression_bomb_is_refused ... ok
+test manager::tests::a_failed_upgrade_leaves_a_running_app_running ... ok
+test logs::tests::byte_cap_wins_over_line_cap ... ok
+test manager::tests::a_missing_cache_that_redownloads_different_bytes_is_refused ... ok
+test manager::tests::a_package_with_a_symlink_is_refused ... ok
+test manager::tests::a_missing_runtime_fails_the_start_with_a_retryable_failure_and_an_event ... ok
+test manager::tests::a_manual_rollback_restores_and_consumes_the_previous_version ... ok
+test manager::tests::a_node_app_version_requirement_checks_the_node_interpreter ... ok
+test gateway::tests::connections_beyond_the_cap_are_dropped_immediately ... ok
+test manager::tests::a_package_without_its_site_directory_fails_to_start_cleanly_and_stop_resets_it ... ok
+test manager::tests::a_poisoned_manager_lock_does_not_make_every_later_call_panic ... ok
+test manager::tests::a_satisfied_python_version_requirement_lets_the_app_run ... ok
+test manager::tests::a_rollback_that_would_escalate_permissions_is_refused ... ok
+test gateway::proxy_tests::a_dead_upstream_is_502_and_a_silent_one_is_504 ... ok
+test manager::tests::a_source_or_manifest_changed_after_approval_is_refused_and_leaves_nothing_behind ... ok
+test manager::tests::a_swapped_archive_is_refused_at_install_time ... ok
+test manager::tests::a_uv_managed_python_app_skips_the_version_check ... ok
+test logs::tests::the_tail_returns_only_the_last_lines_and_marks_truncation ... ok
+test gateway::tests::a_connection_that_never_finishes_its_headers_is_cut_off ... ok
+test logs::tests::max_lines_is_clamped ... ok
+test manager::tests::a_url_source_cannot_install_a_process_app ... ok
+test logs::tests::a_cut_never_shows_a_half_line_as_a_whole_one ... ok
+test manager::tests::an_http_effective_url_is_refused ... ok
+test manager::tests::a_violated_python_version_requirement_fails_the_start_with_an_issue_and_event ... ok
+test manager::tests::a_tampered_url_cache_is_not_used ... ok
+test manager::tests::a_url_source_installs_from_a_single_download_and_cleans_up ... ok
+test manager::tests::an_unrecognized_archive_extension_is_refused ... ok
+test manager::tests::an_install_cannot_claim_more_trust_than_its_source_allows ... ok
+test manager::tests::an_archive_source_installs_and_discloses_its_hash ... ok
+test manager::tests::an_unparsable_version_output_counts_as_unsatisfied_and_names_the_first_line ... ok
+test manager::tests::a_crashing_app_ends_up_failed_and_not_retryable_and_its_site_is_gone ... ok
+test manager::tests::containers_are_still_unsupported ... ok
+test manager::tests::after_a_supervisor_restart_reconcile_restarts_apps_that_wanted_to_run ... ok
+test manager::tests::an_upgrade_interrupted_after_rename_keeps_the_old_version_startable ... ok
+test manager::tests::cancelling_wakes_a_waiter_for_the_writer_lock ... ok
+test manager::tests::after_suspend_all_installs_and_starts_are_refused_until_the_next_reconcile ... ok
+test manager::tests::bilingual_live_sample_installs_with_live_locale_and_bilingual_projection ... ok
+test manager::tests::an_upgrade_records_the_previous_version ... ok
+test manager::tests::install_is_rejected_when_i18n_projection_exceeds_entry_budget ... ok
+test manager::tests::leftover_staging_directories_are_swept_when_the_manager_starts ... ok
+test manager::tests::granting_outbound_network_removes_the_csp ... ok
+test manager::tests::install_failed_records_the_issue_and_a_later_success_clears_it ... ok
+test manager::tests::debris_from_a_crashed_install_never_blocks_a_retry_or_an_upgrade ... ok
+test manager::tests::install_start_serve_and_stop_round_trip_with_events ... ok
+test manager::tests::manager_errors_map_to_stable_wire_kinds ... ok
+test manager::tests::legacy_sample_installs_without_any_i18n_bridge ... ok
+test manager::tests::a_python_app_installs_starts_runs_behind_the_gateway_and_stops ... ok
+test manager::tests::per_app_locks_let_different_apps_run_in_parallel ... ok
+test manager::tests::global_operations_exclude_per_app_operations ... ok
+test manager::tests::install_with_i18n_projection_appears_in_list_and_resolves_by_locale ... ok
+test manager::tests::logs_for_an_uninstalled_app_are_not_found_and_for_a_never_run_app_are_empty ... ok
+test gateway::proxy_tests::a_streamed_response_reaches_the_client_before_the_app_finishes ... ok
+test manager::tests::listing_falls_back_to_the_id_when_the_manifest_cannot_be_read ... ok
+test manager::tests::list_falls_back_to_none_when_installed_locale_file_is_corrupted ... ok
+test manager::tests::a_healthy_new_version_ends_probation_and_is_not_rolled_back ... ok
+test manager::tests::logs_return_the_tail_of_the_apps_log_file ... ok
+test manager::tests::every_failed_install_cleans_up_and_the_saved_manifest_is_the_staged_one ... ok
+test manager::tests::relative_source_paths_are_refused_before_anything_is_read ... ok
+test manager::tests::security_fixture_rejects_duplicate_key_in_locale_file ... ok
+test manager::tests::partial_initial_sample_installs_with_initial_locale_and_partial_fallback ... ok
+test manager::tests::security_fixture_rejects_illegal_locale_label ... ok
+test manager::tests::plans_for_process_apps_reject_reserved_port_names_and_foreign_commands_and_missing_lockfiles ... ok
+test manager::tests::security_fixture_rejects_missing_default_locale_file ... ok
+test manager::tests::security_fixture_rejects_path_traversal_strings_dir ... ok
+test manager::tests::rolling_back_a_fresh_install_is_refused ... ok
+test manager::tests::reconcile_reports_corrupt_records_and_still_restores_the_others ... ok
+test manager::tests::security_fixture_rejects_symlinked_resource_escape ... ok
+test manager::tests::the_child_path_lists_every_resolved_dir_once_and_keeps_the_system_fallback ... ok
+test manager::tests::security_fixture_rejects_title_key_without_fallback ... ok
+test manager::tests::the_dependency_marker_follows_the_lockfile_content ... ok
+test manager::tests::security_fixture_rejects_unknown_webview_locale_value ... ok
+test manager::tests::rolling_back_a_running_app_keeps_it_running_on_the_old_version ... ok
+test manager::tests::suspending_announces_that_the_endpoints_are_gone ... ok
+test manager::tests::the_install_phase_enforces_static_only_for_url_sources_too ... ok
+test manager::tests::reconcile_reports_a_broken_app_without_blocking_the_others ... ok
+test manager::tests::the_private_cache_variables_survive_the_child_environment_filter ... ok
+test manager::tests::the_dependency_install_issue_is_only_exposed_while_failed ... ok
+test manager::tests::a_synchronous_start_failure_after_upgrade_rolls_back_in_the_same_call ... ok
+test manager::tests::a_rollback_that_would_escalate_permissions_is_skipped ... ok
+test manager::tests::the_plan_describes_the_app_and_is_honest_about_static_web_enforcement ... ok
+test manager::tests::the_slow_copy_and_hashing_happen_before_the_manager_lock_is_taken ... ok
+test manager::tests::a_new_version_that_never_becomes_healthy_is_rolled_back_automatically ... ok
+test manager::tests::suspending_keeps_what_the_user_wanted_so_the_next_start_restores_it ... ok
+test manager::tests::the_version_probe_runs_before_the_manager_lock_is_taken ... ok
+test manager::tests::uninstalling_the_program_stops_serving_and_keeps_user_data ... ok
+test manager::tests::the_listing_exposes_the_rollback_target_and_last_rollback ... ok
+test manifest::i18n_tests::a_manifest_with_i18n_parses_and_validates ... ok
+test manifest::i18n_tests::compat_boundary_new_fields_are_unknown_to_old_parser ... ok
+test manifest::i18n_tests::illegal_i18n_declarations_are_rejected_with_field_level_reasons ... ok
+test manifest::i18n_tests::locale_negotiation_is_exact_no_family_or_simp_trad ... ok
+test manifest::i18n_tests::locale_tags_normalize_to_canonical_form ... ok
+test manifest::i18n_tests::new_manifest_round_trips_through_json ... ok
+test manifest::i18n_tests::no_i18n_or_no_key_falls_back_to_manifest_name ... ok
+test manifest::i18n_tests::old_manifest_without_i18n_still_validates ... ok
+test manifest::i18n_tests::title_key_without_i18n_is_rejected ... ok
+test manager::tests::url_credentials_and_query_strings_never_leak_into_errors ... ok
+test manifest::i18n_tests::title_resolves_current_then_default_then_fallback ... ok
+test manifest::tests::a_valid_static_web_manifest_passes ... ok
+test manifest::i18n_tests::webview_locale_defaults_to_none_when_omitted ... ok
+test manifest::tests::all_problems_are_collected_not_just_the_first ... ok
+test manifest::tests::container_image_names_cannot_start_with_a_dash_or_hide_whitespace ... ok
+test manifest::tests::container_images_must_be_pinned_by_digest ... ok
+test manifest::tests::entrypoint_and_health_paths_cannot_point_at_another_origin ... ok
+test manifest::tests::entrypoint_keys_and_titles_are_validated ... ok
+test manifest::tests::entrypoint_problems_are_reported ... ok
+test manifest::tests::host_older_than_min_host_version_is_rejected ... ok
+test manifest::tests::process_runtimes_need_a_command_and_a_valid_port_env ... ok
+test manifest::tests::paths_that_escape_the_package_are_rejected ... ok
+test manifest::tests::runtime_kind_names_match_the_manifest_vocabulary ... ok
+test manifest::tests::relative_paths_reject_dot_and_empty_segments_but_allow_one_trailing_slash ... ok
+test manifest::tests::runtime_version_requirements_are_validated ... ok
+test manifest::tests::text_shown_on_the_approval_screen_cannot_carry_control_or_bidi_characters ... ok
+test manifest::tests::the_shipped_excalidraw_manifest_parses_and_asks_for_nothing ... ok
+test manifest::tests::toml_text::a_process_runtime_parses_from_toml ... ok
+test manifest::tests::toml_text::missing_required_fields_and_bad_values_are_parse_errors ... ok
+test manifest::tests::toml_text::omitted_permissions_and_health_take_the_strictest_and_default_values ... ok
+test manager::tests::url_sha256_pinning_is_case_insensitive_and_format_checked_before_download ... ok
+test manifest::tests::toml_text::semantic_problems_surface_as_invalid_with_all_messages ... ok
+test manifest::tests::toml_text::the_spec_example_parses_to_the_expected_manifest ... ok
+test manager::tests::waiting_for_the_writer_lock_wakes_immediately_on_release ... ok
+test manifest::tests::toml_text::unknown_fields_are_a_parse_error_at_the_top_level_and_in_nested_tables ... ok
+test manifest::tests::wrong_schema_version_is_rejected ... ok
+test permissions::tests::default_permissions_are_the_most_restrictive ... ok
+test permissions::tests::fresh_install_diff_lists_every_requested_capability_as_an_escalation ... ok
+test permissions::tests::identical_permissions_have_no_diff ... ok
+test permissions::tests::levels_are_ordered_from_strict_to_loose ... ok
+test permissions::tests::permissions_serde_uses_snake_case_labels_and_fills_missing_with_strictest ... ok
+test permissions::tests::unknown_permission_fields_are_rejected_at_every_level ... ok
+test permissions::tests::upgrade_diff_distinguishes_escalation_from_reduction ... ok
+test plan::tests::a_fresh_install_plan_carries_identity_provenance_digests_and_enforcement ... ok
+test plan::tests::an_approved_plan_exposes_the_plan_and_the_approval_record ... ok
+test plan::tests::an_upgrade_plan_diffs_against_the_current_grants_not_against_nothing ... ok
+test plan::tests::an_old_plan_payload_without_source_info_still_parses_and_verifies ... ok
+test plan::tests::source_info_participates_in_verification ... ok
+test plan::tests::plans_round_trip_through_json_for_the_wire ... ok
+test plan::tests::verify_accepts_only_a_freshly_recomputed_plan_and_returns_that_fresh_plan ... ok
+test plan::tests::verify_rejects_a_payload_edited_after_the_digests_were_taken ... ok
+test plan::tests::will_run_describes_commands_honestly_for_each_runtime ... ok
+test plan::tests::will_run_quotes_arguments_so_different_commands_never_render_identically ... ok
+test plan::tests::will_run_states_the_declared_runtime_version_requirement ... ok
+test port::tests::an_explicitly_persisted_port_is_returned_as_is ... ok
+test port::tests::picked_ports_stay_inside_the_dynamic_range ... ok
+test port::tests::the_range_stays_below_both_ephemeral_port_ranges ... ok
+test port::tests::nothing_is_stored_until_persist_and_then_the_same_port_comes_back ... ok
+test process::env::tests::host_supplied_extras_reach_the_child_but_inherited_lookalikes_do_not ... ok
+test process::env::tests::only_allow_listed_parent_variables_reach_the_child ... ok
+test process::env::tests::port_env_cannot_shadow_security_critical_variables ... ok
+test process::env::tests::port_env_names_are_validated ... ok
+test process::env::tests::the_host_variables_carry_the_right_values_and_win_over_the_parent ... ok
+test process::health::tests::a_2xx_3xx_or_4xx_answer_means_alive_and_5xx_does_not ... ok
+test port::tests::a_missing_root_directory_is_created_by_persist ... ok
+test process::health::tests::non_http_closed_and_silent_servers_are_unhealthy ... ok
+test process::health::tests::the_status_line_is_parsed_strictly ... ok
+test port::tests::corrupt_or_out_of_range_settings_are_errors_not_a_silent_new_port ... ok
+test process::log::tests::a_failing_log_never_stops_the_pump_from_draining_the_pipe ... ok
+test manager::tests::three_successive_upgrades_keep_only_current_and_previous ... ok
+test manager::tests::the_same_version_is_never_overwritten_and_an_upgrade_records_new_grants ... ok
+test process::log::tests::a_single_oversized_write_is_not_split_or_dropped ... ok
+test process::log::tests::the_pump_copies_a_pipe_into_the_log_until_eof ... ok
+test process::restart::tests::a_stable_run_clears_the_history ... ok
+test process::restart::tests::crashes_back_off_exponentially_up_to_the_cap_then_give_up ... ok
+test process::restart::tests::old_exits_fall_out_of_the_window ... ok
+test process::restart::tests::reset_starts_counting_again ... ok
+test process::restart::tests::the_backoff_is_capped ... ok
+test process::log::tests::reopening_appends_and_counts_what_is_already_there ... ok
+test manager::tests::upgrading_a_running_app_is_allowed_and_keeps_it_running ... ok
+test process::supervise::tests::a_missing_program_and_an_empty_argv_are_errors_not_panics ... ok
+test process::log::tests::writes_rotate_at_the_size_limit_and_keep_a_bounded_history ... ok
+test process::supervise::tests::command_lines_are_compared_as_joined_argv ... ok
+test process::supervise::tests::dropping_a_running_process_does_not_leave_it_behind ... ok
+test process::supervise::tests::free_ports_are_loopback_bindable ... ok
+test process::supervise::tests::a_process_with_a_different_command_line_is_never_killed ... ok
+test process::supervise::tests::missing_dead_and_corrupt_records_are_handled ... ok
+test manager::tests::upgrading_a_running_static_app_stops_swaps_and_restarts_it ... ok
+test process::supervise::tests::output_goes_to_the_log_and_the_exit_status_is_reported ... ok
+test manager::tests::the_issue_is_recorded_before_the_failed_state_becomes_visible ... ok
+test process::supervise::tests::noticing_the_leader_exit_sweeps_the_group_before_the_pid_can_be_reused ... ok
+test process::supervise::tests::stop_terminates_the_whole_process_group_including_grandchildren ... ok
+test process::supervise::tests::the_child_gets_only_the_given_environment ... ok
+test proto::tests::an_old_runtime_probe_without_the_new_fields_still_parses ... ok
+test proto::tests::archive_and_url_sources_round_trip_and_old_shapes_still_parse ... ok
+test proto::tests::dependency_install_issue_has_a_stable_wire_shape ... ok
+test proto::tests::display_i18n_does_not_alter_name_or_launch_url ... ok
+test proto::tests::display_i18n_round_trips_and_keeps_its_shape ... ok
+test proto::tests::failures_carry_a_stable_kind_tag_next_to_the_message ... ok
+test proto::tests::managed_runtimes_round_trip_with_a_stable_snake_case_tag ... ok
+test proto::tests::missing_display_i18n_on_old_payload_parses_to_none ... ok
+test proto::tests::old_reply_shapes_still_parse_after_adding_push_variants ... ok
+test proto::tests::plan_requests_carry_the_source_provenance_and_trust ... ok
+test proto::tests::replies_round_trip_including_runtime_probes_with_flattened_availability ... ok
+test proto::tests::resolve_title_prefers_negotiated_then_default_then_fallback ... ok
+test proto::tests::runtime_install_requests_and_replies_round_trip ... ok
+test proto::tests::runtime_probe_with_managed_installable_and_job_round_trips ... ok
+test proto::tests::simple_requests_use_a_stable_op_tag ... ok
+test proto::tests::source_info_defaults_for_an_old_plan_payload ... ok
+test proto::tests::subscribe_and_push_variants_have_a_stable_wire_shape ... ok
+test proto::tests::unknown_ops_and_unknown_sources_are_rejected_not_ignored ... ok
+test registry::tests::a_state_json_with_an_unknown_format_version_is_refused_not_guessed_at ... ok
+test process::e2e::a_python_server_is_started_probed_healthy_and_stopped_with_its_port_closing ... ok
+test registry::tests::an_old_state_json_without_the_upgrade_fields_reads_with_defaults ... ok
+test registry::tests::directories_starting_with_a_dot_are_never_listed_as_apps ... ok
+test registry::tests::load_rejects_a_record_whose_id_does_not_match_its_directory ... ok
+test registry::tests::paths_follow_the_documented_layout ... ok
+test registry::tests::prune_versions_keeps_current_and_previous_only ... ok
+test registry::tests::list_returns_apps_sorted_and_reports_corrupt_records_without_hiding_the_rest ... ok
+test registry::tests::saving_creates_the_data_cache_and_logs_dirs_and_round_trips_the_record ... ok
+test registry::tests::state_json_has_exactly_the_documented_fields_and_no_secret_slot ... ok
+test registry::tests::saving_twice_replaces_the_record_and_leaves_no_temp_file ... ok
+test registry::tests::the_observed_state_and_format_version_survive_a_save_load_cycle ... ok
+test registry::tests::the_upgrade_fields_round_trip_through_state_json ... ok
+test registry::tests::uninstalling_something_that_is_not_installed_is_not_an_error ... ok
+test registry::tests::uninstalling_the_program_keeps_data_and_logs_and_a_reinstall_finds_them ... ok
+test runtime::managed::fetch::tests::curl_args_do_not_pass_the_url_through_the_argv_vector ... ok
+test runtime::managed::fetch::tests::curl_args_pin_https_and_report_the_effective_url ... ok
+test registry::tests::uninstalling_with_data_removes_the_whole_app_directory ... ok
+test runtime::managed::install::tests::a_failing_download_is_reported_with_its_reason_and_cleans_up ... ok
+test manager::tests::probation_survives_a_daemon_restart ... ok
+test manager::tests::suspend_all_stops_every_process_and_reconcile_brings_wanted_ones_back ... ok
+test runtime::managed::install::tests::a_wrong_checksum_fails_and_leaves_nothing_behind ... ok
+test runtime::managed::install::tests::an_archive_without_the_expected_binary_is_refused ... ok
+test process::health::tests::waiting_succeeds_once_the_service_comes_up_late ... ok
+test runtime::managed::install::tests::entry_safety_and_literal_resolution_are_table_driven ... ok
+test runtime::managed::install::tests::cancelling_during_the_download_aborts_and_cleans_up ... ok
+test runtime::managed::install::tests::path_traversal_entries_are_refused ... ok
+test runtime::managed::manager::tests::a_changed_plan_is_refused_and_nothing_is_downloaded ... ok
+test manager::tests::upgrading_a_running_process_app_sets_probation_until_ready ... ok
+test process::supervise::tests::a_child_that_ignores_sigterm_is_killed_after_the_grace_period ... ok
+test runtime::managed::manager::tests::a_second_install_of_the_same_runtime_while_one_is_running_conflicts ... ok
+test runtime::managed::manager::tests::an_unsupported_target_cannot_be_planned_or_installed ... ok
+test runtime::managed::manager::tests::a_failed_install_is_reported_and_a_retry_is_allowed ... ok
+test runtime::managed::manager::tests::installs_requested_after_shutdown_began_are_refused_without_downloading ... ok
+test process::health::tests::waiting_stops_early_when_the_process_died_and_gives_up_at_the_deadline ... ok
+test runtime::managed::manager::tests::the_node_plan_lists_exactly_the_pinned_download_and_destination ... ok
+test runtime::managed::manager::tests::the_python_plan_discloses_that_python_itself_is_verified_by_uv_not_by_a_pinned_checksum ... ok
+test runtime::managed::manager::tests::uninstall_removes_one_version_and_rejects_names_that_escape ... ok
+test runtime::managed::manager::tests::uvs_internal_directories_are_not_listed_as_python_versions_nor_removable ... ok
+test runtime::managed::pins::tests::every_pin_is_https_and_has_a_64_hex_checksum_and_a_relative_bin ... ok
+test runtime::managed::pins::tests::the_two_architectures_never_share_a_url_or_a_checksum ... ok
+test runtime::managed::pins::tests::the_version_in_the_url_matches_the_declared_version ... ok
+test runtime::managed::pins::tests::unknown_names_have_no_pin ... ok
+test runtime::managed::pins::tests::urls_match_the_official_sources ... ok
+test runtime::managed::resolve::tests::a_python_looking_binary_inside_uvs_internal_dirs_is_never_resolved ... ok
+test runtime::managed::resolve::tests::nothing_installed_is_not_installed ... ok
+test runtime::managed::resolve::tests::the_chain_prefers_managed_but_falls_back_to_the_system ... ok
+test runtime::managed::resolve::tests::the_chain_reports_not_installed_when_every_resolver_fails ... ok
+test runtime::managed::resolve::tests::the_managed_resolver_finds_node_npm_uv_and_python_and_refuses_paths ... ok
+test runtime::managed::resolve::tests::the_managed_resolver_prefers_the_newest_installed_version ... ok
+test runtime::managed::store::tests::installed_versions_are_listed_newest_first_and_ignore_staging_and_files ... ok
+test runtime::managed::store::tests::remove_is_idempotent_and_sweep_clears_only_staging ... ok
+test runtime::managed::store::tests::removing_a_version_with_an_illegal_name_is_an_error_not_a_delete ... ok
+test runtime::managed::store::tests::staging_dirs_are_unique_and_under_the_root ... ok
+test runtime::managed::store::tests::version_names_that_could_escape_the_store_are_rejected ... ok
+test runtime::probe::tests::a_silent_daemon_failure_still_gets_a_readable_reason_and_timeouts_are_unavailable ... ok
+test runtime::probe::tests::docker_is_reported_in_three_distinct_layers ... ok
+test runtime::probe::tests::node_is_not_installed_available_or_broken ... ok
+test runtime::probe::tests::probe_all_covers_the_three_external_runtimes_in_a_fixed_order ... ok
+test runtime::probe::tests::python_prefers_uv_then_python3_and_reads_old_pythons_stderr_version ... ok
+test runtime::managed::manager::tests::cancel_all_stops_a_running_download_and_cleans_staging ... ok
+test logs::tests::a_cut_exactly_on_a_line_start_keeps_that_line ... ok
+test runtime::probe::tests::the_system_runner_drains_large_output_instead_of_deadlocking ... ok
+test process::supervise::tests::ran_for_is_frozen_at_the_moment_the_exit_was_noticed ... ok
+test runtime::resolve::tests::a_non_executable_file_is_not_a_runtime ... ok
+test runtime::resolve::tests::only_bare_interpreter_names_are_resolved_never_paths ... ok
+test runtime::resolve::tests::the_first_directory_that_holds_an_executable_wins_and_its_dir_goes_on_the_path ... ok
+test runtime::tests::containers_enforce_mounts_but_not_outbound_network ... ok
+test runtime::tests::every_runtime_reports_every_permission_exactly_once ... ok
+test runtime::tests::process_runtimes_never_claim_isolation ... ok
+test runtime::tests::static_web_is_advisory_on_network_until_the_webview_has_a_navigation_policy ... ok
+test runtime_version::tests::an_equals_requirement_is_a_prefix_match_on_the_parts_given ... ok
+test runtime_version::tests::comparison_is_numeric_not_textual ... ok
+test runtime_version::tests::malformed_requirements_are_refused_with_the_offending_piece ... ok
+test runtime_version::tests::requirements_display_in_a_normalized_form_that_parses_back ... ok
+test runtime_version::tests::version_output_takes_the_first_three_numeric_parts_and_ignores_suffixes ... ok
+test service::tests::a_clean_shutdown_reports_gateway_released_and_no_failures ... ok
+test service::tests::a_corrupt_gateway_port_file_makes_the_service_unavailable_and_is_left_alone ... ok
+test runtime::probe::tests::the_system_runner_reports_missing_programs_and_real_output ... ok
+test service::tests::a_forged_runtime_plan_is_rejected_without_downloading ... ok
+test service::tests::a_lagging_consumer_gets_a_resync_instead_of_silently_missing_events ... ok
+test service::tests::a_logs_request_leaves_a_debug_trace ... ok
+test process::supervise::tests::a_log_that_cannot_be_opened_fails_before_any_child_is_started ... ok
+test runtime::managed::install::tests::a_binary_that_fails_its_smoke_test_is_refused ... ok
+test service::tests::a_rollback_request_restores_the_previous_version_over_the_wire ... ok
+test runtime::probe::tests::the_system_runner_kills_commands_that_exceed_the_timeout ... ok
+test service::tests::a_second_service_on_the_same_root_is_unavailable_and_never_disturbs_the_first ... ok
+test service::tests::a_shutdown_that_overruns_the_timeout_keeps_the_lock ... ok
+test service::tests::a_stop_failure_shows_up_in_the_report_not_only_in_logs ... ok
+test service::tests::a_taken_gateway_port_makes_the_service_unavailable_instead_of_failing ... ok
+test service::tests::a_url_source_is_untrusted_no_matter_what_the_client_claims ... ok
+test service::tests::a_url_source_of_a_process_app_is_rejected_over_the_wire ... ok
+test runtime::managed::install::tests::a_symlink_pointing_outside_the_staging_dir_is_refused_but_a_relative_inner_link_is_fine ... ok
+test service::tests::an_unavailable_service_answers_every_request_with_its_reason ... ok
+test service::tests::an_unusable_application_directory_makes_the_service_unavailable ... ok
+test service::tests::an_archive_source_plans_over_the_wire_with_source_info ... ok
+test service::tests::archive_and_url_source_errors_are_classified_on_the_wire ... ok
+test service::tests::change_reply_maps_events_to_invalidation_signals ... ok
+test service::tests::clear_port_forgets_the_port_but_only_when_nobody_owns_the_root ... ok
+test service::tests::failures_are_classified_not_just_described ... ok
+test service::tests::launch_urls_are_only_given_for_running_apps ... ok
+test service::tests::apps_wanted_running_come_back_after_a_dozerd_restart_and_stopped_ones_stay_stopped ... ok
+test service::tests::reset_port_changes_the_persisted_port_when_no_service_owns_the_root ... ok
+test service::tests::reset_port_is_refused_while_a_service_owns_the_root ... ok
+test service::tests::reset_port_keeps_the_old_file_when_persisting_fails ... ok
+test service::tests::requests_arriving_after_shutdown_do_not_start_or_install_anything ... ok
+test service::tests::reset_port_rejects_out_of_range_ports_without_touching_the_file ... ok
+test service::tests::shutdown_reporting_on_an_unavailable_service_is_clean ... ok
+test service::tests::start_uses_the_persisted_port_across_restarts ... ok
+test service::tests::subscribe_is_none_when_the_service_is_unavailable ... ok
+test service::tests::the_first_run_gives_up_after_repeated_collisions_without_persisting_anything ... ok
+test service::tests::the_first_run_is_unavailable_when_the_port_cannot_be_saved ... ok
+test service::tests::the_first_run_picks_persists_and_binds_a_port ... ok
+test service::tests::the_first_run_retries_a_taken_port_and_persists_only_the_one_it_bound ... ok
+test service::tests::shutdown_cancels_a_running_download ... ok
+test service_lock::tests::a_second_acquire_on_the_same_root_is_rejected_until_the_first_drops ... ok
+test service_lock::tests::another_process_holding_the_lock_blocks_this_one ... ok
+test service_lock::tests::the_lock_file_is_created_under_the_root ... ok
+test runtime::managed::install::tests::a_valid_archive_is_installed_atomically_and_smoke_tested ... ok
+test source::tests::effective_only_tightens_never_loosens ... ok
+test source::tests::normalize_sha256_is_case_and_whitespace_insensitive ... ok
+test source::tests::policy_derives_trust_from_the_source_not_the_client ... ok
+test source::tests::validate_url_accepts_https_and_rejects_everything_else ... ok
+test state::tests::a_desired_running_app_restarts_after_a_supervisor_restart ... ok
+test state::tests::a_failed_app_that_should_be_stopped_is_stopped_to_clean_up_any_residue ... ok
+test state::tests::a_non_retryable_failure_never_restarts_by_itself ... ok
+test state::tests::after_a_supervisor_restart_nothing_is_running_or_in_flight ... ok
+test state::tests::next_action_truth_table ... ok
+test state::tests::recovery_never_leaves_a_transient_state_behind ... ok
+test state::tests::states_serialize_with_a_stable_snake_case_vocabulary ... ok
+test state::tests::transient_states_are_exactly_the_in_flight_ones ... ok
+test runtime::probe::tests::the_system_runner_does_not_wait_for_a_background_process_that_holds_the_pipe ... ok
+test service::tests::uninstalling_removes_the_app_from_the_list_and_probes_name_the_three_runtimes ... ok
+test source::tests::a_stalled_download_is_interrupted_by_the_cancel_flag ... ok
+test process::supervise::tests::stderr_written_after_heavy_stdout_rotation_is_still_in_the_log_files ... ok
+test runtime::managed::install::tests::reinstalling_an_existing_version_is_refused_not_overwritten ... ok
+test supervisor::tests::a_failed_spawn_counts_as_a_failed_start_instead_of_panicking ... ok
+test process::supervise::tests::stop_does_not_hang_on_a_process_that_escaped_the_group_and_holds_the_pipe ... ok
+test supervisor::tests::a_healthy_app_is_reported_ready_then_cancelling_stops_it_without_further_reports ... ok
+test supervisor::tests::cancelling_during_the_install_stops_the_install_process ... ok
+test service::tests::a_dozerd_restart_brings_a_python_app_back ... ok
+test runtime::managed::manager::tests::an_approved_install_runs_in_the_background_and_reports_progress_then_finishes ... ok
+test service::tests::a_python_app_runs_through_the_wire_and_dies_with_dozerd ... ok
+test supervisor::tests::cancelling_during_monitoring_stops_without_further_probes ... ok
+test testutil::test_child_is_reaped_even_when_an_assertion_panics ... ok
+test supervisor::tests::a_crash_loop_restarts_with_backoff_then_gives_up ... ok
+test runtime::managed::manager::tests::python_install_runs_uv_after_installing_uv_and_skips_uv_when_already_present ... ok
+test manager::tests::the_auto_rollback_thread_rechecks_after_it_gets_the_lock ... ok
+test supervisor::tests::extra_env_reaches_the_child_process ... ok
+test supervisor::tests::every_install_failure_branch_reports_install_failed ... ok
+test manager::tests::rollback_is_abandoned_when_the_user_acted_first ... ok
+test service::tests::a_runtime_install_goes_plan_approve_progress_installed_and_probes_show_it ... ok
+test service::tests::a_process_app_uses_the_managed_runtime_before_the_system_one ... ok
+test supervisor::tests::disabling_the_monitor_keeps_the_old_behaviour ... ok
+test supervisor::tests::dependencies_install_once_and_a_failed_install_is_reported ... ok
+test supervisor::tests::a_slow_but_answering_app_is_not_killed ... ok
+test supervisor::tests::an_app_that_never_answers_is_stopped_and_counted_as_a_failed_start ... ok
+test supervisor::tests::a_single_failed_probe_does_not_count_after_a_success ... ok
+test manager::tests::stopping_while_the_app_is_still_starting_does_not_leave_it_running ... ok
+test supervisor::tests::a_process_that_stops_answering_is_killed_and_restarted ... ok
+
+test result: ok. 485 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 8.73s
+
+     Running tests/i18n_samples.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/i18n_samples-f9fd669d29694d13)
+
+running 6 tests
+test inline_script_scan_flags_only_executable_inline_scripts ... ok
+test static_samples_have_no_inline_executable_scripts ... ok
+test legacy_sample_has_no_i18n_section ... ok
+test node_notes_reuses_the_bridge ... ok
+test partial_initial_is_initial_and_falls_back_for_missing_translation ... ok
+test bilingual_live_is_live_and_resolves_all_locales ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/process_apps_live.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/process_apps_live-42481f086b740fe3)
+
+running 7 tests
+test a_failing_dependency_install_surfaces_a_dependency_issue ... ignored, 需要真 node/npm;人工运行时删除 --ignored
+test archive_sourced_python_app_end_to_end ... ignored, 需要真 python3;人工运行时删除 --ignored
+test hostile_archives_are_refused_with_no_files_outside_the_root ... ignored, 需要 /usr/bin/tar;人工运行时删除 --ignored
+test node_sample_end_to_end ... ignored, 需要真 python3 与 node;人工运行时删除 --ignored
+test python_sample_end_to_end ... ignored, 需要真 python3 与 node;人工运行时删除 --ignored
+test python_sample_upgrade_and_rollback ... ignored, 需要真 python3;人工运行时删除 --ignored
+test url_sourced_static_app_runs_and_a_process_app_is_rejected ... ignored, 需要真 node;人工运行时删除 --ignored
+
+test result: ok. 0 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_install_live.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/runtime_install_live-2c348a4502731781)
+
+running 1 test
+test installs_node_and_python_from_the_official_sources ... ignored, 真实网络下载,仅在人工要求时运行
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_chrome-2958e5976fbca242)
+
+running 70 tests
+test anim::tests::hover_converges_in_a_few_ticks_and_reports_activity ... ok
+test geometry::tests::content_rects_subtract_the_zone_margin_and_padding ... ok
+test geometry::tests::collapsing_one_side_gives_the_other_the_whole_space ... ok
+test geometry::tests::maximizing_one_side_hides_the_other_and_fills_the_box ... ok
+test geometry::tests::a_click_lands_in_the_zone_under_it ... ok
+test geometry::tests::both_zones_open_split_the_space_between_the_rails ... ok
+test geometry::tests::a_narrow_window_clamps_the_left_width_and_never_starves_the_right_zone ... ok
+test geometry::tests::both_collapsed_leaves_no_zone ... ok
+test geometry::tests::tiny_windows_never_produce_negative_sizes ... ok
+test model::tests::a_collapsed_pair_gives_the_whole_content_to_the_second_slot ... ok
+test anim::tests::a_slot_slides_within_a_rail_and_snaps_across_rails ... ok
+test model::tests::pair_rects_place_the_list_first_unless_the_panel_is_mirrored ... ok
+test model::tests::a_panel_whose_list_is_not_first_by_default_renders_the_list_on_the_right ... ok
+test model::tests::maximize_is_transient_and_ignored_for_a_collapsed_side ... ok
+test model::tests::a_cross_rail_drag_that_would_empty_the_source_is_refused ... ok
+test model::tests::dragging_within_a_rail_reorders_live_and_persists_on_release ... ok
+test model::tests::a_click_sets_the_focused_zone_but_a_click_on_a_rail_keeps_it ... ok
+test model::tests::dragging_to_the_other_rail_moves_the_panel_on_release_and_selects_it_there ... ok
+test model::tests::a_panel_without_a_pair_ignores_pair_drags ... ok
+test model::tests::a_click_without_movement_does_not_reorder_but_still_persists_the_selection ... ok
+test model::tests::dragging_the_zone_divider_keeps_the_pair_list_width_in_pixels ... ok
+test model::tests::construction_rejects_broken_layouts ... ok
+test model::tests::a_collapsed_pair_expands_again_when_dragged_back_out ... ok
+test model::tests::dragging_a_pair_divider_changes_the_split_and_collapses_when_dragged_narrow ... ok
+test model::tests::dragging_the_zone_divider_sets_the_left_width_clamped_and_persists_on_release ... ok
+test model::tests::pressing_another_icon_selects_it_expands_the_side_and_reports_the_switch ... ok
+test model::tests::pressing_the_active_icon_toggles_its_zone ... ok
+test model::tests::pressing_an_unknown_panel_does_nothing ... ok
+test model::tests::hover_and_slot_animations_run_on_ticks_and_settle ... ok
+test model::tests::resizing_never_rewrites_the_preferred_left_width ... ok
+test model::tests::show_panel_never_collapses_and_reports_only_real_switches ... ok
+test model::tests::the_drag_is_confirmed_only_after_the_cursor_travels ... ok
+test model::tests::the_last_open_zone_cannot_be_collapsed ... ok
+test model::tests::toggle_pane_flips_collapsed_keeps_the_split_and_asks_to_persist ... ok
+test model::tests::toggle_pane_on_a_panel_without_a_pair_does_nothing ... ok
+test persist::tests::a_newer_schema_is_never_overwritten ... ok
+test persist::tests::a_newer_schema_is_recognised_even_when_its_shape_no_longer_parses ... ok
+test persist::tests::a_selected_panel_that_is_not_in_its_rail_becomes_the_first_one ... ok
+test persist::tests::a_stale_old_field_in_the_file_is_ignored ... ok
+test persist::tests::an_unrepairable_layout_uses_the_defaults_and_unusable_ids_leave_nothing_behind ... ok
+test persist::tests::both_zones_collapsed_in_the_file_is_repaired_by_opening_the_left_one ... ok
+test persist::tests::bad_numbers_are_sanitized ... ok
+test persist::tests::missing_fields_fall_back_to_defaults_instead_of_failing_the_whole_file ... ok
+test persist::tests::no_file_gives_the_defaults ... ok
+test persist::tests::corrupt_json_gives_the_defaults ... ok
+test persist::tests::a_saved_model_round_trips_exactly ... ok
+test persist::tests::unknown_and_duplicate_ids_are_dropped_and_missing_panels_come_back_on_their_default_side ... ok
+test platform_macos::tests::hovered_flag_round_trips ... ok
+test platform_macos::tests::traffic_lights_are_centered_in_the_top_bar_in_both_coordinate_systems ... ok
+test rail::tests::a_stale_source_index_or_same_side_target_changes_nothing ... ok
+test persist::tests::one_mistyped_field_does_not_reset_the_rest_of_the_file ... ok
+test rail::tests::dragged_panel_is_none_without_a_drag_or_with_a_bad_index ... ok
+test rail::tests::a_side_is_never_emptied_by_a_cross_side_move ... ok
+test rail::tests::hovering_the_other_side_only_records_a_pending_target ... ok
+test rail::tests::cross_side_move_relocates_and_clamps_the_target_index ... ok
+test persist::tests::split_ratios_outside_the_legal_range_are_dropped_so_no_pane_vanishes ... ok
+test rail::tests::same_side_reorder_moves_the_panel_and_follows_it ... ok
+test rail::tests::same_side_reorder_to_the_same_or_a_bad_index_is_a_no_op ... ok
+test rail::tests::show_panel_does_nothing_when_it_is_already_visible ... ok
+test rail::tests::show_panel_exits_a_maximize_that_covers_it_and_a_switch_always_exits_it ... ok
+test rail::tests::show_panel_expands_a_collapsed_active_panel_without_a_switch ... ok
+test rail::tests::show_panel_never_collapses_an_open_panel_and_keeps_its_own_maximize ... ok
+test rail::tests::show_panel_switches_when_the_side_shows_another_panel ... ok
+test rail::tests::side_of_finds_each_panel ... ok
+test rail::tests::the_drag_threshold_separates_a_click_from_a_drag ... ok
+test view::tests::events_map_to_shell_messages ... ok
+test theme::tests::the_test_constants_match_what_the_default_byteui_theme_reads ... ok
+test view::tests::the_root_paints_the_window_background_so_margins_do_not_show_the_iced_default ... ok
+test view::tests::the_view_builds_in_every_shell_state ... ok
+test persist::tests::saving_is_atomic_and_creates_the_directory ... ok
+
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_client-63ff1f8f013503ca)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/embedded_host.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/embedded_host-7c0ce252aae21d47)
+
+running 1 test
+test embeds_the_host_in_process_without_a_daemon ... ignored, 需要真 python3;手工带 --ignored 运行
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/in_process.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/in_process-d8f13bdfd484ac23)
+
+running 3 tests
+test an_unavailable_host_reports_unavailable_not_transport ... ok
+test dropping_the_subscription_stops_the_forwarding_task ... ok
+test in_process_passes_the_conformance_suite ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_core-1e81ea884c36660a)
+
+running 56 tests
+test geometry::tests::host_rect_pushes_down_top_insets ... ok
+test geometry::tests::zero_rect_is_empty ... ok
+test geometry::tests::host_rect_clamps_height_at_zero ... ok
+test id::tests::panel_id_for_app_wraps_a_validated_id ... ok
+test id::tests::panel_id_for_app_accepts_digit_leading_valid_app_ids ... ok
+test id::tests::instance_generation_increments_on_rebuild ... ok
+test id::tests::panel_id_accepts_dotted_and_colon_namespaced_names ... ok
+test id::tests::panel_id_rejects_bad_shapes ... ok
+test id::tests::panel_id_serde_validates_on_read ... ok
+test id::tests::scope_id_is_opaque_and_only_length_checked ... ok
+test layout::tests::corrupt_json_is_a_structured_error ... ok
+test layout::tests::empty_and_single_panel_rails_are_legal ... ok
+test layout::tests::load_clamps_out_of_range_width_on_read ... ok
+test layout::tests::unknown_historical_ids_are_retained_not_dropped ... ok
+test layout::tests::unknown_newer_schema_is_rejected ... ok
+test layout::tests::widths_are_clamped_and_illegal_finite_inputs_rejected ... ok
+test panes::tests::drag_collapses_below_threshold_and_freezes_ratio ... ok
+test panes::tests::drag_expands_back_above_threshold ... ok
+test panes::tests::drag_mirrors_ratio_when_content_first ... ok
+test panes::tests::drag_writes_ratio_for_non_mirrored_list_first ... ok
+test panes::tests::non_collapsible_never_collapses ... ok
+test panes::tests::store_reads_writes_and_defaults ... ok
+test panes::tests::zero_width_pair_is_noop ... ok
+test registry::tests::duplicate_id_is_rejected_without_overwriting ... ok
+test panes::tests::store_round_trips_as_stable_map ... ok
+test registry::tests::duplicate_surface_slot_within_a_panel_is_rejected ... ok
+test registry::tests::native_panel_registers_alongside_surface_panels ... ok
+test registry::tests::registering_distinct_ids_succeeds ... ok
+test registry::tests::panel_without_surfaces_is_allowed_for_native_panels ... ok
+test request::tests::already_emitted_result_is_not_retracted_by_a_later_begin_but_consumer_rejects_it ... ok
+test request::tests::independent_keys_do_not_overwrite_each_other ... ok
+test request::tests::new_request_after_queued_reply_rejects_the_old_one ... ok
+test request::tests::queued_results_are_invalidated_and_keys_are_independent ... ok
+test request::tests::reopened_instance_rejects_old_results ... ok
+test request::tests::run_scoped_delivers_current_result ... ok
+test request::tests::run_scoped_drops_result_when_superseded_before_dispatch ... ok
+test request::tests::same_id_different_scope_is_rejected ... ok
+test request::tests::same_slot_different_generation_rejects ... ok
+test request::tests::scoped_trackers_invalidate_applies_to_all_known_scopes ... ok
+test request::tests::scoped_trackers_reject_unknown_scope_and_reopened_instance ... ok
+test request::tests::scoped_trackers_serve_multiple_scopes_independently ... ok
+test request::tests::scoped_write_is_scoped_but_survives_new_reads ... ok
+test request::tests::scoped_write_survives_new_reads_but_dies_with_instance ... ok
+test request::tests::two_writes_both_complete_and_independent_reads_only_latest_applies ... ok
+test surface::tests::application_uses_navigation_completed_ready_policy ... ok
+test surface::tests::begin_create_refused_when_already_creating_or_ready ... ok
+test surface::tests::create_failure_is_retryable ... ok
+test surface::tests::destroyed_surface_rejects_further_events ... ok
+test surface::tests::first_ready_pushes_full_snapshot ... ok
+test surface::tests::hidden_before_ready_does_not_become_ready_on_resume ... ok
+test surface::tests::hidden_keeps_latest_state_and_resyncs_on_resume ... ok
+test surface::tests::locale_push_fires_on_language_change_even_if_shape_unchanged ... ok
+test surface::tests::ready_during_hidden_is_remembered_and_resumes_to_ready ... ok
+test surface::tests::rebuild_requires_a_new_snapshot_even_if_desired_unchanged ... ok
+test surface::tests::same_desired_is_deduped_after_sent ... ok
+test surface::tests::stale_generation_event_is_dropped ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/catalog.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/catalog-ccf8b4a7094a9770)
+
+running 7 tests
+test instance_generation_and_surface_slots_are_distinct ... ok
+test scope_id_stays_opaque_to_the_host ... ok
+test duplicate_ids_are_rejected_at_registration ... ok
+test unknown_historical_id_is_retained_for_migration ... ok
+test app_panel_id_is_mapped_from_a_validated_app_id ... ok
+test newer_schema_is_rejected_so_callers_do_not_overwrite ... ok
+test no_panel_single_panel_and_empty_rail_layouts_are_all_legal ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/request_routing.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/request_routing-371cc92301a2df59)
+
+running 7 tests
+test executor_drops_superseded_dispatch_and_keeps_writes ... ok
+test independent_env_envelopes_carry_identity ... ok
+test out_of_order_reads_only_apply_latest_per_key ... ok
+test reopened_panel_and_new_generation_reject_stale_results ... ok
+test same_id_different_scope_is_isolated ... ok
+test scoped_trackers_route_dual_lane_panel_by_scope ... ok
+test scoped_write_completes_regardless_of_concurrent_reads ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_desktop-f6a613c9cdd0ee34)
+
+running 99 tests
+test app_webview::tests::app_surface_ipc_maps_every_whitelisted_verb ... ok
+test dialog::tests::platform_support_matches_the_compiled_target ... ok
+test dialog::tests::geometry_is_shared ... ok
+test app_webview::tests::no_second_copy_of_the_navigation_policy ... ok
+test dialog::tests::controller_is_re_exported_and_works_through_the_desktop_path ... ok
+test app_webview::tests::build_app_child_pins_the_restrictive_settings ... ok
+test app_webview::tests::remove_app_data_store_gates_on_the_os_version ... ok
+test app_webview::tests::i18n_locale_must_be_pushed_post_navigation_not_via_init_script ... ok
+test focus::tests::handle_focus_tracks_real_focus_and_reports_close_only_on_real_loss ... ok
+test focus::tests::focus_transition_ignores_synthetic_false_and_closes_on_real_loss ... ok
+test focus::tests::focus_router_window_target_focuses_window ... ok
+test focus::tests::focus_router_falls_back_to_window_when_native_missing ... ok
+test focus::tests::focus_router_keeps_current_and_applies_pending_native ... ok
+test dialog::tests::rendering_failure_releases_the_partial_window_and_window_failure_skips_rendering ... ok
+test focus::tests::set_current_does_not_schedule_pending_focus ... ok
+test native_child::tests::create_always_applies_zoom_and_geometry ... ok
+test native_child::tests::hidden_destroys_and_unchanged_is_idle ... ok
+test native_child::tests::changing_url_never_shows_content_from_the_previous_loaded_document ... ok
+test native_child::tests::geometry_and_scale_changes_reuse_the_view ... ok
+test native_child::tests::hiding_a_loading_document_hides_its_parked_native_view ... ok
+test native_child::tests::nonce_navigation_parks_until_loaded_then_shows ... ok
+test native_child::tests::not_loaded_creation_parks_and_loaded_transition_restores_bounds ... ok
+test native_child::tests::navigation_requires_exact_unencoded_authority ... ok
+test native_child::tests::project_change_replaces_the_single_slot ... ok
+test native_child::tests::native_child_pins_the_restrictive_wry_settings ... ok
+test native_child::tests::review_trace_authority_is_supported_without_subdomains_credentials_or_ports ... ok
+test native_child::tests::showing_a_hidden_loading_document_keeps_it_parked_but_resumes_native_visibility ... ok
+test overlay::tests::centered_card_offset_centers_within_window ... ok
+test overlay::tests::centered_card_offset_zero_when_card_fills_window ... ok
+test overlay::tests::full_window_overlay_bounds_matches_main_window_exactly ... ok
+test overlay::tests::one_toast_anchors_bottom_right_of_main_window ... ok
+test overlay::tests::three_toasts_grow_upward_with_gaps ... ok
+test overlay::tests::toast_tiny_main_window_clamps_and_never_goes_zero ... ok
+test overlay::tests::toast_zero_count_is_treated_as_one_so_size_is_never_zero ... ok
+test overlay_gpu::ime_tests::a_disabled_input_method_gives_no_anchor ... ok
+test overlay_gpu::ime_tests::a_zero_width_cursor_gets_a_one_pixel_wide_anchor ... ok
+test overlay_gpu::ime_tests::an_enabled_input_method_anchors_the_candidate_bar_at_the_text_cursor ... ok
+test panel::tests::rect_maps_to_logical_wry_rect ... ok
+test shell::tests::lifecycle_routes_to_callbacks_then_update ... ok
+test shell::tests::product_message_reaches_update ... ok
+test dispatch::tests::run_scoped_with_tokio_executor_dispatches_current_result ... ok
+test dispatch::tests::tokio_executor_runs_blocking_task ... ok
+test shell::tests::surface_and_product_are_distinguishable ... ok
+test surface::geometry::tests::full_placement_subtracts_top_inset ... ok
+test surface::geometry::tests::left_split_takes_fraction_of_available_width ... ok
+test surface::geometry::tests::negative_dimensions_are_clamped ... ok
+test surface::geometry::tests::overlay_push_shrinks_top_and_restore_is_exact ... ok
+test surface::geometry::tests::split_is_clamped_to_unit_range ... ok
+test surface::geometry::tests::zero_or_tiny_window_yields_zero_area_not_negative ... ok
+test surface::lifecycle::tests::created_with_html_produces_create ... ok
+test surface::lifecycle::tests::created_without_html_has_no_side_effect ... ok
+test surface::lifecycle::tests::destroyed_produces_destroy ... ok
+test surface::lifecycle::tests::hidden_produces_hide_action ... ok
+test surface::lifecycle::tests::resumed_restores_bounds ... ok
+test surface::lifecycle::tests::stale_generation_has_no_action ... ok
+test surface::routing::tests::re_register_same_physical_slot_evicts_previous_generation ... ok
+test surface::routing::tests::registered_surface_routes_to_its_physical_slot ... ok
+test surface::routing::tests::stale_generation_is_reported_not_accepted ... ok
+test surface::routing::tests::unknown_surface_is_rejected ... ok
+test surface::routing::tests::unregister_removes_identity_and_slot ... ok
+test surface::tests::application_ready_policy_is_navigation_completed ... ok
+test surface::tests::app_i18n_snapshot_is_pushed_on_ready_and_repushed_on_rebuild ... ok
+test surface::tests::create_failure_is_retryable_through_executor ... ok
+test surface::tests::full_lifecycle_and_single_push ... ok
+test surface::tests::hidden_surface_does_not_push_and_resyncs_on_resume ... ok
+test surface::tests::late_unregister_of_old_id_does_not_drop_the_new_instance ... ok
+test surface::tests::push_backoff_is_bounded_and_resets_on_success ... ok
+test surface::tests::re_register_same_id_is_idempotent_reset ... ok
+test surface::tests::replacing_a_slot_evicts_the_old_ready_entry ... ok
+test surface::tests::stale_generation_is_rejected_by_router ... ok
+test surface::tests::unregister_removes_routing ... ok
+test web_child::apple::tests::the_edit_menu_is_appended_to_the_existing_main_menu_not_replacing_it ... ok
+test web_child::edit_menu::tests::every_item_targets_the_responder_chain_with_a_single_lowercase_key ... ok
+test web_child::apple::tests::the_proxy_can_only_ever_deny_media_capture ... ok
+test web_child::apple::tests::the_proxy_forwards_everything_else_and_is_kept_alive ... ok
+test web_child::edit_menu::tests::the_standard_edit_menu_has_the_four_editing_commands ... ok
+test web_child::apple::tests::the_find_shortcut_is_enabled_only_for_pool_views_and_its_target_is_kept_alive ... ok
+test web_child::plan::tests::a_generation_change_destroys_everything_then_recreates ... ok
+test web_child::plan::tests::a_navigation_that_never_starts_is_reported_as_stalled_once ... ok
+test web_child::plan::tests::a_new_navigation_restarts_the_clock_and_replaces_the_url ... ok
+test web_child::plan::tests::a_real_page_load_clears_the_pending_navigation_and_is_forwarded ... ok
+test web_child::plan::tests::a_started_navigation_is_never_reported ... ok
+test web_child::plan::tests::a_url_change_only_navigates_and_keeps_the_view ... ok
+test web_child::plan::tests::a_url_change_together_with_a_visibility_change_orders_hide_navigate_show ... ok
+test web_child::plan::tests::about_blank_is_forwarded_when_no_navigation_is_pending ... ok
+test web_child::plan::tests::an_empty_pool_creates_every_desired_tab_in_order ... ok
+test web_child::plan::tests::an_unchanged_pool_is_idle ... ok
+test web_child::plan::tests::closing_the_last_tab_leaves_exactly_one_blank_webview ... ok
+test web_child::plan::tests::duplicate_desired_ids_use_the_first_spec_and_never_create_twice ... ok
+test web_child::plan::tests::forgetting_a_tab_drops_its_pending_navigation ... ok
+test web_child::plan::tests::switching_the_active_tab_hides_the_old_one_before_showing_the_new_one ... ok
+test web_child::plan::tests::tabs_stall_independently_and_are_reported_in_id_order ... ok
+test web_child::plan::tests::tabs_that_disappear_are_destroyed_first ... ok
+test web_child::plan::tests::the_initial_blank_document_does_not_clear_a_pending_navigation ... ok
+test web_child::plan::tests::planning_always_converges_to_the_desired_state ... ok
+test wry_common::tests::apply_restricted_reverses_the_unsafe_wry_defaults ... ok
+test web_child::plan::tests::wry_target_encodes_allowed_urls_and_blocks_the_rest ... ok
+test wry_common::tests::every_restricted_executor_goes_through_apply_restricted ... ok
+test web_child::pool::tests::web_child_pins_untrusted_content_settings ... ok
+
+test result: ok. 99 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/layout_compat.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/layout_compat-fc19a7a6fa7eb9b7)
+
+running 8 tests
+test non_object_legacy_is_rejected ... ok
+test newer_schema_version_is_rejected ... ok
+test empty_and_single_rail_legacy_is_legal ... ok
+test unknown_tokens_are_retained_not_dropped ... ok
+test legacy_rails_translate_to_stable_ids ... ok
+test unknown_valid_ids_go_to_retained_unknown_via_catalog ... ok
+test migrate_file_missing_or_corrupt_yields_none ... ok
+test atomic_save_writes_and_backs_up_once ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/product_contract.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/product_contract-7efa670be16e0c6b)
+
+running 3 tests
+test business_message_variants_do_not_enter_host_enum ... ok
+test two_products_instance_same_host_interface ... ok
+test two_service_contexts_run_through_same_executor_abstraction ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/surface_lifecycle.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/surface_lifecycle-6661a78b6e184eae)
+
+running 8 tests
+test geometry_feeds_bounds_into_lifecycle ... ok
+test builtin_and_application_use_different_ready_policies ... ok
+test stale_generation_ready_and_ipc_are_rejected ... ok
+test destroy_unregisters_routing ... ok
+test rebuild_requires_a_new_snapshot ... ok
+test hidden_caches_latest_and_resume_syncs ... ok
+test create_failure_is_retryable ... ok
+test first_ready_pushes_full_snapshot_then_dedupes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_git_accounts-50e12edf5a8e7595)
+
+running 32 tests
+test model::tests::secret_token_debug_is_redacted_and_drop_clears ... ok
+test providers::tests::gitee_uses_query_token ... ok
+test model::tests::accounts_state_routes_by_provider ... ok
+test providers::tests::github_uses_bearer_header ... ok
+test providers::tests::gitlab_uses_private_token_header ... ok
+test model::tests::provider_keys_are_stable ... ok
+test providers::tests::repo_list_skips_dirty_items_and_rejects_non_arrays ... ok
+test providers::tests::parse_repo_list_per_provider ... ok
+test providers::tests::extract_username_reads_login ... ok
+test model::tests::legacy_json_shape_round_trips ... ok
+test providers::tests::debug_and_error_redaction_never_expose_tokens ... ok
+test service::tests::connect_validates_then_persists ... ok
+test service::tests::cancelled_request_never_writes_credentials_or_metadata ... ok
+test service::tests::repo_list_parses_provider_shape ... ok
+test service::tests::repo_list_rejects_expired_token ... ok
+test service::tests::request_ledger_accepts_only_the_latest_ticket ... ok
+test service::tests::invalid_token_never_writes_credentials ... ok
+test service::tests::metadata_failure_is_a_visible_partial_commit ... ok
+test service::tests::disconnect_removes_credential_and_metadata ... ok
+test service::tests::credential_without_metadata_is_visible_and_can_be_disconnected_after_reopening ... ok
+test service::tests::cancelling_during_the_network_phase_never_starts_persisting ... ok
+test service::tests::query_drops_metadata_without_credentials ... ok
+test service::tests::disconnect_of_unknown_account_is_idempotent ... ok
+test service::tests::superseded_request_cannot_overwrite_the_newer_connection ... ok
+test service::tests::unused_http_response_helper_is_available ... ok
+test stores::tests::memory_credential_store_round_trips_and_deletes ... ok
+test stores::tests::json_metadata_corrupt_file_is_reported_not_silently_reset ... ok
+test stores::tests::json_metadata_missing_file_is_empty_and_round_trips ... ok
+test service::tests::concurrent_connects_to_two_providers_keep_both_accounts ... ok
+test stores::tests::failed_publish_keeps_the_previous_file_intact ... ok
+test service::tests::a_provider_commit_finishes_before_its_newer_request_can_write ... ok
+test stores::tests::concurrent_json_updates_keep_every_provider ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_panel-2bd0c7a72b32f181)
+
+running 103 tests
+test host::tests::a_disconnected_host_keeps_polling_until_the_daemon_answers ... ok
+test host::tests::a_disconnected_panel_with_no_known_apps_says_so_instead_of_claiming_the_app_is_gone ... ok
+test host::tests::a_change_triggers_exactly_one_refetch_even_in_a_storm ... ok
+test host::tests::a_failed_launch_notices_once_and_is_not_retried_until_the_panel_is_shown_again ... ok
+test host::tests::a_late_logs_result_after_hiding_does_not_reopen_the_viewer ... ok
+test host::tests::a_failed_action_notices_with_the_verb_and_still_refreshes ... ok
+test host::tests::a_failed_app_with_a_runtime_issue_shows_the_issue_page_not_the_crash_page ... ok
+test host::tests::a_launch_url_that_arrives_after_the_app_stopped_is_dropped ... ok
+test host::tests::a_late_logs_result_after_the_app_recovered_is_dropped_not_kept_stale ... ok
+test host::tests::a_live_subscription_slows_polling_to_the_safety_interval ... ok
+test host::tests::a_log_viewer_whose_panel_is_not_visible_is_not_refreshed ... ok
+test host::tests::a_recovered_subscription_starts_the_backoff_over ... ok
+test host::tests::a_running_app_whose_panel_is_not_visible_is_not_opened ... ok
+test host::tests::a_single_blip_is_not_announced_either_way ... ok
+test host::tests::a_subscription_that_never_became_live_does_not_announce_a_loss ... ok
+test host::tests::a_transport_failure_keeps_the_known_apps_and_stays_quiet ... ok
+test host::tests::a_version_change_while_still_running_reloads_the_panel ... ok
+test host::tests::a_visible_running_app_gets_exactly_one_launch_url_fetch ... ok
+test host::tests::actions_on_unknown_apps_are_ignored ... ok
+test host::tests::an_app_id_the_key_cannot_map_is_skipped_from_the_order ... ok
+test host::tests::an_open_log_viewer_is_refreshed_on_tick_and_closed_ones_are_not ... ok
+test host::tests::an_app_that_stops_or_disappears_loses_its_address ... ok
+test host::tests::an_unavailable_host_is_a_persistent_panel_state_not_a_notice ... ok
+test host::tests::dozerd_restart_is_recovered ... ok
+test host::tests::issue_texts_cover_missing_and_version_mismatch ... ok
+test host::tests::logs_are_hidden_again_when_the_app_leaves_the_failed_state ... ok
+test host::tests::logs_failure_is_kept_in_place_not_a_notice ... ok
+test host::tests::losing_the_subscription_goes_back_to_fast_polling_and_retries_with_backoff ... ok
+test host::tests::open_runtime_settings_emits_exactly_one_effect ... ok
+test host::tests::refresh_fetches_the_list_unless_one_is_already_in_flight ... ok
+test host::tests::resubscribe_backoff_escalates_through_the_real_retry_flow ... ok
+test host::tests::resubscribing_after_an_announced_loss_announces_restored_once_and_resets ... ok
+test host::tests::retry_from_the_issue_page_starts_the_app ... ok
+test host::tests::showing_logs_fetches_once_and_stores_the_result ... ok
+test host::tests::showing_the_panel_discards_the_old_address_so_a_fresh_one_is_fetched ... ok
+test host::tests::start_and_stop_are_deduplicated_and_refresh_the_list_when_done ... ok
+test host::tests::subscribe_is_requested_once_until_it_resolves ... ok
+test host::tests::the_first_list_syncs_even_if_an_unavailable_answer_came_first ... ok
+test host::tests::the_first_successful_list_always_syncs_the_rail_even_when_empty ... ok
+test host::tests::the_first_poll_is_due_and_later_ones_only_while_an_app_panel_is_visible ... ok
+test host::tests::the_rail_is_synced_when_the_installed_set_changes_and_not_otherwise ... ok
+test host::tests::the_same_version_keeps_the_address ... ok
+test host::tests::the_second_consecutive_loss_of_a_live_subscription_announces_connection_lost_once ... ok
+test host::tests::the_view_model_covers_every_observed_state ... ok
+test host::tests::two_visible_app_panels_each_get_their_launch_url_fetch ... ok
+test install::tests::a_failed_rollback_notices_the_conflict_text_and_still_refreshes ... ok
+test install::tests::a_finished_job_notices_once_and_a_failed_one_notices_its_reason_once ... ok
+test install::tests::a_bad_sha256_blocks_the_url_plan_with_an_inline_hint ... ok
+test install::tests::a_failed_install_is_shown_in_the_flow_and_does_not_touch_the_host ... ok
+test install::tests::a_finished_uninstall_clears_dedup_and_refreshes ... ok
+test install::tests::a_plan_failure_stays_in_the_flow_not_a_notice ... ok
+test install::tests::a_rejected_plan_stays_inside_the_flow_as_an_inline_failure ... ok
+test install::tests::a_rejected_url_plan_stays_inline_and_keeps_input_then_archive_retries ... ok
+test install::tests::a_second_url_plan_click_while_in_flight_is_ignored ... ok
+test install::tests::a_source_picked_outside_the_picking_step_is_ignored ... ok
+test install::tests::a_successful_install_notices_refreshes_and_tells_the_host ... ok
+test install::tests::a_tick_without_an_open_viewer_does_nothing ... ok
+test install::tests::an_installed_managed_version_offers_uninstall_with_the_warning ... ok
+test install::tests::approve_outside_reviewing_does_nothing ... ok
+test install::tests::approving_is_only_possible_while_reviewing ... ok
+test install::tests::approving_sends_back_exactly_the_plan_that_was_shown_and_starts_polling ... ok
+test install::tests::approving_sends_exactly_the_plan_that_was_shown ... ok
+test install::tests::clicking_install_plans_then_reviewing_shows_every_download_with_its_checksum ... ok
+test install::tests::dismissing_reviews_cancels_but_in_flight_steps_cannot_be_cancelled ... ok
+test install::tests::docker_never_offers_install ... ok
+test install::tests::escape_dismisses_an_inner_confirmation_without_triggering_its_action ... ok
+test install::tests::hiding_logs_closes_the_open_viewer ... ok
+test install::tests::load_failures_are_kept_as_text_not_raised ... ok
+test install::tests::observed_labels_cover_every_state ... ok
+test install::tests::only_install_and_action_results_are_handled_without_a_window ... ok
+test install::tests::opening_the_page_probes_runtimes_and_lists_apps ... ok
+test install::tests::only_one_tick_is_ever_armed_until_it_fires ... ok
+test install::tests::poll_probes_outside_the_settings_window_does_nothing_bad ... ok
+test install::tests::polling_continues_only_while_a_job_is_unfinished_and_stops_after ... ok
+test install::tests::results_that_arrive_after_the_settings_window_closed_still_refresh_the_host_and_notice ... ok
+test install::tests::rollback_click_is_ignored_when_there_is_no_previous_version ... ok
+test install::tests::rollback_goes_through_an_inline_confirmation_then_fires_the_effect ... ok
+test install::tests::rollback_note_labels_automatic_and_manual_differently ... ok
+test install::tests::runtime_lines_distinguish_available_unavailable_and_missing ... ok
+test install::tests::runtime_rows_show_progress_percent_or_megabytes ... ok
+test install::tests::sha256_input_shows_an_inline_format_hint_only ... ok
+test install::tests::showing_logs_asks_for_the_shared_fetch_line_budget ... ok
+test install::tests::showing_logs_fetches_once_and_only_one_viewer_is_open ... ok
+test install::tests::stop_is_deduplicated_and_always_refreshes_with_a_notice_only_on_failure ... ok
+test install::tests::switching_source_keeps_typed_input_but_clears_a_stale_plan ... ok
+test install::tests::the_install_flow_goes_pick_plan_review_and_cancelling_the_picker_returns_to_idle ... ok
+test install::tests::the_plan_view_marks_a_missing_enforcement_entry_as_unknown_and_shows_upgrades ... ok
+test install::tests::the_plan_view_shows_every_requested_change_with_its_real_enforcement ... ok
+test install::tests::the_provenance_fact_is_a_channel_label_and_never_says_directory ... ok
+test install::tests::the_review_card_discloses_each_source_shape ... ok
+test install::tests::uninstall_asks_which_mode_first_and_can_be_cancelled ... ok
+test install::tests::uninstall_confirmation_is_ignored_outside_its_step ... ok
+test install::tests::unloading_an_app_closes_its_log_viewer ... ok
+test install::tests::url_plan_clicked_validates_locally_without_sending_an_effect ... ok
+test logs::tests::a_late_result_after_hiding_is_dropped ... ok
+test logs::tests::a_refresh_failure_keeps_the_old_text_but_first_failure_is_failed ... ok
+test logs::tests::identical_results_leave_the_view_unchanged ... ok
+test logs::tests::loaded_then_tick_refreshes_after_the_interval_and_keeps_old_text ... ok
+test logs::tests::new_content_asks_to_scroll_to_bottom_while_following ... ok
+test logs::tests::re_expanding_restarts_following ... ok
+test logs::tests::reset_drops_old_content_and_refetches_on_next_show ... ok
+test logs::tests::scrolling_up_stops_auto_follow_until_back_at_the_bottom ... ok
+test logs::tests::show_fetches_once_and_enters_loading ... ok
+
+test result: ok. 103 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_settings-e4761f05f6043000)
+
+running 49 tests
+test dialog::tests::close_before_creation_completes_destroys_late_window ... ok
+test dialog::tests::close_is_idempotent_and_waits_for_closed ... ok
+test dialog::tests::default_geometry_matches_the_shared_spec ... ok
+test dialog::tests::destroy_timeout_forces_closed ... ok
+test dialog::tests::duplicate_opened_for_another_window_is_destroyed ... ok
+test dialog::tests::failure_is_visible_and_retry_increments_attempt_in_the_same_session ... ok
+test dialog::tests::failed_close_returns_to_closed_without_effects ... ok
+test dialog::tests::first_open_creates_and_repeat_open_only_activates ... ok
+test dialog::tests::invalid_geometry_configuration_is_sanitized ... ok
+test dialog::tests::parent_close_always_reaches_closed_and_destroys_known_window ... ok
+test dialog::tests::large_parent_keeps_fractions ... ok
+test dialog::tests::small_parent_clamps_card_inside_margins ... ok
+test dialog::tests::reopen_during_closing_waits_for_destroy_then_starts_a_new_session ... ok
+test dialog::tests::stale_open_and_failure_do_not_touch_current_session ... ok
+test dialog::tests::tiny_parent_never_produces_negative_or_zero_sizes ... ok
+test git::tests::blank_token_and_connected_rows_cannot_connect ... ok
+test git::tests::cancel_clears_input_and_invalidates_in_flight_request ... ok
+test git::tests::close_clears_sensitive_input_and_freezes_results ... ok
+test git::tests::connect_flow_clears_sensitive_input_and_sets_account ... ok
+test git::tests::disconnect_flow_removes_account ... ok
+test git::tests::partial_metadata_warning_is_visible_after_connect ... ok
+test git::tests::query_is_owner_scoped_and_ignores_late_results ... ok
+test git::tests::reopened_partial_commit_is_recoverable_and_disconnect_is_not_disabled ... ok
+test git::tests::stale_requests_cannot_modify_new_state ... ok
+test page::tests::accepts_product_and_builtin_ids ... ok
+test page::tests::rejects_empty_and_malformed_ids ... ok
+test page::tests::reserved_namespace_is_detected ... ok
+test registry::tests::alias_maps_a_legacy_entry_to_the_real_page_without_adding_nav_entries ... ok
+test page::tests::serde_round_trip_revalidates ... ok
+test registry::tests::aliases_reject_collisions_and_missing_targets ... ok
+test registry::tests::builtin_ids_must_match_their_kind ... ok
+test registry::tests::git_is_a_known_builtin_page ... ok
+test registry::tests::default_and_fallback_prefer_theme_then_first ... ok
+test registry::tests::known_builtin_cannot_be_registered_as_custom ... ok
+test registry::tests::preserves_registration_order_and_looks_pages_up ... ok
+test registry::tests::products_cannot_use_the_reserved_namespace ... ok
+test registry::tests::rejects_duplicate_ids ... ok
+test selection::tests::applied_clears_pending_and_updates_confirmed ... ok
+test selection::tests::conflict_adopts_the_server_value_and_clears_pending ... ok
+test selection::tests::external_confirmation_does_not_touch_pending_or_status ... ok
+test selection::tests::failure_keeps_pending_for_retry ... ok
+test selection::tests::selecting_enters_saving_and_ignores_repeats ... ok
+test selection::tests::unsupported_blocks_further_selection ... ok
+test state::tests::closed_state_ignores_registry_updates_and_selection ... ok
+test state::tests::empty_registry_opens_with_an_empty_selection ... ok
+test state::tests::removing_the_selected_page_falls_back_without_closing ... ok
+test state::tests::repeated_open_does_not_bump_the_generation ... ok
+test state::tests::select_rejects_unknown_pages_and_no_ops_on_the_current_page ... ok
+test state::tests::unknown_target_falls_back_to_theme_then_first ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_settings_ui-2884d31147664461)
+
+running 7 tests
+test apps::rows::tests::a_running_app_with_a_previous_version_offers_stop_rollback_logs_uninstall_in_order ... ok
+test apps::rows::tests::installable_runtime_without_a_managed_version_offers_install ... ok
+test apps::rows::tests::acting_apps_show_no_actions ... ok
+test apps::rows::tests::uninstalling_versions_show_processing_without_a_button ... ok
+test text::tests::builtin_resolver_prefers_the_shared_table_then_the_fallback ... ok
+test apps::rows::tests::transient_apps_cannot_be_uninstalled ... ok
+test text::tests::injected_resolver_receives_the_english_fallback ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_webview-a73c52850200fc58)
+
+running 30 tests
+test browse::tests::leading_and_trailing_whitespace_is_rejected ... ok
+test browse::tests::control_characters_and_backslashes_are_rejected_before_parsing ... ok
+test browse::tests::unparsable_input_is_returned_unchanged ... ok
+test i18n::tests::bridge_is_only_installed_when_locale_is_not_none ... ok
+test browse::tests::encoding_never_changes_the_navigation_verdict ... ok
+test i18n::tests::init_script_installs_readonly_bridge_skeleton ... ok
+test i18n::tests::snapshot_serializes_to_a_stable_wire_shape ... ok
+test browse::tests::browse_navigation_rejects_everything_else ... ok
+test i18n::tests::set_script_injects_json_not_concatenated_locale ... ok
+test browse::tests::new_tab_requests_use_the_same_policy ... ok
+test browse::tests::browse_navigation_allows_only_the_listed_schemes ... ok
+test browse::tests::encoding_is_idempotent ... ok
+test i18n::tests::app_locale_is_negotiated_exactly_supported_else_default ... ok
+test browse::tests::urls_are_percent_encoded_before_reaching_wry ... ok
+test tests::a_failed_removal_is_retried_after_a_delay_and_then_given_up_on ... ok
+test tests::init_script_with_i18n_bridge_installs_skeleton_but_no_locale_value ... ok
+test tests::nonces_are_unguessable_and_safe_to_embed_in_a_script ... ok
+test tests::retrying_an_unknown_removal_does_nothing ... ok
+test tests::origin_is_parsed_only_from_the_gateway_shaped_address ... ok
+test tests::navigation_stays_inside_the_apps_own_origin ... ok
+test tests::ipc_messages_need_the_per_webview_nonce_and_a_known_verb ... ok
+test tests::store_removal_is_only_attempted_on_macos_14_and_later ... ok
+test tests::store_removal_only_releases_apps_that_are_ready_and_keeps_the_rest_queued ... ok
+test tests::store_removal_waits_until_the_apps_webview_has_left_the_pool ... ok
+test tests::the_app_id_is_the_host_without_the_localhost_suffix ... ok
+test tests::the_data_store_identifier_is_stable_and_per_app ... ok
+test tests::the_init_script_binds_post_message_first_and_forwards_only_trusted_events ... ok
+test tests::valid_app_id_matches_appid_new ... ok
+test browse::tests::very_long_urls_are_judged_by_shape_not_length ... ok
+test i18n::tests::bridge_script_enforces_revision_and_isolation_under_node ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests bytehost_apps
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_chrome
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_git_accounts
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_panel
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_settings
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_settings_ui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bytehost_webview
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

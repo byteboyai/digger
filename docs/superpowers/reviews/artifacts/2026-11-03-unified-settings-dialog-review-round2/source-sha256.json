@@ -1,0 +1,10 @@
+{
+  "crates/desktop/src/product.rs": "edf148eb64caddb9227c75c0942a8b0f656ee62cb2a7c1cb01097ae4bb37563d",
+  "crates/desktop/src/settings/mod.rs": "352d6c9c1cbdbeb671649c985eaeba52af52c02f11cc9a4c8bb1a19922d50e5a",
+  "../bytehost/crates/bytehost-git-accounts/src/service.rs": "8ad9d82ddc4801d0e0f93b0bfcea0abfaff11dc3f974e6bf9f17675139a159c5",
+  "../bytehost/crates/bytehost-git-accounts/src/stores.rs": "9d5b01b48fce81070756e223f4560d806e82acfd2fb13f999eb27ae04159c6fc",
+  "../bytehost/crates/bytehost-desktop/src/dialog.rs": "5235cad2f5f36d7bdc99516e5b62d03073a5e3fce519e2943769fa36a89640bf",
+  "../dozer/crates/dozer-app/src/platform/settings_overlay.rs": "15ff809365c2a8c37727b8777ceba07943f05cb7b107c11f2000d117d8e6c86e",
+  "Cargo.toml": "ba0c3e943785b234d4aec2f7608d586fda3474017bd0a5758094ff2761898ec5",
+  "Cargo.lock": "c2c892217e87884e9ef8abf0231c9420407f9857dba84480081fe68e283ff349"
+}

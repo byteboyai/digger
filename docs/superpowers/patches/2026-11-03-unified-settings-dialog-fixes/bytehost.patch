@@ -1,0 +1,667 @@
+--- a/crates/bytehost-desktop/src/dialog.rs
++++ b/crates/bytehost-desktop/src/dialog.rs
+@@ -60,6 +60,18 @@
+ 
+ impl std::error::Error for DialogBindingError {}
+ 
++/// Build native and rendering resources as one recoverable operation. If rendering
++/// fails, the partially-created native window is dropped before returning the error.
++/// Factories are injectable so the production rollback path can be tested headlessly.
++pub fn try_create_dialog_resources<W, G>(
++    create_window: impl FnOnce() -> Result<W, String>,
++    create_renderer: impl FnOnce(&W) -> Result<G, String>,
++) -> Result<(W, G), String> {
++    let window = create_window()?;
++    let renderer = create_renderer(&window)?;
++    Ok((window, renderer))
++}
++
+ /// 当前平台是否支持父所属对话框。
+ pub const fn supported() -> bool {
+     cfg!(target_os = "macos")
+@@ -255,4 +267,31 @@
+         let rect = DialogGeometry::default().card_rect(LogicalSize::new(1200.0, 800.0));
+         assert_eq!(rect.width, 560.0);
+     }
+-}
++    #[test]
++    fn rendering_failure_releases_the_partial_window_and_window_failure_skips_rendering() {
++        use std::sync::{
++            Arc,
++            atomic::{AtomicUsize, Ordering},
++        };
++        struct WindowResource(Arc<AtomicUsize>);
++        impl Drop for WindowResource {
++            fn drop(&mut self) {
++                self.0.fetch_add(1, Ordering::SeqCst);
++            }
++        }
++        let dropped = Arc::new(AtomicUsize::new(0));
++        let result = try_create_dialog_resources(
++            || Ok(WindowResource(dropped.clone())),
++            |_| Err::<(), _>("synthetic surface failure".into()),
++        );
++        assert!(result.is_err());
++        assert_eq!(dropped.load(Ordering::SeqCst), 1);
++        let result = try_create_dialog_resources(
++            || Err::<WindowResource, _>("synthetic window failure".into()),
++            |_| -> Result<(), String> {
++                panic!("renderer must not run when window creation failed")
++            },
++        );
++        assert!(result.is_err());
++    }
++}
+--- a/crates/bytehost-desktop/src/overlay.rs
++++ b/crates/bytehost-desktop/src/overlay.rs
+@@ -118,11 +118,37 @@
+     el: &ActiveEventLoop,
+     active: bool,
+ ) -> Arc<Window> {
++    try_build_child_window(main_window, pos, size, title, el, active)
++        .expect("create overlay window")
++}
++
++/// Recoverable variant for dialog drivers. A failed create never leaves a window behind.
++pub fn try_open_child_window(
++    main_window: &Window,
++    pos: PhysicalPosition<i32>,
++    size: PhysicalSize<u32>,
++    title: &str,
++    el: &ActiveEventLoop,
++) -> Result<Arc<Window>, String> {
++    let window = try_build_child_window(main_window, pos, size, title, el, true)?;
++    enable_overlay_mouse_moved_events(&window);
++    window.focus_window();
++    Ok(window)
++}
++
++fn try_build_child_window(
++    main_window: &Window,
++    pos: PhysicalPosition<i32>,
++    size: PhysicalSize<u32>,
++    title: &str,
++    el: &ActiveEventLoop,
++    active: bool,
++) -> Result<Arc<Window>, String> {
+     use winit::raw_window_handle::HasWindowHandle;
+ 
+     let parent_handle = main_window
+         .window_handle()
+-        .expect("main window handle")
++        .map_err(|error| format!("main window handle: {error}"))?
+         .as_raw();
+     let attrs = Window::default_attributes()
+         .with_title(title)
+@@ -134,7 +160,9 @@
+     // Safety: `parent_handle` 取自仍存活的主窗口(`Ready` 持有的 `Arc<Window>`),
+     // 本函数返回前主窗口不会被 drop。
+     let attrs = unsafe { attrs.with_parent_window(Some(parent_handle)) };
+-    Arc::new(el.create_window(attrs).expect("create overlay window"))
++    el.create_window(attrs)
++        .map(Arc::new)
++        .map_err(|error| format!("create overlay window: {error}"))
+ }
+ 
+ /// 非模态提示窗口(Toast)用:建窗**不聚焦**(winit macOS 上 `with_active(false)`
+--- a/crates/bytehost-desktop/src/overlay_gpu.rs
++++ b/crates/bytehost-desktop/src/overlay_gpu.rs
+@@ -87,6 +87,7 @@
+     pub cache: user_interface::Cache,
+     pub viewport: Viewport,
+     pub clipboard: Clipboard,
++    ime_composing: std::cell::Cell<bool>,
+ }
+ 
+ impl OverlayGpu {
+@@ -101,9 +102,22 @@
+         size: winit::dpi::PhysicalSize<u32>,
+         scale: f64,
+     ) -> OverlayGpu {
++        Self::try_open(window, instance, adapter, device, queue, size, scale)
++            .expect("create overlay GPU")
++    }
++
++    pub fn try_open(
++        window: &Arc<Window>,
++        instance: &wgpu::Instance,
++        adapter: &wgpu::Adapter,
++        device: &wgpu::Device,
++        queue: &wgpu::Queue,
++        size: winit::dpi::PhysicalSize<u32>,
++        scale: f64,
++    ) -> Result<OverlayGpu, String> {
+         let surface = instance
+             .create_surface(window.clone())
+-            .expect("create overlay surface");
++            .map_err(|error| format!("create overlay surface: {error}"))?;
+         let capabilities = surface.get_capabilities(adapter);
+         let format = capabilities
+             .formats
+@@ -111,7 +125,13 @@
+             .copied()
+             .find(wgpu::TextureFormat::is_srgb)
+             .or_else(|| capabilities.formats.first().copied())
+-            .expect("get overlay surface format");
++            .ok_or_else(|| "no compatible overlay surface format".to_owned())?;
++        if !capabilities
++            .alpha_modes
++            .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
++        {
++            return Err("overlay surface does not support transparent composition".into());
++        }
+         surface.configure(
+             device,
+             &wgpu::SurfaceConfiguration {
+@@ -144,14 +164,15 @@
+             Viewport::with_physical_size(Size::new(size.width, size.height), scale as f32);
+         let clipboard = Clipboard::connect(window.clone());
+ 
+-        OverlayGpu {
++        Ok(OverlayGpu {
+             surface,
+             format,
+             renderer,
+             cache: user_interface::Cache::new(),
+             viewport,
+             clipboard,
+-        }
++            ime_composing: std::cell::Cell::new(false),
++        })
+     }
+ 
+     /// resize 后重配置 surface + viewport(不重建 `Engine`/`Renderer`)。
+@@ -255,6 +276,21 @@
+         content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
+         iced_event: Event,
+     ) -> Vec<Message> {
++        self.dispatch_with_status(window, cursor, content, iced_event)
++            .0
++    }
++
++    pub fn is_composing(&self) -> bool {
++        self.ime_composing.get()
++    }
++
++    pub fn dispatch_with_status<Message>(
++        &mut self,
++        window: &Window,
++        cursor: mouse::Cursor,
++        content: Element<'_, Message, iced_widget::Theme, iced_renderer::Renderer>,
++        iced_event: Event,
++    ) -> (Vec<Message>, iced_winit::core::event::Status) {
+         let events: [Event; 1] = [iced_event];
+         let mut interface = UserInterface::build(
+             content,
+@@ -263,7 +299,7 @@
+             &mut self.renderer,
+         );
+         let mut messages = Vec::new();
+-        let (state, _) = interface.update(
++        let (state, statuses) = interface.update(
+             &events,
+             cursor,
+             &mut self.renderer,
+@@ -281,7 +317,11 @@
+         }
+         self.cache = interface.into_cache();
+         window.request_redraw();
+-        messages
++        let status = statuses
++            .first()
++            .copied()
++            .unwrap_or(iced_winit::core::event::Status::Ignored);
++        (messages, status)
+     }
+ 
+     /// `handle_input` 开头"追踪 modifiers/cursor、把 winit 事件转换成 iced 事件"
+@@ -294,6 +334,15 @@
+         modifiers: &mut ModifiersState,
+         event: &WindowEvent,
+     ) -> Option<Event> {
++        match event {
++            WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
++                self.ime_composing.set(!text.is_empty())
++            }
++            WindowEvent::Ime(winit::event::Ime::Commit(_) | winit::event::Ime::Disabled) => {
++                self.ime_composing.set(false)
++            }
++            _ => {}
++        }
+         if let WindowEvent::ModifiersChanged(new_modifiers) = event {
+             *modifiers = new_modifiers.state();
+         }
+--- a/crates/bytehost-git-accounts/src/model.rs
++++ b/crates/bytehost-git-accounts/src/model.rs
+@@ -245,6 +245,9 @@
+     pub accounts: GitAccountsState,
+     /// 元数据里存在、但凭据已缺失而被校正掉的 provider。
+     pub stale_providers: Vec<GitProvider>,
++    /// Credential exists, but metadata is absent. Expose recovery / disconnect,
++    /// never report this persisted fact as an unconnected account.
++    pub unreconciled_providers: Vec<GitProvider>,
+ }
+ 
+ #[cfg(test)]
+--- a/crates/bytehost-git-accounts/src/service.rs
++++ b/crates/bytehost-git-accounts/src/service.rs
+@@ -32,11 +32,36 @@
+ pub struct Admission {
+     latest: Mutex<HashMap<GitProvider, (u64, u64)>>,
+     cancelled: Mutex<HashSet<(u64, u64)>>,
++    // Shared by every service instance for this product. Cancellation stays cheap;
++    // durable mutations for one provider finish in order, including Keychain I/O.
++    commit_locks: [Mutex<()>; 3],
+ }
+ 
+ impl Admission {
+     pub fn new() -> Self {
+         Self::default()
++    }
++
++    fn begin_commit(
++        &self,
++        provider: GitProvider,
++        ticket: Option<RequestTicket>,
++    ) -> Result<std::sync::MutexGuard<'_, ()>, GitAccountError> {
++        let slot = match provider {
++            GitProvider::GitHub => 0,
++            GitProvider::GitLab => 1,
++            GitProvider::Gitee => 2,
++        };
++        let guard = self.commit_locks[slot]
++            .lock()
++            .expect("provider commit lock");
++        // Recheck after waiting: an obsolete queued request must never start I/O.
++        if let Some(ticket) = ticket
++            && (ticket.provider != provider || !self.admit(ticket))
++        {
++            return Err(GitAccountError::StaleRequest);
++        }
++        Ok(guard)
+     }
+ 
+     /// 登记请求为当前最新;必须在派生异步任务之前调用。
+@@ -208,11 +233,7 @@
+     ) -> Result<(ConnectedAccount, CommitOutcome), GitAccountError> {
+         let account = self.validate_token(provider, token).await?;
+ 
+-        if let Some(ticket) = ticket
+-            && !self.admission.admit(ticket)
+-        {
+-            return Err(GitAccountError::StaleRequest);
+-        }
++        let _commit = self.admission.begin_commit(provider, ticket)?;
+ 
+         self.credentials.set(provider, token)?;
+ 
+@@ -235,21 +256,26 @@
+     pub fn query(&self) -> Result<AccountSnapshot, GitAccountError> {
+         let mut accounts = self.metadata.load()?;
+         let mut stale_providers = Vec::new();
++        let mut unreconciled_providers = Vec::new();
+         for provider in GitProvider::ALL {
+-            if accounts.get(provider).is_none() {
+-                continue;
+-            }
++            // Keychain may have committed while metadata did not. Inspect all
++            // providers, including the ones missing from the metadata snapshot.
+             match self.credentials.get(provider)? {
++                Some(_) if accounts.get(provider).is_none() => {
++                    unreconciled_providers.push(provider)
++                }
+                 Some(_) => {}
+-                None => {
++                None if accounts.get(provider).is_some() => {
+                     accounts.set(provider, None);
+                     stale_providers.push(provider);
+                 }
++                None => {}
+             }
+         }
+         Ok(AccountSnapshot {
+             accounts,
+             stale_providers,
++            unreconciled_providers,
+         })
+     }
+ 
+@@ -269,11 +295,7 @@
+         provider: GitProvider,
+         ticket: Option<RequestTicket>,
+     ) -> Result<CommitOutcome, GitAccountError> {
+-        if let Some(ticket) = ticket
+-            && !self.admission.admit(ticket)
+-        {
+-            return Err(GitAccountError::StaleRequest);
+-        }
++        let _commit = self.admission.begin_commit(provider, ticket)?;
+         self.credentials.delete(provider)?;
+ 
+         let mut outcome = CommitOutcome {
+@@ -707,4 +729,138 @@
+             .is_success()
+         );
+     }
++    #[test]
++    fn a_provider_commit_finishes_before_its_newer_request_can_write() {
++        use std::sync::{Arc, Mutex};
++        struct HeldCredentials {
++            values: Mutex<Option<SecretToken>>,
++            entered: std::sync::mpsc::Sender<()>,
++            release: Mutex<std::sync::mpsc::Receiver<()>>,
++        }
++        impl CredentialStore for Arc<HeldCredentials> {
++            fn get(&self, _: GitProvider) -> Result<Option<SecretToken>, GitAccountError> {
++                Ok(self.values.lock().unwrap().clone())
++            }
++            fn set(&self, _: GitProvider, token: &SecretToken) -> Result<(), GitAccountError> {
++                if token.expose() == "SYNTHETIC-OLD" {
++                    self.entered.send(()).unwrap();
++                    self.release.lock().unwrap().recv().unwrap();
++                }
++                *self.values.lock().unwrap() = Some(token.clone());
++                Ok(())
++            }
++            fn delete(&self, _: GitProvider) -> Result<(), GitAccountError> {
++                *self.values.lock().unwrap() = None;
++                Ok(())
++            }
++        }
++        let (entered, waiting) = std::sync::mpsc::channel();
++        let (release, resume) = std::sync::mpsc::channel();
++        let credentials = Arc::new(HeldCredentials {
++            values: Mutex::new(None),
++            entered,
++            release: Mutex::new(resume),
++        });
++        let dir = tempfile::tempdir().unwrap();
++        let metadata_path = dir.path().join("accounts.json");
++        let admission = Arc::new(Admission::new());
++        let old = RequestTicket {
++            owner: 1,
++            provider: GitProvider::GitHub,
++            seq: 1,
++        };
++        admission.register(old);
++        let c = credentials.clone();
++        let a = admission.clone();
++        let old_path = metadata_path.clone();
++        let old_thread = std::thread::spawn(move || {
++            let service = AccountService::new_with_admission(
++                c,
++                crate::stores::JsonFileMetadataStore::new(old_path),
++                FakeTransport::new().push_json("https://", 200, r#"{"login":"old-user"}"#),
++                a,
++            );
++            tokio::runtime::Builder::new_current_thread()
++                .build()
++                .unwrap()
++                .block_on(service.connect_with_account_at(
++                    GitProvider::GitHub,
++                    &SecretToken::new("SYNTHETIC-OLD"),
++                    Some(old),
++                ))
++                .unwrap()
++        });
++        waiting.recv().unwrap(); // old credential mutation is in progress
++        assert!(admission.commit_locks[0].try_lock().is_err());
++        let new = RequestTicket { seq: 2, ..old };
++        admission.register(new);
++        let c = credentials.clone();
++        let a = admission.clone();
++        let new_path = metadata_path.clone();
++        let new_thread = std::thread::spawn(move || {
++            let service = AccountService::new_with_admission(
++                c,
++                crate::stores::JsonFileMetadataStore::new(new_path),
++                FakeTransport::new().push_json("https://", 200, r#"{"login":"new-user"}"#),
++                a,
++            );
++            tokio::runtime::Builder::new_current_thread()
++                .build()
++                .unwrap()
++                .block_on(service.connect_with_account_at(
++                    GitProvider::GitHub,
++                    &SecretToken::new("SYNTHETIC-NEW"),
++                    Some(new),
++                ))
++                .unwrap()
++        });
++        release.send(()).unwrap();
++        assert!(old_thread.join().unwrap().1.is_complete());
++        assert!(new_thread.join().unwrap().1.is_complete());
++        assert_eq!(
++            credentials
++                .get(GitProvider::GitHub)
++                .unwrap()
++                .unwrap()
++                .expose(),
++            "SYNTHETIC-NEW"
++        );
++        let metadata = crate::stores::JsonFileMetadataStore::new(metadata_path)
++            .load()
++            .unwrap();
++        assert_eq!(
++            metadata.get(GitProvider::GitHub).unwrap().username,
++            "new-user"
++        );
++    }
++
++    #[tokio::test]
++    async fn credential_without_metadata_is_visible_and_can_be_disconnected_after_reopening() {
++        struct FailedMetadata;
++        impl MetadataStore for FailedMetadata {
++            fn load(&self) -> Result<GitAccountsState, GitAccountError> {
++                Ok(GitAccountsState::default())
++            }
++            fn save(&self, _: &GitAccountsState) -> Result<(), GitAccountError> {
++                Err(GitAccountError::MetadataWrite {
++                    detail: "synthetic disk failure".into(),
++                })
++            }
++        }
++        let service = AccountService::new(
++            MemoryCredentialStore::default(),
++            FailedMetadata,
++            FakeTransport::new().push_json("https://", 200, r#"{"login":"user"}"#),
++        );
++        let (_, outcome) = service
++            .connect_with_account(GitProvider::GitHub, &SecretToken::new("SYNTHETIC"))
++            .await
++            .unwrap();
++        assert!(outcome.credential_committed && !outcome.metadata_committed);
++        let snapshot = service.query().unwrap();
++        assert!(snapshot.accounts.get(GitProvider::GitHub).is_none());
++        assert_eq!(snapshot.unreconciled_providers, vec![GitProvider::GitHub]);
++        service.disconnect(GitProvider::GitHub).unwrap();
++        assert!(service.query().unwrap().unreconciled_providers.is_empty());
++    }
+ }
+--- a/crates/bytehost-panel/src/install.rs
++++ b/crates/bytehost-panel/src/install.rs
+@@ -255,6 +255,19 @@
+ }
+ 
+ impl InstallFlowState {
++    /// An inner confirmation consumes Escape before its owning settings dialog.
++    pub fn escape_message(&self) -> Option<Message> {
++        match self.flow {
++            Flow::Reviewing { .. }
++            | Flow::Failed { .. }
++            | Flow::ConfirmUninstall { .. }
++            | Flow::ConfirmRollback { .. }
++            | Flow::RuntimeReviewing { .. }
++            | Flow::ConfirmRuntimeUninstall { .. } => Some(Message::FlowDismissed),
++            _ => None,
++        }
++    }
++
+     pub fn update(&mut self, msg: Message, now_ms: u64) -> Vec<Effect> {
+         match msg {
+             Message::Opened => {
+@@ -2476,4 +2489,18 @@
+             "在途不重发"
+         );
+     }
+-}
++    #[test]
++    fn escape_dismisses_an_inner_confirmation_without_triggering_its_action() {
++        let mut state = InstallFlowState::default();
++        state.flow = Flow::ConfirmUninstall {
++            id: "demo".into(),
++            name: "Demo".into(),
++        };
++        let message = state
++            .escape_message()
++            .expect("confirmation consumes Escape");
++        assert!(state.update(message, 0).is_empty());
++        assert!(matches!(state.flow, Flow::Idle));
++        assert!(state.escape_message().is_none());
++    }
++}
+--- a/crates/bytehost-settings/src/git.rs
++++ b/crates/bytehost-settings/src/git.rs
+@@ -31,6 +31,7 @@
+ #[derive(Debug)]
+ struct ProviderRow {
+     account: Option<ConnectedAccount>,
++    unreconciled: bool,
+     token: SecretToken,
+     editing: bool,
+     busy: bool,
+@@ -42,6 +43,7 @@
+     fn new() -> Self {
+         Self {
+             account: None,
++            unreconciled: false,
+             token: SecretToken::default(),
+             editing: false,
+             busy: false,
+@@ -108,6 +110,10 @@
+ 
+     pub fn account(&self, provider: GitProvider) -> Option<&ConnectedAccount> {
+         self.rows[index(provider)].account.as_ref()
++    }
++
++    pub fn needs_reconciliation(&self, provider: GitProvider) -> bool {
++        self.rows[index(provider)].unreconciled
+     }
+ 
+     pub fn is_busy(&self, provider: GitProvider) -> bool {
+@@ -161,6 +167,7 @@
+         for provider in GitProvider::ALL {
+             let row = &mut self.rows[index(provider)];
+             row.account = snapshot.accounts.get(provider).cloned();
++            row.unreconciled = snapshot.unreconciled_providers.contains(&provider);
+             if row.account.is_some() {
+                 row.clear_sensitive();
+             }
+@@ -229,6 +236,7 @@
+         }
+         let row = &mut self.rows[index(ticket.provider)];
+         row.account = Some(account);
++        row.unreconciled = !outcome.metadata_committed;
+         row.busy = false;
+         row.editing = false;
+         row.error = None;
+@@ -279,7 +287,7 @@
+     /// 开始断开;已断开 / 忙碌时返回 `false`。
+     pub fn begin_disconnect(&mut self, provider: GitProvider) -> Option<RequestTicket> {
+         let row = &mut self.rows[index(provider)];
+-        if row.busy || row.account.is_none() {
++        if row.busy || (row.account.is_none() && !row.unreconciled) {
+             return None;
+         }
+         row.busy = true;
+@@ -295,6 +303,7 @@
+         }
+         let row = &mut self.rows[index(ticket.provider)];
+         row.account = None;
++        row.unreconciled = false;
+         row.busy = false;
+         row.editing = false;
+         row.error = None;
+@@ -486,6 +495,7 @@
+             AccountSnapshot {
+                 accounts: GitAccountsState::default(),
+                 stale_providers: vec![],
++                unreconciled_providers: vec![],
+             }
+         ));
+         assert!(state.apply_query(
+@@ -502,6 +512,7 @@
+                     accounts
+                 },
+                 stale_providers: vec![],
++                unreconciled_providers: vec![],
+             }
+         ));
+         assert_eq!(state.account(GitProvider::Gitee).unwrap().username, "abc");
+@@ -555,4 +566,23 @@
+         assert!(state.disconnect_succeeded(disconnect, complete(GitProvider::Gitee)));
+         assert_eq!(state.account(GitProvider::Gitee), None);
+     }
+-}
++    #[test]
++    fn reopened_partial_commit_is_recoverable_and_disconnect_is_not_disabled() {
++        let mut page = state();
++        let ticket = page.begin_query();
++        page.apply_query(
++            ticket,
++            AccountSnapshot {
++                accounts: GitAccountsState::default(),
++                stale_providers: vec![],
++                unreconciled_providers: vec![GitProvider::GitHub],
++            },
++        );
++        assert!(page.needs_reconciliation(GitProvider::GitHub));
++        let ticket = page
++            .begin_disconnect(GitProvider::GitHub)
++            .expect("saved credential can be removed");
++        page.disconnect_succeeded(ticket, complete(GitProvider::GitHub));
++        assert!(!page.needs_reconciliation(GitProvider::GitHub));
++    }
++}
+--- a/crates/bytehost-settings-ui/src/git_accounts.rs
++++ b/crates/bytehost-settings-ui/src/git_accounts.rs
+@@ -109,6 +109,39 @@
+             .into();
+     }
+ 
++    if view.state.needs_reconciliation(provider) && !view.state.is_editing(provider) {
++        let reconnect = button(text(t.get("settings.git.reconnect", "Reconnect")))
++            .padding([6, 14])
++            .on_press((view.on_intent)(GitIntent::Connect { provider }));
++        let disconnect =
++            button(text(t.get("settings.git.disconnect", "Disconnect"))).padding([6, 14]);
++        let disconnect = if view.state.is_busy(provider) {
++            disconnect
++        } else {
++            disconnect.on_press((view.on_intent)(GitIntent::Disconnect { provider }))
++        };
++        let mut body = column![
++            row![
++                title,
++                Space::new().width(Length::Fill),
++                reconnect,
++                disconnect
++            ]
++            .spacing(10),
++            text(t.get(
++                "settings.git.unreconciled",
++                "Credential saved; account details need recovery. Reconnect or disconnect."
++            ))
++            .size(font::caption())
++            .color(colors.gold),
++        ]
++        .spacing(6);
++        if let Some(error) = view.state.error(provider) {
++            body = body.push(error_line(error, t));
++        }
++        return body.into();
++    }
++
+     if view.state.is_editing(provider) {
+         let placeholder = t.get("settings.git.pat_placeholder", "Personal Access Token");
+         let input = byteui::form::input_text::view_on_bg(

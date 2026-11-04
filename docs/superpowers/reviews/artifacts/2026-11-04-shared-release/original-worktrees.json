@@ -1,0 +1,25 @@
+{
+  "bytehost": {
+    "head": "729fcaffe3dc71d9ab40c8b04c9cc99d2b9f8b3e",
+    "tracked_diff_sha256": "e922e624745d8186974e219e3b817ae51cca96d7c82eecb8c0ccf52689639625",
+    "untracked_files": {
+      "crates/bytehost-desktop/src/dialog.rs": "5235cad2f5f36d7bdc99516e5b62d03073a5e3fce519e2943769fa36a89640bf",
+      "crates/bytehost-git-accounts/Cargo.toml": "aa353c1c96291dc7c42233c7604e487a35551be9d114f00fcc64bf07abde5f60",
+      "crates/bytehost-git-accounts/src/lib.rs": "1f737044390b320078d10f075ec4663e950b7b300b4d77cf97a6fe5fd039e50a",
+      "crates/bytehost-git-accounts/src/model.rs": "35e7bd8e1959471473892c85449335e09734c9a13e2d34186ac5735224dee027",
+      "crates/bytehost-git-accounts/src/providers.rs": "53c760e64a50b54ca1117c0184214a97adca58cfcbb814c411f33c157fdffc12",
+      "crates/bytehost-git-accounts/src/service.rs": "8ad9d82ddc4801d0e0f93b0bfcea0abfaff11dc3f974e6bf9f17675139a159c5",
+      "crates/bytehost-git-accounts/src/stores.rs": "9d5b01b48fce81070756e223f4560d806e82acfd2fb13f999eb27ae04159c6fc",
+      "crates/bytehost-git-accounts/src/transport.rs": "12a36bdce1789767259a70ea44b30d86d115f8dc755af48a6364136d013ce661",
+      "crates/bytehost-settings-ui/examples/settings_product.rs": "8010850faa6b7d4d8fbe30ca53a97b29507416173b796dd7f79ddcd8398c2873",
+      "crates/bytehost-settings-ui/src/git_accounts.rs": "8dae24f8d54a8445d96a01381d0743d92b06abe54f6e413b630b721e025f84cc",
+      "crates/bytehost-settings/src/dialog.rs": "3fc0265047313b051e8ebb56c854efc60444f0cf95d5b4eba6d5bb1a95b68bb2",
+      "crates/bytehost-settings/src/git.rs": "b6bb365305f6a09cee814d93076672ea8c1c29c196613760a4c57f4770d8b55c"
+    }
+  },
+  "dozer": {
+    "head": "b701abebf4add562e8a7f4ba7cc0b21cf0fd0ecd",
+    "tracked_diff_sha256": "5fede4064269082eb7b23267679263a2924b8ad25a6c8501e8a0ec11b5836774",
+    "untracked_files": {}
+  }
+}

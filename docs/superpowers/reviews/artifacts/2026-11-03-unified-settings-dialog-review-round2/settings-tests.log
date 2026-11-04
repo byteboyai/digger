@@ -1,0 +1,56 @@
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:971:4
+    |
+971 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+    --> crates/desktop/src/apps/mod.rs:1245:19
+     |
+ 275 | impl AppsState {
+     | -------------- method in this implementation
+...
+1245 |     pub(crate) fn opened(&self) -> bool {
+     |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/digger_desktop-965be85b8a39c930)
+
+running 20 tests
+test product::tests::a_late_settings_open_reply_does_not_resurrect_a_closed_window ... ok
+test product::tests::settings_apps_start_the_existing_service_without_opening_the_panel ... ok
+test product::tests::settings_message_debug_does_not_expose_token_input ... ok
+test settings::tests::bind_failure_is_visible_and_retryable ... ok
+test settings::tests::cancel_and_close_revoke_service_level_commit_admission ... ok
+test settings::tests::closing_a_stale_instance_does_not_close_the_current_session ... ok
+test settings::tests::closing_the_dialog_revokes_every_in_flight_request_owner ... ok
+test settings::tests::destroy_without_a_reply_is_bounded_by_timeout ... ok
+test settings::tests::first_batch_registers_theme_git_then_apps ... ok
+test settings::tests::late_failure_after_open_does_not_destroy_the_visible_dialog ... ok
+test settings::tests::new_session_gets_a_fresh_git_request_owner ... ok
+test settings::tests::reopening_after_close_uses_a_new_session_and_clears_git_input ... ok
+test settings::tests::reopens_do_not_create_a_second_session_or_bump_generation ... ok
+test settings::tests::stale_bind_results_cannot_open_or_fail_a_new_session ... ok
+test settings::tests::token_input_message_debug_is_redacted ... ok
+test settings::tests::unregistered_targets_fall_back_to_theme ... ok
+test settings::theme::tests::corrupt_file_is_reported_and_not_applied ... ok
+test settings::theme::tests::missing_file_is_not_an_error ... ok
+test settings::theme::tests::round_trips_the_byteui_format ... ok
+test settings::theme::tests::save_failure_is_returned_for_the_ui ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 722 filtered out; finished in 0.48s
+

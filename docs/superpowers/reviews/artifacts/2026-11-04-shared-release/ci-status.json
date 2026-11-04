@@ -1,0 +1,561 @@
+{
+  "bytehost_ci": {
+    "conclusion": "success",
+    "headSha": "386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+    "jobs": [
+      {
+        "completedAt": "2026-11-04T02:00:11Z",
+        "conclusion": "success",
+        "databaseId": 126336320765,
+        "name": "test",
+        "startedAt": "2026-11-04T01:55:22Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-04T01:55:23Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-04T01:55:23Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:25Z",
+            "conclusion": "success",
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "startedAt": "2026-11-04T01:55:23Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:26Z",
+            "conclusion": "success",
+            "name": "\u5b89\u88c5 stable Rust",
+            "number": 3,
+            "startedAt": "2026-11-04T01:55:25Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:26Z",
+            "conclusion": "success",
+            "name": "\u7f13\u5b58 Cargo",
+            "number": 4,
+            "startedAt": "2026-11-04T01:55:26Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:27Z",
+            "conclusion": "success",
+            "name": "cargo fmt --check",
+            "number": 5,
+            "startedAt": "2026-11-04T01:55:26Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:56:40Z",
+            "conclusion": "success",
+            "name": "cargo clippy",
+            "number": 6,
+            "startedAt": "2026-11-04T01:55:27Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:59:04Z",
+            "conclusion": "success",
+            "name": "cargo test",
+            "number": 7,
+            "startedAt": "2026-11-04T01:56:40Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:59:14Z",
+            "conclusion": "success",
+            "name": "\u4f9d\u8d56\u95e8\u7981(\u53bb\u4ea7\u54c1 / \u53bb\u754c\u9762\u6846\u67b6 / \u53bb\u5e73\u53f0 webview \u5e93)",
+            "number": 8,
+            "startedAt": "2026-11-04T01:59:04Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:59:43Z",
+            "conclusion": "success",
+            "name": "\u4f9d\u8d56\u95e8\u7981\u53d8\u5f02\u6d4b\u8bd5(\u6ce8\u5165\u4ea7\u54c1\u4f9d\u8d56/\u754c\u9762\u6846\u67b6\u5fc5\u987b\u5931\u8d25)",
+            "number": 9,
+            "startedAt": "2026-11-04T01:59:14Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:59:44Z",
+            "conclusion": "success",
+            "name": "\u8054\u5408\u6784\u5efa\u811a\u672c\u6545\u969c\u81ea\u68c0",
+            "number": 10,
+            "startedAt": "2026-11-04T01:59:43Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:07Z",
+            "conclusion": "success",
+            "name": "Post \u7f13\u5b58 Cargo",
+            "number": 19,
+            "startedAt": "2026-11-04T01:59:44Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:08Z",
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@v4",
+            "number": 20,
+            "startedAt": "2026-11-04T02:00:07Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:10Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 21,
+            "startedAt": "2026-11-04T02:00:08Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/byteboyai/bytehost/actions/runs/41757302708/job/126336320765"
+      },
+      {
+        "completedAt": "2026-11-04T01:56:24Z",
+        "conclusion": "success",
+        "databaseId": 126336321000,
+        "name": "default-features",
+        "startedAt": "2026-11-04T01:55:22Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-04T01:55:23Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-04T01:55:23Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:25Z",
+            "conclusion": "success",
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "startedAt": "2026-11-04T01:55:23Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:26Z",
+            "conclusion": "success",
+            "name": "\u5b89\u88c5 stable Rust",
+            "number": 3,
+            "startedAt": "2026-11-04T01:55:25Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:26Z",
+            "conclusion": "success",
+            "name": "\u7f13\u5b58 Cargo",
+            "number": 4,
+            "startedAt": "2026-11-04T01:55:26Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:56:14Z",
+            "conclusion": "success",
+            "name": "cargo check --no-default-features",
+            "number": 5,
+            "startedAt": "2026-11-04T01:55:26Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:56:21Z",
+            "conclusion": "success",
+            "name": "Post \u7f13\u5b58 Cargo",
+            "number": 9,
+            "startedAt": "2026-11-04T01:56:14Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:56:22Z",
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@v4",
+            "number": 10,
+            "startedAt": "2026-11-04T01:56:21Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:56:23Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 11,
+            "startedAt": "2026-11-04T01:56:22Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/byteboyai/bytehost/actions/runs/41757302708/job/126336321000"
+      }
+    ],
+    "status": "completed",
+    "url": "https://github.com/byteboyai/bytehost/actions/runs/41757302708"
+  },
+  "bytehost_joint": {
+    "conclusion": "success",
+    "headSha": "386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e",
+    "jobs": [
+      {
+        "completedAt": "2026-11-04T02:01:32Z",
+        "conclusion": "success",
+        "databaseId": 126336321010,
+        "name": "joint-build",
+        "startedAt": "2026-11-04T01:55:23Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-04T01:55:24Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-04T01:55:23Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:25Z",
+            "conclusion": "success",
+            "name": "Checkout bytehost",
+            "number": 2,
+            "startedAt": "2026-11-04T01:55:24Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:30Z",
+            "conclusion": "success",
+            "name": "Checkout dozer",
+            "number": 3,
+            "startedAt": "2026-11-04T01:55:25Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:32Z",
+            "conclusion": "success",
+            "name": "Checkout digger",
+            "number": 4,
+            "startedAt": "2026-11-04T01:55:30Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:32Z",
+            "conclusion": "success",
+            "name": "Install stable Rust",
+            "number": 5,
+            "startedAt": "2026-11-04T01:55:32Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T01:55:33Z",
+            "conclusion": "success",
+            "name": "Cache cargo",
+            "number": 6,
+            "startedAt": "2026-11-04T01:55:32Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:48Z",
+            "conclusion": "success",
+            "name": "\u7528\u5f53\u524d bytehost \u6784\u5efa\u4e24\u4e2a\u6d88\u8d39\u65b9",
+            "number": 7,
+            "startedAt": "2026-11-04T01:55:33Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:01:26Z",
+            "conclusion": "success",
+            "name": "Post Cache cargo",
+            "number": 11,
+            "startedAt": "2026-11-04T02:00:48Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:01:27Z",
+            "conclusion": "success",
+            "name": "Post Checkout digger",
+            "number": 12,
+            "startedAt": "2026-11-04T02:01:26Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:01:27Z",
+            "conclusion": "success",
+            "name": "Post Checkout dozer",
+            "number": 13,
+            "startedAt": "2026-11-04T02:01:27Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:01:28Z",
+            "conclusion": "success",
+            "name": "Post Checkout bytehost",
+            "number": 14,
+            "startedAt": "2026-11-04T02:01:27Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:01:29Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 15,
+            "startedAt": "2026-11-04T02:01:28Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/byteboyai/bytehost/actions/runs/41757302693/job/126336321010"
+      }
+    ],
+    "status": "completed",
+    "url": "https://github.com/byteboyai/bytehost/actions/runs/41757302693"
+  },
+  "dozer_ci": {
+    "conclusion": "success",
+    "headSha": "15c61c9b2ef043525c45926e6647429dc9324aa7",
+    "jobs": [
+      {
+        "completedAt": "2026-11-04T02:06:10Z",
+        "conclusion": "success",
+        "databaseId": 126337951254,
+        "name": "consumer-check",
+        "startedAt": "2026-11-04T02:00:05Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-04T02:00:07Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-04T02:00:06Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:11Z",
+            "conclusion": "success",
+            "name": "Checkout dozer",
+            "number": 2,
+            "startedAt": "2026-11-04T02:00:07Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:12Z",
+            "conclusion": "success",
+            "name": "Install stable Rust",
+            "number": 3,
+            "startedAt": "2026-11-04T02:00:11Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:13Z",
+            "conclusion": "success",
+            "name": "Cache cargo",
+            "number": 4,
+            "startedAt": "2026-11-04T02:00:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:16Z",
+            "conclusion": "success",
+            "name": "cargo fmt --check",
+            "number": 5,
+            "startedAt": "2026-11-04T02:00:13Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:50Z",
+            "conclusion": "success",
+            "name": "cargo check --locked --workspace --all-targets",
+            "number": 6,
+            "startedAt": "2026-11-04T02:00:16Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:05:10Z",
+            "conclusion": "success",
+            "name": "\u4e1a\u52a1\u5c42\u5bbf\u4e3b\u4f9d\u8d56\u95e8\u7981",
+            "number": 7,
+            "startedAt": "2026-11-04T02:04:50Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:05:15Z",
+            "conclusion": "success",
+            "name": "\u4e1a\u52a1\u5c42\u5bbf\u4e3b\u4f9d\u8d56\u95e8\u7981\u81ea\u68c0",
+            "number": 8,
+            "startedAt": "2026-11-04T02:05:10Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:05:16Z",
+            "conclusion": "success",
+            "name": "\u5171\u4eab\u5e93\u9489\u7248\u5b88\u536b",
+            "number": 9,
+            "startedAt": "2026-11-04T02:05:15Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:05:16Z",
+            "conclusion": "success",
+            "name": "\u9762\u677f\u8fb9\u754c\u68d8\u8f6e",
+            "number": 10,
+            "startedAt": "2026-11-04T02:05:16Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:06:03Z",
+            "conclusion": "success",
+            "name": "Post Cache cargo",
+            "number": 19,
+            "startedAt": "2026-11-04T02:05:16Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:06:04Z",
+            "conclusion": "success",
+            "name": "Post Checkout dozer",
+            "number": 20,
+            "startedAt": "2026-11-04T02:06:03Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:06:07Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 21,
+            "startedAt": "2026-11-04T02:06:04Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/byteboyai/dozer/actions/runs/41757801140/job/126337951254"
+      },
+      {
+        "completedAt": "2026-11-04T02:04:45Z",
+        "conclusion": "success",
+        "databaseId": 126337951447,
+        "name": "runtime-tests",
+        "startedAt": "2026-11-04T02:00:05Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-04T02:00:06Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-04T02:00:05Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:11Z",
+            "conclusion": "success",
+            "name": "Checkout dozer",
+            "number": 2,
+            "startedAt": "2026-11-04T02:00:06Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:12Z",
+            "conclusion": "success",
+            "name": "Install stable Rust",
+            "number": 3,
+            "startedAt": "2026-11-04T02:00:11Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:13Z",
+            "conclusion": "success",
+            "name": "Cache cargo",
+            "number": 4,
+            "startedAt": "2026-11-04T02:00:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:00:37Z",
+            "conclusion": "success",
+            "name": "\u6587\u4ef6 IO \u4e0e\u9884\u89c8\u6838\u5fc3",
+            "number": 5,
+            "startedAt": "2026-11-04T02:00:13Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:01:42Z",
+            "conclusion": "success",
+            "name": "dozerd \u6838\u5fc3\u5355\u5143\u6d4b\u8bd5\u4e0e UDS \u56de\u5f52",
+            "number": 6,
+            "startedAt": "2026-11-04T02:00:37Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:01:53Z",
+            "conclusion": "success",
+            "name": "client \u4e0e\u4f1a\u8bdd\u6062\u590d\u5355\u5143\u6d4b\u8bd5",
+            "number": 7,
+            "startedAt": "2026-11-04T02:01:42Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:03Z",
+            "conclusion": "success",
+            "name": "\u9762\u677f\u9884\u89c8\u3001Todo \u4e0e Agent \u9762\u677f",
+            "number": 8,
+            "startedAt": "2026-11-04T02:01:53Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:06Z",
+            "conclusion": "success",
+            "name": "\u6784\u5efa\u4ea7\u54c1\u9694\u79bb helper",
+            "number": 9,
+            "startedAt": "2026-11-04T02:04:03Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:10Z",
+            "conclusion": "success",
+            "name": "\u4ea7\u54c1\u9694\u79bb\u4e0e\u5b9e\u9645 SIGTERM/SIGINT",
+            "number": 10,
+            "startedAt": "2026-11-04T02:04:06Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:10Z",
+            "conclusion": "success",
+            "name": "\u65e5\u5fd7\u8fb9\u754c",
+            "number": 11,
+            "startedAt": "2026-11-04T02:04:10Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:40Z",
+            "conclusion": "success",
+            "name": "Post Cache cargo",
+            "number": 21,
+            "startedAt": "2026-11-04T02:04:10Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:41Z",
+            "conclusion": "success",
+            "name": "Post Checkout dozer",
+            "number": 22,
+            "startedAt": "2026-11-04T02:04:40Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-04T02:04:43Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 23,
+            "startedAt": "2026-11-04T02:04:41Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/byteboyai/dozer/actions/runs/41757801140/job/126337951447"
+      }
+    ],
+    "status": "completed",
+    "url": "https://github.com/byteboyai/dozer/actions/runs/41757801140"
+  }
+}

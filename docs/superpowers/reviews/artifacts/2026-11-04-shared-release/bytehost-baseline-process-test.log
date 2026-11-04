@@ -1,0 +1,38 @@
+   Compiling getrandom v0.3.4
+   Compiling syn v2.0.119
+   Compiling zopfli v0.8.3
+   Compiling tokio v1.53.2
+   Compiling toml_datetime v0.6.3
+   Compiling serde_spanned v0.6.9
+   Compiling toml_edit v0.20.2
+   Compiling zip v8.6.0
+   Compiling tempfile v3.27.0
+   Compiling toml v0.8.2
+   Compiling tracing-attributes v0.1.31
+   Compiling tracing v0.1.44
+   Compiling hyper v1.12.0
+   Compiling hyper-util v0.1.21
+   Compiling bytehost-apps v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost-baseline/crates/bytehost-apps)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.30s
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/bytehost_apps-0510c31f640b8278)
+
+running 1 test
+test process::supervise::tests::a_leftover_process_with_a_matching_command_line_is_killed_on_startup ... FAILED
+
+failures:
+
+---- process::supervise::tests::a_leftover_process_with_a_matching_command_line_is_killed_on_startup stdout ----
+
+thread 'process::supervise::tests::a_leftover_process_with_a_matching_command_line_is_killed_on_startup' (10695191) panicked at crates/bytehost-apps/src/process/supervise.rs:531:9:
+assertion `left == right` failed
+  left: Stale
+ right: Killed(3420)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    process::supervise::tests::a_leftover_process_with_a_matching_command_line_is_killed_on_startup
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p bytehost-apps --lib`

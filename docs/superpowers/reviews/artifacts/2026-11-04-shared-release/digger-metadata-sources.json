@@ -1,0 +1,142 @@
+[
+  {
+    "name": "bytegit",
+    "source": "git+https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa553ab34d97d9a1e4055c89d03b48eb4848"
+  },
+  {
+    "name": "bytehost-apps",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-chrome",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-client",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-core",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-desktop",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-git-accounts",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-panel",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-settings",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-settings-ui",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "bytehost-webview",
+    "source": "git+https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4e8f2d976d7fa61e77c57f79aa07f4a7e"
+  },
+  {
+    "name": "byteui",
+    "source": "git+https://github.com/byteboyai/byteui?tag=v0.5.2#e33824578d0f6fa10f168657fe08d882ad6fadc4"
+  },
+  {
+    "name": "dozer-client",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-core",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-file-io",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-git-runtime",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-hook",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-i18n",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-mcp",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-model",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-agent",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-browser",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-conversations",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-files",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-group-chat",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-host",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-preview",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-project",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-term",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-todo",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-panel-usage",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-preview-core",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-services",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozer-store-project",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  },
+  {
+    "name": "dozerd",
+    "source": "git+https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b2ef043525c45926e6647429dc9324aa7"
+  }
+]

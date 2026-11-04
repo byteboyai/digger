@@ -1,0 +1,407 @@
+warning: patch `bytehost-chrome v0.1.0 (/private/tmp/digger-unified-fix/bytehost/crates/bytehost-chrome)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+    Blocking waiting for file lock on build directory
+    Checking bytehost-desktop v0.1.0 (/private/tmp/digger-unified-fix/bytehost/crates/bytehost-desktop)
+    Checking dozer-panel-host v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-host)
+    Checking dozer-panel-conversations v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-conversations)
+    Checking dozer-panel-usage v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-usage)
+    Checking dozer-panel-browser v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-browser)
+    Checking dozer-panel-files v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-files)
+    Checking dozer-panel-agent v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-agent)
+    Checking dozer-panel-group-chat v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-group-chat)
+    Checking dozer-panel-project v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-project)
+    Checking dozer-panel-todo v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-todo)
+    Checking dozer-panel-preview v0.1.0 (/private/tmp/digger-unified-fix/dozer/crates/dozer-panel-preview)
+    Checking dozer-app v0.5.317 (/private/tmp/digger-unified-fix/dozer/crates/dozer-app)
+warning: unused imports: `CaptureFindFocus` and `take_find_focused`
+  --> crates/dozer-app/src/extensions/browser.rs:39:23
+   |
+39 |     CaptureAddrFocus, CaptureFindFocus, FindRequest, addr_field_id, find_field_id,
+   |                       ^^^^^^^^^^^^^^^^
+40 |     take_addr_focused, take_find_focused,
+   |                        ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CREATABLE_AGENTS`, `POLL_BACKOFF`, and `POLL_LIMIT`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:6:5
+  |
+6 |     CREATABLE_AGENTS, POLL_BACKOFF, POLL_INTERVAL, POLL_LIMIT,
+  |     ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^                 ^^^^^^^^^^
+
+warning: unused imports: `keyed_args`, `keyed`, `t_args`, and `t`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:8:40
+  |
+8 | pub use dozer_panel_group_chat::i18n::{keyed, keyed_args, t, t_args};
+  |                                        ^^^^^  ^^^^^^^^^^  ^  ^^^^^^
+
+warning: unused imports: `Effect`, `current_view_payload`, `encode_group_chat_push`, `i18n`, `route_event`, `spawn_fetch_messages`, and `spawn_load_groups`
+  --> crates/dozer-app/src/extensions/group_chat/mod.rs:11:14
+   |
+11 |     Command, Effect, GroupChatWebviewEvent, Message, WebviewPushState, WorkspaceState,
+   |              ^^^^^^
+12 |     current_view_payload, encode_group_chat_push, host, i18n, on_activate, parse_group_chat_event,
+   |     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^        ^^^^
+13 |     poll_if_due, route_event, run_effect, select_group, spawn_command, spawn_fetch_messages,
+   |                  ^^^^^^^^^^^                                           ^^^^^^^^^^^^^^^^^^^^
+14 |     spawn_load_groups, update,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_panel_group_chat::protocol::*`
+  --> crates/dozer-app/src/extensions/group_chat/mod.rs:21:13
+   |
+21 |     pub use dozer_panel_group_chat::protocol::*;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `run_open_command`
+ --> crates/dozer-app/src/external_apps.rs:4:58
+  |
+4 |     ExternalAppsConfig, OpenError, open_failure_message, run_open_command,
+  |                                                          ^^^^^^^^^^^^^^^^
+
+warning: unused import: `ConnectedAccount`
+  --> crates/dozer-app/src/git_accounts.rs:21:5
+   |
+21 |     ConnectedAccount, GitAccountError, GitAccountsState, GitProvider, RemoteRepo,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `scope_of`
+  --> crates/dozer-app/src/panel_host.rs:16:34
+   |
+16 |     RequestTrackers, project_of, scope_of,
+   |                                  ^^^^^^^^
+
+warning: unused imports: `Element` and `Length`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:17:25
+   |
+17 | use iced_widget::core::{Element, Length};
+   |                         ^^^^^^^  ^^^^^^
+
+warning: unused imports: `button`, `column`, `container`, and `row`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:18:19
+   |
+18 | use iced_widget::{button, column, container, row};
+   |                   ^^^^^^  ^^^^^^  ^^^^^^^^^  ^^^
+
+warning: unused import: `self`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:26:37
+   |
+26 | use crate::extensions::group_chat::{self, Message as GroupChatMessage};
+   |                                     ^^^^
+
+warning: unused import: `crate::ui_text::text`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:29:5
+   |
+29 | use crate::ui_text::text;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `agent_dot_color` and `agent_icon`
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:30:24
+   |
+30 | use crate::workspace::{agent_dot_color, agent_icon};
+   |                        ^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::backend::*`
+  --> crates/dozer-app/src/preview/mod.rs:14:16
+   |
+14 | pub(crate) use dozer_preview_core::backend::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::file_profile::*`
+  --> crates/dozer-app/src/preview/mod.rs:17:16
+   |
+17 | pub(crate) use dozer_preview_core::file_profile::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::router::*`
+  --> crates/dozer-app/src/preview/mod.rs:26:16
+   |
+26 | pub(crate) use dozer_preview_core::router::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dozer_preview_core::text_save::*`
+  --> crates/dozer-app/src/preview/mod.rs:29:16
+   |
+29 | pub(crate) use dozer_preview_core::text_save::*;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ReviewEntry` and `review_entries_from_turns`
+ --> crates/dozer-app/src/transcript.rs:2:45
+  |
+2 | pub use dozer_panel_conversations::review::{ReviewEntry, review_entries_from_turns};
+  |                                             ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Path`
+  --> crates/dozer-app/src/workspace/state.rs:59:17
+   |
+59 | use std::path::{Path, PathBuf};
+   |                 ^^^^
+
+warning: unused import: `CREATABLE_AGENTS`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:6:5
+  |
+6 |     CREATABLE_AGENTS, POLL_BACKOFF, POLL_INTERVAL, POLL_LIMIT,
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `keyed`, `t_args`, and `t`
+ --> crates/dozer-app/src/extensions/group_chat/mod.rs:8:40
+  |
+8 | pub use dozer_panel_group_chat::i18n::{keyed, keyed_args, t, t_args};
+  |                                        ^^^^^              ^  ^^^^^^
+
+warning: unused imports: `current_view_payload`, `encode_group_chat_push`, and `route_event`
+  --> crates/dozer-app/src/extensions/group_chat/mod.rs:12:5
+   |
+12 |     current_view_payload, encode_group_chat_push, host, i18n, on_activate, parse_group_chat_event,
+   |     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+13 |     poll_if_due, route_event, run_effect, select_group, spawn_command, spawn_fetch_messages,
+   |                  ^^^^^^^^^^^
+
+warning: methods `browser_find_focused`, `set_browser_find_focused`, `browser_find_open`, `close_browser_find_bar`, and `active_browser_state` are never used
+    --> crates/dozer-app/src/app/app.rs:2618:12
+     |
+ 751 | impl App {
+     | -------- methods in this implementation
+...
+2618 |     pub fn browser_find_focused(&self) -> bool {
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+2625 |     pub fn set_browser_find_focused(&mut self, focused: bool) {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2632 |     pub fn browser_find_open(&self) -> bool {
+     |            ^^^^^^^^^^^^^^^^^
+...
+2637 |     pub fn close_browser_find_bar(&mut self) {
+     |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+2658 |     pub(crate) fn active_browser_state(&self) -> Option<&browser::State> {
+     |                   ^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `builtin_kind_by_token` is never used
+  --> crates/dozer-app/src/app/state.rs:59:15
+   |
+59 | pub(crate) fn builtin_kind_by_token(token: &str) -> Option<PanelKind> {
+   |               ^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `group_chat_command` is never used
+    --> crates/dozer-app/src/app/update.rs:3354:8
+     |
+  54 | impl App {
+     | -------- method in this implementation
+...
+3354 |     fn group_chat_command(&mut self, project_id: i64, cmd: crate::extensions::group_chat::Command) {
+     |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `kinds_require_disk_refresh` is never used
+    --> crates/dozer-app/src/app/update.rs:5021:4
+     |
+5021 | fn kinds_require_disk_refresh(kinds: bytegit::WorkspaceChangeKind) -> bool {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `revision` is never read
+  --> crates/dozer-app/src/extensions/codehealth/surface.rs:39:5
+   |
+36 | pub(crate) struct CodeHealthSurface {
+   |                   ----------------- field in this struct
+...
+39 |     revision: Arc<AtomicU64>,
+   |     ^^^^^^^^
+
+warning: associated functions `load`, `load_with_tab`, and `load_with_page` are never used
+   --> crates/dozer-app/src/extensions/settings.rs:237:12
+    |
+225 | impl State {
+    | ---------- associated functions in this implementation
+...
+237 |     pub fn load(daemon_unavailable: bool) -> State {
+    |            ^^^^
+...
+242 |     pub fn load_with_tab(daemon_unavailable: bool, tab: SettingsTab) -> State {
+    |            ^^^^^^^^^^^^^
+...
+247 |     pub fn load_with_page(daemon_unavailable: bool, page: Option<PageId>) -> State {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `failure_message` is never used
+   --> crates/dozer-app/src/extensions/toast.rs:111:8
+    |
+111 | pub fn failure_message<T, E: std::fmt::Display>(
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `load` is never used
+  --> crates/dozer-app/src/git_accounts.rs:54:8
+   |
+54 | pub fn load() -> GitAccountsState {
+   |        ^^^^
+
+warning: function `save` is never used
+  --> crates/dozer-app/src/git_accounts.rs:58:8
+   |
+58 | pub fn save(state: &GitAccountsState) -> io::Result<()> {
+   |        ^^^^
+
+warning: function `load_from` is never used
+  --> crates/dozer-app/src/git_accounts.rs:63:4
+   |
+63 | fn load_from(path: &Path) -> GitAccountsState {
+   |    ^^^^^^^^^
+
+warning: function `save_to` is never used
+  --> crates/dozer-app/src/git_accounts.rs:67:4
+   |
+67 | fn save_to(path: &Path, state: &GitAccountsState) -> io::Result<()> {
+   |    ^^^^^^^
+
+warning: function `set_token` is never used
+  --> crates/dozer-app/src/git_accounts.rs:80:8
+   |
+80 | pub fn set_token(provider: GitProvider, token: &str) -> Result<(), GitAccountError> {
+   |        ^^^^^^^^^
+
+warning: function `delete_token` is never used
+  --> crates/dozer-app/src/git_accounts.rs:85:8
+   |
+85 | pub fn delete_token(provider: GitProvider) -> Result<(), GitAccountError> {
+   |        ^^^^^^^^^^^^
+
+warning: function `extract_username` is never used
+  --> crates/dozer-app/src/git_accounts.rs:89:15
+   |
+89 | pub(crate) fn extract_username(
+   |               ^^^^^^^^^^^^^^^^
+
+warning: function `parse_repo_list` is never used
+  --> crates/dozer-app/src/git_accounts.rs:98:15
+   |
+98 | pub(crate) fn parse_repo_list(
+   |               ^^^^^^^^^^^^^^^
+
+warning: function `validate_token` is never used
+   --> crates/dozer-app/src/git_accounts.rs:106:14
+    |
+106 | pub async fn validate_token(provider: GitProvider, token: &str) -> Result<String, GitAccountError> {
+    |              ^^^^^^^^^^^^^^
+
+warning: method `window_arc` is never used
+  --> crates/dozer-app/src/platform/confirm_overlay.rs:92:19
+   |
+81 | impl ConfirmOverlay {
+   | ------------------- method in this implementation
+...
+92 |     pub(crate) fn window_arc(&self) -> Arc<Window> {
+   |                   ^^^^^^^^^^
+
+warning: constant `TOPIC_AREA_HEIGHT` is never used
+  --> crates/dozer-app/src/platform/group_create_overlay.rs:37:7
+   |
+37 | const TOPIC_AREA_HEIGHT: f32 = 72.0;
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: methods `preview_pane_tabular_action` and `preview_find_set_webview_state` are never used
+   --> crates/dozer-app/src/workspace/preview_panel.rs:202:19
+    |
+ 40 | impl Workspace {
+    | -------------- methods in this implementation
+...
+202 |     pub(crate) fn preview_pane_tabular_action(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+241 |     pub(crate) fn preview_find_set_webview_state(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `preview_tab_first_mut` is never used
+    --> crates/dozer-app/src/workspace/state.rs:1508:19
+     |
+ 394 | impl Workspace {
+     | -------------- method in this implementation
+...
+1508 |     pub(crate) fn preview_tab_first_mut(&mut self, kind: PanelKind) -> &mut usize {
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `dozer-app` (bin "dozer") generated 39 warnings (run `cargo fix --bin "dozer" -p dozer-app` to apply 19 suggestions)
+warning: function `conversation_row` is never used
+   --> crates/dozer-app/src/service_fakes.rs:689:15
+    |
+689 | pub(crate) fn conversation_row(
+    |               ^^^^^^^^^^^^^^^^
+
+warning: associated items `with_rows`, `failing`, and `into_services` are never used
+   --> crates/dozer-app/src/service_fakes.rs:751:19
+    |
+728 | impl FakeConversation {
+    | --------------------- associated items in this implementation
+...
+751 |     pub(crate) fn with_rows(self, rows: ConversationRows) -> Self {
+    |                   ^^^^^^^^^
+...
+755 |     pub(crate) fn failing(kind: ServiceErrorKind, message: &str) -> Self {
+    |                   ^^^^^^^
+...
+761 |     pub(crate) fn into_services(self) -> Services {
+    |                   ^^^^^^^^^^^^^
+
+warning: methods `with_items`, `with_list_error`, `with_write_error`, `calls`, and `into_services` are never used
+    --> crates/dozer-app/src/service_fakes.rs:1177:19
+     |
+1176 | impl FakeBookmark {
+     | ----------------- methods in this implementation
+1177 |     pub(crate) fn with_items(self, items: Vec<BookmarkInfo>) -> Self {
+     |                   ^^^^^^^^^^
+...
+1181 |     pub(crate) fn with_list_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+     |                   ^^^^^^^^^^^^^^^
+...
+1186 |     pub(crate) fn with_write_error(self, kind: ServiceErrorKind, message: &str) -> Self {
+     |                   ^^^^^^^^^^^^^^^^
+...
+1190 |     pub(crate) fn calls(&self) -> Vec<String> {
+     |                   ^^^^^
+...
+1193 |     pub(crate) fn into_services(self) -> Services {
+     |                   ^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> crates/dozer-app/src/service_fakes.rs:1462:19
+     |
+1461 | impl FakeSession {
+     | ---------------- methods in this implementation
+1462 |     pub(crate) fn calls(&self) -> Vec<String> {
+     |                   ^^^^^
+...
+1466 |     pub(crate) fn with_sessions(self, sessions: Vec<SessionInfo>) -> Self {
+     |                   ^^^^^^^^^^^^^
+...
+1471 |     pub(crate) fn with_attach(
+     |                   ^^^^^^^^^^^
+...
+1483 |     pub(crate) fn with_create_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+1488 |     pub(crate) fn with_attach_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+1493 |     pub(crate) fn with_write_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^
+...
+1498 |     pub(crate) fn with_resize_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+1503 |     pub(crate) fn with_kill_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^
+...
+1508 |     pub(crate) fn with_close_error(self, e: ServiceError) -> Self {
+     |                   ^^^^^^^^^^^^^^^^
+...
+1513 |     pub(crate) fn into_services(self) -> Services {
+     |                   ^^^^^^^^^^^^^
+
+warning: `dozer-app` (bin "dozer" test) generated 31 warnings (24 duplicates) (run `cargo fix --bin "dozer" -p dozer-app --tests` to apply 3 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.03s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

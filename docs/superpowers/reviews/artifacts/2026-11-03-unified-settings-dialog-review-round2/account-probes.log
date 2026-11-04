@@ -1,0 +1,20 @@
+   Compiling digger-unified-review-probes v0.0.0 (/private/tmp/digger-unified-round2-probes)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (/private/tmp/digger-unified-review-target/aarch64-apple-darwin/debug/deps/digger_unified_review_probes-8565950d23b66916)
+
+running 3 tests
+REPRO: authoritative query hides the already committed credential
+test tests::committed_credential_disappears_from_authoritative_query_after_metadata_failure ... ok
+REPRO: old admitted commit overwrote a newer successful request
+test tests::old_admitted_commit_overwrites_new_provider_request ... ok
+FIX VERIFIED: overlapping provider updates retain both JSON records
+test tests::fixed_json_updates_keep_both_provider_records_with_real_thread_overlap ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests digger_unified_review_probes
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

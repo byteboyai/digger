@@ -1,0 +1,260 @@
+     Locking 95 packages to latest Rust 1.98.1 compatible versions
+      Adding aes v0.9.4
+      Adding apple-native-keyring-store v1.0.2
+      Adding block-buffer v0.12.1
+      Adding block-padding v0.4.2
+      Adding bytegit v0.9.2 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytegit)
+      Adding bytehost-apps v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-apps)
+      Adding bytehost-chrome v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-chrome)
+      Adding bytehost-client v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-client)
+      Adding bytehost-core v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-core)
+      Adding bytehost-desktop v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-desktop)
+      Adding bytehost-git-accounts v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-git-accounts)
+      Adding bytehost-panel v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-panel)
+      Adding bytehost-settings v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-settings)
+      Adding bytehost-settings-ui v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-settings-ui)
+      Adding bytehost-webview v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-webview)
+      Adding byteui v0.5.2 (/Users/chrischiang/Projects/CoralProjects/byteboy/byteui)
+      Adding cbc v0.2.1
+      Adding chacha20 v0.10.2
+      Adding cipher v0.5.2
+      Adding cmov v0.5.4
+      Adding const-oid v0.10.2
+      Adding cpubits v0.1.1
+      Adding cpufeatures v0.3.1
+      Adding crypto-common v0.2.2
+      Adding ctutils v0.4.8
+      Adding digest v0.11.3
+      Adding dozer-client v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-client)
+      Adding dozer-core v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-core)
+      Adding dozer-file-io v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-file-io)
+      Adding dozer-git-runtime v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-git-runtime)
+      Adding dozer-hook v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-hook)
+      Adding dozer-i18n v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-i18n)
+      Adding dozer-mcp v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-mcp)
+      Adding dozer-model v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-model)
+      Adding dozer-panel-agent v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-agent)
+      Adding dozer-panel-browser v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-browser)
+      Adding dozer-panel-conversations v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-conversations)
+      Adding dozer-panel-files v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-files)
+      Adding dozer-panel-group-chat v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-group-chat)
+      Adding dozer-panel-host v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-host)
+      Adding dozer-panel-preview v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-preview)
+      Adding dozer-panel-project v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-project)
+      Adding dozer-panel-term v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-term)
+      Adding dozer-panel-todo v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-todo)
+      Adding dozer-panel-usage v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-usage)
+      Adding dozer-preview-core v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-preview-core)
+      Adding dozer-services v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-services)
+      Adding dozer-store-project v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-store-project)
+      Adding dozerd v0.3.3 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozerd)
+      Adding hkdf v0.13.0
+      Adding hmac v0.13.0
+      Adding hybrid-array v0.4.15
+      Adding hyper-rustls v0.27.10
+      Adding inout v0.2.5
+      Adding ipnet v2.12.2
+      Adding keyring v4.2.0
+      Adding keyring-core v1.0.1
+      Adding lru-slab v0.1.3
+      Adding num v0.4.3
+      Adding num-bigint v0.4.8
+      Adding num-complex v0.4.6
+      Adding num-integer v0.1.47
+      Adding num-iter v0.1.46
+      Adding num-rational v0.4.2
+      Adding quinn v0.11.12
+      Adding quinn-proto v0.11.19
+      Adding quinn-udp v0.5.16
+      Adding rand v0.10.3
+      Adding rand_core v0.10.1
+      Adding rand_pcg v0.10.2
+      Adding regex v1.13.1
+      Adding reqwest v0.12.28
+      Adding ring v0.17.14
+      Adding rustls v0.23.46
+      Adding rustls-pki-types v1.15.1
+      Adding rustls-webpki v0.103.16
+      Adding ryu v1.0.23
+      Adding secret-service v5.2.0
+      Adding security-framework v3.7.0
+      Adding security-framework-sys v2.17.0
+      Adding serde_urlencoded v0.7.1
+      Adding sha2 v0.11.1
+      Adding subtle v2.6.1
+      Adding sync_wrapper v1.0.2
+      Adding tokio-rustls v0.26.6
+      Adding tower v0.5.3
+      Adding tower-http v0.6.11
+      Adding tower-layer v0.3.3
+      Adding tower-service v0.3.3
+      Adding untrusted v0.9.0
+      Adding webpki-roots v1.0.11
+      Adding windows-native-keyring-store v1.1.0
+      Adding zbus-secret-service-keyring-store v1.0.1
+      Adding zeroize v1.9.1
+      Adding zeroize_derive v1.5.0
+   Compiling syn v2.0.119
+   Compiling futures-channel v0.3.34
+   Compiling core-foundation-sys v0.8.7
+   Compiling tower-service v0.3.3
+   Compiling ipnet v2.12.2
+   Compiling ring v0.17.14
+   Compiling form_urlencoded v1.2.2
+   Compiling untrusted v0.9.0
+   Compiling rustls v0.23.46
+   Compiling subtle v2.6.1
+   Compiling sync_wrapper v1.0.2
+   Compiling tower-layer v0.3.3
+   Compiling keyring-core v1.0.1
+   Compiling ryu v1.0.23
+   Compiling dozer-services v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-services)
+   Compiling bytehost-core v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-core)
+   Compiling bytehost-apps v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-apps)
+   Compiling futures-util v0.3.34
+   Compiling core-foundation v0.10.1
+   Compiling url v2.5.8
+   Compiling security-framework-sys v2.17.0
+   Compiling core-foundation v0.9.4
+   Compiling serde_urlencoded v0.7.1
+   Compiling dozer-preview-core v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-preview-core)
+   Compiling core-graphics-types v0.2.0
+   Compiling security-framework v3.7.0
+   Compiling core-graphics-types v0.1.3
+   Compiling metal v0.32.0
+   Compiling core-graphics v0.23.2
+   Compiling wry v0.55.1
+   Compiling bytehost-webview v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-webview)
+   Compiling apple-native-keyring-store v1.0.2
+   Compiling keyring v4.2.0
+   Compiling futures-executor v0.3.34
+   Compiling tower v0.5.3
+   Compiling zerocopy-derive v0.8.63
+   Compiling tracing-attributes v0.1.31
+   Compiling zeroize_derive v1.5.0
+   Compiling thiserror-impl v1.0.69
+   Compiling futures v0.3.34
+   Compiling zeroize v1.9.1
+   Compiling iced_futures v0.14.0
+   Compiling tower-http v0.6.11
+   Compiling tracing v0.1.44
+   Compiling thiserror v1.0.69
+   Compiling iced_debug v0.14.0
+   Compiling iced_runtime v0.14.0
+   Compiling zerocopy v0.8.63
+   Compiling bytehost-git-accounts v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-git-accounts)
+   Compiling rustls-pki-types v1.15.1
+   Compiling bytehost-settings v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-settings)
+   Compiling rustls-webpki v0.103.16
+   Compiling webpki-roots v1.0.11
+   Compiling winit v0.30.13
+   Compiling hyper-util v0.1.21
+   Compiling softbuffer v0.4.8
+   Compiling tracing-subscriber v0.3.23
+   Compiling rmcp v3.8.0
+   Compiling filedescriptor v0.8.3
+   Compiling portable-pty v0.8.1
+   Compiling tracing-appender v0.2.5
+   Compiling tokio-rustls v0.26.6
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.12.28
+   Compiling half v2.7.1
+   Compiling ahash v0.8.12
+   Compiling ppv-lite86 v0.2.21
+   Compiling hashbrown v0.14.5
+   Compiling bytehost-client v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-client)
+   Compiling dozer-core v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-core)
+   Compiling iced_graphics v0.14.0
+   Compiling rand_chacha v0.3.1
+   Compiling naga v27.0.3
+   Compiling bytehost-panel v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-panel)
+   Compiling rand v0.8.8
+   Compiling hashlink v0.9.1
+   Compiling digger-app-host v0.1.0 (/private/tmp/digger-unified-product-review/crates/app-host)
+   Compiling rusqlite v0.32.1
+   Compiling iced_renderer v0.14.0
+   Compiling iced_program v0.14.0
+   Compiling tungstenite v0.24.0
+   Compiling iced_tiny_skia v0.14.1
+   Compiling iced_winit v0.14.1
+   Compiling iced_widget v0.14.2
+   Compiling dozer-store-project v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-store-project)
+   Compiling tokio-tungstenite v0.24.0
+   Compiling dozer-client v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-client)
+   Compiling digger-paths v0.1.0 (/private/tmp/digger-unified-product-review/crates/paths)
+   Compiling digger-store v0.1.0 (/private/tmp/digger-unified-product-review/crates/store)
+   Compiling dozerd v0.3.3 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozerd)
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling iced v0.14.0
+   Compiling byteui v0.5.2 (/Users/chrischiang/Projects/CoralProjects/byteboy/byteui)
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+   Compiling bytehost-desktop v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-desktop)
+   Compiling dozer-mcp v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-mcp)
+   Compiling dozer-panel-host v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-host)
+   Compiling dozer-panel-usage v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-usage)
+   Compiling dozer-panel-todo v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-todo)
+   Compiling digger-desktop v0.1.7 (/private/tmp/digger-unified-product-review/crates/desktop)
+   Compiling wgpu-hal v27.0.4
+   Compiling wgpu-core-deps-apple v27.0.0
+   Compiling wgpu-core v27.0.3
+   Compiling wgpu v27.0.1
+   Compiling cryoglyph v0.1.0
+   Compiling iced_wgpu v0.14.0
+   Compiling dozer-panel-term v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-term)
+   Compiling bytehost-settings-ui v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-settings-ui)
+   Compiling bytehost-chrome v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/bytehost/crates/bytehost-chrome)
+   Compiling dozer-panel-conversations v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-conversations)
+   Compiling dozer-panel-project v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-project)
+   Compiling dozer-panel-files v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-files)
+   Compiling dozer-panel-browser v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-browser)
+   Compiling dozer-panel-group-chat v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-group-chat)
+   Compiling dozer-panel-agent v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-agent)
+   Compiling dozer-panel-preview v0.1.0 (/Users/chrischiang/Projects/CoralProjects/byteboy/dozer/crates/dozer-panel-preview)
+warning: unused variable: `key`
+   --> crates/desktop/src/settings/mod.rs:398:13
+    |
+398 |         let key = state.key().unwrap();
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_key`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:971:4
+    |
+971 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+    --> crates/desktop/src/apps/mod.rs:1245:19
+     |
+ 275 | impl AppsState {
+     | -------------- method in this implementation
+...
+1245 |     pub(crate) fn opened(&self) -> bool {
+     |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 3 warnings (run `cargo fix --lib -p digger-desktop --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.89s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (/Users/chrischiang/Projects/CoralProjects/byteboy/digger/target/aarch64-apple-darwin/debug/deps/digger_desktop-965be85b8a39c930)
+
+running 3 tests
+test product::tests::review_probe_binding_failure_erases_retryable_phase ... REPRO: binding failure destroyed the retryable Failed state and its only error UI
+ok
+test product::tests::review_probe_stale_binding_error_closes_current_dialog ... REPRO: stale binding failure closed the current dialog
+ok
+test product::tests::review_probe_token_is_exposed_by_product_message_debug ... REPRO: product Message Debug contains the synthetic token input
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 729 filtered out; finished in 0.02s
+

@@ -1,0 +1,265 @@
+--- a/crates/dozer-app/src/app/app.rs
++++ b/crates/dozer-app/src/app/app.rs
+@@ -2038,7 +2038,14 @@
+     /// 已有窗口只 `Activate` / 切页,新会话才创建内容状态。
+     pub(crate) fn open_settings_page(&mut self, page: Option<bytehost_settings::PageId>) {
+         use bytehost_settings::dialog::DialogEffect;
+-        let effects = self.settings_dialog.open();
++        let effects = if matches!(
++            self.settings_dialog.phase(),
++            bytehost_settings::dialog::Phase::Failed(_)
++        ) {
++            self.settings_dialog.retry()
++        } else {
++            self.settings_dialog.open()
++        };
+         let create = effects.iter().find_map(|effect| match effect {
+             DialogEffect::Create(key) => Some(*key),
+             _ => None,
+@@ -2140,6 +2147,18 @@
+         if self.settings_dialog.key() != Some(key) {
+             return;
+         }
++        let detail = detail.into();
++        self.push_toast_keyed(
++            LOG,
++            crate::extensions::toast::Level::Error,
++            dozer_model::LocalizedText::keyed(
++                crate::i18n::HOST_OWNER,
++                "settings.window.failed",
++                "Settings could not open: {detail}. Open Settings again to retry.",
++            )
++            .with_arg("detail", detail.clone()),
++            "settings-window-failed",
++        );
+         let effects = self.settings_dialog.handle(DialogEvent::Failed {
+             key,
+             failure: DialogFailure::new(stage, detail),
+--- a/crates/dozer-app/src/extensions/settings.rs
++++ b/crates/dozer-app/src/extensions/settings.rs
+@@ -60,6 +60,28 @@
+ pub type LanguageState = bytehost_settings::SelectionState<LocalePreference>;
+ 
+ /// 产品注册的页面顺序:Theme / Git / Advanced / Apps / Language(默认 Theme)。
++/// Inner page controls consume Escape before closing the owning dialog.
++pub(crate) fn escape_message(state: &State) -> Option<Message> {
++    if state
++        .core
++        .current()
++        .is_some_and(|page| page.as_str() == bytehost_settings::APPS_ID)
++    {
++        if let Some(message) = state.apps.escape_message() {
++            return Some(Message::Apps(message));
++        }
++    }
++    if state
++        .core
++        .current()
++        .is_some_and(|page| page.as_str() == "dozer.advanced")
++        && matches!(state.advanced, AdvancedState::ConfirmingStop { .. })
++    {
++        return Some(Message::AdvancedStopCancel);
++    }
++    None
++}
++
+ pub fn product_registry() -> PageRegistry {
+     PageRegistry::new(vec![
+         PageDescriptor::built_in(
+@@ -1132,6 +1154,45 @@
+         }
+     }
+ 
++    #[test]
++    fn escape_cancels_the_inner_apps_confirmation_before_the_settings_dialog() {
++        let mut state = test_state(
++            ConnectState::NotConnected,
++            ConnectState::NotConnected,
++            ConnectState::NotConnected,
++        );
++        let apps = PageId::new(bytehost_settings::APPS_ID).unwrap();
++        state.core.select(&state.registry, &apps);
++        state.apps.flow = settings_apps::Flow::ConfirmUninstall {
++            id: "demo".into(),
++            name: "Demo".into(),
++        };
++        let Some(Message::Apps(message)) = escape_message(&state) else {
++            panic!("confirmation must consume Escape");
++        };
++        assert!(state.apps.update(message, 0).is_empty());
++        assert!(matches!(state.apps.flow, settings_apps::Flow::Idle));
++        assert!(state.core.is_open());
++        assert!(escape_message(&state).is_none());
++    }
++
++    #[test]
++    fn escape_cancels_advanced_stop_confirmation_before_closing_settings() {
++        let mut state = test_state(
++            ConnectState::NotConnected,
++            ConnectState::NotConnected,
++            ConnectState::NotConnected,
++        );
++        state
++            .core
++            .select(&state.registry, &PageId::new("dozer.advanced").unwrap());
++        state.advanced = AdvancedState::ConfirmingStop { session_count: 2 };
++        assert!(matches!(
++            escape_message(&state),
++            Some(Message::AdvancedStopCancel)
++        ));
++    }
++
+     fn snap(pref: LocalePreference, active: &str, rev: u64) -> LocaleSnapshot {
+         LocaleSnapshot {
+             preference: pref,
+@@ -1705,6 +1766,7 @@
+                 Ok(AccountSnapshot {
+                     accounts,
+                     stale_providers: Vec::new(),
++                    unreconciled_providers: Vec::new(),
+                 }),
+             ),
+             &FakeDaemon::default(),
+--- a/crates/dozer-app/src/platform/settings_overlay.rs
++++ b/crates/dozer-app/src/platform/settings_overlay.rs
+@@ -20,9 +20,7 @@
+ use crate::app::{App, Message};
+ use crate::extensions::settings;
+ use crate::platform::overlay_gpu::OverlayGpu;
+-use crate::platform::overlay_window::{
+-    backdrop_card, full_window_overlay_bounds, open_child_window,
+-};
++use crate::platform::overlay_window::{backdrop_card, full_window_overlay_bounds};
+ 
+ /// 卡片逻辑尺寸——与"新建项目"弹窗(`project_create::card_logical_size`)
+ /// 完全一致:宽度 = 主窗口宽度 40%(下限 560),高度 = 主窗口高度 75%(下限
+@@ -63,7 +61,7 @@
+         self.window.clone()
+     }
+ 
+-    pub(crate) fn open(
++    pub(crate) fn try_open(
+         main_window: &Arc<Window>,
+         adapter: &wgpu::Adapter,
+         device: &wgpu::Device,
+@@ -71,7 +69,7 @@
+         instance: &wgpu::Instance,
+         el: &ActiveEventLoop,
+         key: bytehost_settings::dialog::DialogKey,
+-    ) -> SettingsOverlay {
++    ) -> Result<SettingsOverlay, String> {
+         let scale = main_window.scale_factor();
+         let (pos, size) = full_window_overlay_bounds(
+             main_window
+@@ -79,18 +77,28 @@
+                 .unwrap_or(PhysicalPosition::new(0, 0)),
+             main_window.inner_size(),
+         );
+-        let window = open_child_window(main_window, pos, size, "settings", el);
+-        window.set_ime_allowed(true);
++        let (window, gpu) = bytehost_desktop::dialog::try_create_dialog_resources(
++            || {
++                let window = bytehost_desktop::overlay::try_open_child_window(
++                    main_window,
++                    pos,
++                    size,
++                    "settings",
++                    el,
++                )?;
++                window.set_ime_allowed(true);
++                Ok(window)
++            },
++            |window| OverlayGpu::try_open(window, instance, adapter, device, queue, size, scale),
++        )?;
+ 
+-        let gpu = OverlayGpu::open(&window, instance, adapter, device, queue, size, scale);
+-
+-        SettingsOverlay {
++        Ok(SettingsOverlay {
+             window,
+             gpu,
+             cursor: mouse::Cursor::Unavailable,
+             modifiers: ModifiersState::default(),
+             key,
+-        }
++        })
+     }
+ 
+     pub(crate) fn reposition(
+@@ -122,17 +130,16 @@
+     }
+ 
+     pub(crate) fn handle_input(&mut self, app: &mut App, event: &WindowEvent) -> Vec<Message> {
+-        if let WindowEvent::KeyboardInput {
++        let was_composing = self.gpu.is_composing();
++        let escape = matches!(event, WindowEvent::KeyboardInput {
+             event: key_event,
+             is_synthetic: false,
+             ..
+-        } = event
+-            && key_event.state == winit::event::ElementState::Pressed
++        }
++            if key_event.state == winit::event::ElementState::Pressed
+             && key_event.logical_key
+                 == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+-        {
+-            return vec![Message::Settings(settings::Message::Close)];
+-        }
++        );
+         // modifiers / cursor / winit→iced 转换只有共享实现一份。
+         let Some(iced_event) =
+             self.gpu
+@@ -147,7 +154,17 @@
+             settings::settings_card(state, app.locale.active_locale()).map(Message::Settings),
+             card_logical_size(&self.window),
+         );
+-        self.gpu
+-            .dispatch(&self.window, self.cursor, content, iced_event)
++        let (mut messages, status) =
++            self.gpu
++                .dispatch_with_status(&self.window, self.cursor, content, iced_event);
++        if escape
++            && !was_composing
++            && status == iced_winit::core::event::Status::Ignored
++            && messages.is_empty()
++        {
++            let action = settings::escape_message(state).unwrap_or(settings::Message::Close);
++            messages.push(Message::Settings(action));
++        }
++        messages
+     }
+ }
+--- a/crates/dozer-app/src/platform/window_events.rs
++++ b/crates/dozer-app/src/platform/window_events.rs
+@@ -1671,14 +1671,25 @@
+                         else {
+                             return;
+                         };
+-                        let overlay = settings_overlay::SettingsOverlay::open(
++                        let created = settings_overlay::SettingsOverlay::try_open(
+                             window, adapter, device, queue, instance, el, key,
+                         );
+-                        *settings_overlay = Some(overlay);
+-                        let Self::Ready { app, .. } = self else {
+-                            return;
+-                        };
+-                        app.settings_native_opened(key);
++                        match created {
++                            Ok(overlay) => {
++                                *settings_overlay = Some(overlay);
++                                let Self::Ready { app, .. } = self else {
++                                    return;
++                                };
++                                app.settings_native_opened(key);
++                            }
++                            Err(error) => {
++                                // Partial native/GPU resources have been dropped by the factory.
++                                let Self::Ready { app, .. } = self else {
++                                    return;
++                                };
++                                app.settings_native_failed(key, "create", error);
++                            }
++                        }
+                     }
+                     DialogEffect::Activate(key) => {
+                         let Self::Ready {

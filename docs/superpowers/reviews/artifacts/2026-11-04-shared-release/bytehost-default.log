@@ -1,0 +1,55 @@
+    Checking smallvec v1.16.2
+    Checking futures-core v0.3.34
+    Checking euclid v0.22.14
+    Checking half v2.7.1
+    Checking core-foundation v0.9.4
+    Checking flate2 v1.1.10
+    Checking bytehost-apps v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-apps)
+    Checking percent-encoding v2.3.2
+    Checking window_clipboard v0.5.1
+    Checking bytehost-git-accounts v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-git-accounts)
+    Checking bytehost-core v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-core)
+    Checking bytehost-settings v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-settings)
+    Checking futures-channel v0.3.34
+    Checking parking_lot_core v0.9.12
+    Checking harfrust v0.3.2
+    Checking icu_normalizer v2.3.0
+    Checking kurbo v0.11.3
+    Checking rustybuzz v0.20.1
+    Checking form_urlencoded v1.2.2
+    Checking core-graphics-types v0.1.3
+    Checking png v0.17.16
+    Checking lyon_geom v1.0.19
+    Checking futures-util v0.3.34
+    Checking parking_lot v0.12.5
+    Checking core-graphics v0.23.2
+    Checking idna_adapter v1.2.2
+    Checking svgtypes v0.15.3
+    Checking lyon_path v1.0.19
+    Checking tokio v1.53.2
+    Checking tiny-skia v0.11.4
+    Checking idna v1.1.0
+    Checking winit v0.30.13
+    Checking usvg v0.45.1
+    Checking url v2.5.8
+    Checking cosmic-text v0.15.0
+    Checking wry v0.55.1
+    Checking bytehost-webview v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-webview)
+    Checking futures v0.3.34
+    Checking resvg v0.45.1
+    Checking iced_futures v0.14.0
+    Checking bytehost-client v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-client)
+    Checking bytehost-panel v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-panel)
+    Checking iced_graphics v0.14.0
+    Checking iced_runtime v0.14.0
+    Checking iced_debug v0.14.0
+    Checking iced_renderer v0.14.0
+    Checking iced_program v0.14.0
+    Checking iced_winit v0.14.1
+    Checking iced_widget v0.14.2
+    Checking byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+    Checking iced v0.14.0
+    Checking bytehost-desktop v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-desktop)
+    Checking bytehost-settings-ui v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-settings-ui)
+    Checking bytehost-chrome v0.1.0 (/private/tmp/digger-shared-release-2026-11-04/bytehost/crates/bytehost-chrome)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.65s
