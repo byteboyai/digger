@@ -195,6 +195,8 @@ pub enum Msg {
     ForceExit,
     /// 系统关闭请求:带窗口 ID,主窗与设置窗走不同生命周期。
     CloseRequested(window::Id),
+    /// 原生窗口已经销毁(iced 的 Closed 事件),用于确认实例真正释放。
+    WindowClosed(window::Id),
     /// 设置窗口的键盘事件(Esc)。只有非主窗会收到。
     SettingsEscape(window::Id),
     /// 设置窗口的产品消息。
@@ -1326,41 +1328,149 @@ impl ProductShell {
     }
 
     /// 打开设置窗口(或激活已存在的窗口)。`target` 不可用时由注册表回退。
+    ///
+    /// 生命周期由共享 `DialogController` 决定:产品只执行 `Create` / `Activate` /
+    /// `Destroy`,并把原生结果回灌。重复打开不会创建第二个窗口。
     fn open_settings(&mut self, target: Option<bytehost_settings::PageId>) -> Task<Msg> {
-        self.settings.open(target.as_ref());
+        let effects = self.settings.open(target.as_ref());
         let activate = self.activate_settings_page();
-        if let Some(id) = self.settings.window {
-            return Task::batch([activate, iced::window::gain_focus(id)]);
+        Task::batch([activate, self.apply_settings_effects(effects)])
+    }
+
+    /// 执行共享对话框命令。`Create` 建 iced 窗口后立即挂成主窗的 AppKit 子窗口;
+    /// `Destroy` 关闭句柄并回报 `Closed`,保证控制器不会停在 Closing。
+    fn apply_settings_effects(
+        &mut self,
+        effects: Vec<bytehost_settings::dialog::DialogEffect>,
+    ) -> Task<Msg> {
+        use bytehost_settings::dialog::DialogEffect;
+        let mut tasks = Vec::new();
+        for effect in effects {
+            match effect {
+                DialogEffect::Create(key) => {
+                    // 创建结果必须带着创建时的身份回来;窗口槽位在 `Created`
+                    // 里按 key 接受,迟到的旧 create 不会覆盖当前实例。
+                    let (id, open) = iced::window::open(crate::settings::window::settings_window());
+                    tasks.push(
+                        open.map(move |_| {
+                            Msg::Settings(crate::settings::Message::Created(key, id))
+                        }),
+                    );
+                }
+                DialogEffect::Activate(key) => {
+                    if let Some(id) = self.settings.window
+                        && self.settings.window_key == Some(key)
+                    {
+                        tasks.push(iced::window::gain_focus(id));
+                    }
+                }
+                DialogEffect::Destroy { key, reason, .. } => {
+                    // 只能关闭 effect 指定身份的实例;旧 session / 旧 attempt
+                    // 的销毁不能误伤当前窗口。句柄保留到 iced 的 `Closed`
+                    // 事件回来后才确认,不能"发出 close 就当已释放"。
+                    if let Some(id) = self.settings.window_for(key) {
+                        tasks.push(iced::window::close(id));
+                    }
+                    // A forced cleanup already owns a retired instance. Do not schedule
+                    // another timeout after resetting the controller.
+                    if reason == bytehost_settings::dialog::DestroyReason::Timeout {
+                        continue;
+                    }
+                    // 无实例(创建中取消)或原生回包丢失时有界结束。
+                    tasks.push(Task::perform(
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        },
+                        move |_| Msg::Settings(crate::settings::Message::DestroyTimedOut(key)),
+                    ));
+                }
+            }
         }
-        let (id, open) = iced::window::open(crate::settings::window::settings_window());
-        self.settings.window = Some(id);
-        Task::batch([
-            activate,
-            open.map(move |_| Msg::Settings(crate::settings::Message::Opened(id))),
-        ])
+        Task::batch(tasks)
+    }
+
+    /// 主窗移动 / 缩放 / 跨屏后把子窗口 frame 重新对齐到父客户区。
+    fn sync_settings_overlay(&self) -> Task<Msg> {
+        let Some(key) = self.settings.key() else {
+            return Task::none();
+        };
+        match (self.window, self.settings.window) {
+            (Some(main), Some(child)) => {
+                bytehost_desktop::dialog::sync_child(main, child).map(move |result| {
+                    Msg::Settings(crate::settings::Message::SyncResult(
+                        key,
+                        result.err().map(|error| error.to_string()),
+                    ))
+                })
+            }
+            _ => Task::none(),
+        }
     }
 
     /// 设置入口与面板入口使用同一个幂等启动流程，切页不另建服务或订阅。
     fn activate_settings_page(&mut self) -> Task<Msg> {
-        if self
-            .settings
-            .page()
-            .is_some_and(|id| id.as_str() == bytehost_settings::APPS_ID)
-        {
+        let page = self.settings.page().map(|id| id.as_str().to_owned());
+        let apps = if page.as_deref() == Some(bytehost_settings::APPS_ID) {
             self.apps
                 .update(crate::apps::Message::Opened)
                 .map(Msg::Apps)
         } else {
             Task::none()
-        }
+        };
+        let git = if page.as_deref() == Some(bytehost_settings::GIT_ID) {
+            self.begin_settings_git_query()
+        } else {
+            Task::none()
+        };
+        Task::batch([apps, git])
     }
 
     fn close_settings(&mut self) -> Task<Msg> {
-        let Some(id) = self.settings.window.take() else {
-            return Task::none();
-        };
-        self.settings.core.close();
-        iced::window::close(id)
+        let effects = self.settings.close();
+        self.apply_settings_effects(effects)
+    }
+
+    fn escape_settings(&mut self) -> Task<Msg> {
+        use bytehost_panel::install::{Flow, Message as InstallMessage};
+        // Translate the product page's existing cancellation intent. This keeps
+        // the Digger fix consumable before the shared follow-up patch is applied.
+        let inner_confirmation = matches!(
+            self.apps.flow().flow,
+            Flow::Reviewing { .. }
+                | Flow::Failed { .. }
+                | Flow::ConfirmUninstall { .. }
+                | Flow::ConfirmRollback { .. }
+                | Flow::RuntimeReviewing { .. }
+                | Flow::ConfirmRuntimeUninstall { .. }
+        );
+        if self
+            .settings
+            .page()
+            .is_some_and(|page| page.as_str() == bytehost_settings::APPS_ID)
+            && inner_confirmation
+        {
+            return self
+                .apps
+                .update(crate::apps::Message::Install(InstallMessage::FlowDismissed))
+                .map(Msg::Apps);
+        }
+        self.close_settings()
+    }
+
+    /// 打开 / 重开设置时先查权威账户事实;窗口只是展示者。
+    fn begin_settings_git_query(&mut self) -> Task<Msg> {
+        use crate::settings::{GIT_KEYCHAIN_SERVICE, git_accounts_path};
+        let ticket = self.settings.git.begin_query();
+        Task::perform(
+            async move {
+                let service = bytehost_git_accounts::system_service(
+                    GIT_KEYCHAIN_SERVICE,
+                    git_accounts_path(),
+                );
+                service.query()
+            },
+            move |result| Msg::Settings(crate::settings::Message::GitQueryLoaded(ticket, result)),
+        )
     }
 
     fn begin_exit(&mut self) -> Task<Msg> {
@@ -1372,13 +1482,8 @@ impl ProductShell {
         self.apps.prepare_shutdown();
         // 关窗口只 detach:abort 转发,会话随 `diggerd` 存活。
         self.agent.prepare_shutdown();
-        match self.settings.window.take() {
-            Some(id) => {
-                self.settings.core.close();
-                iced::window::close(id)
-            }
-            None => Task::none(),
-        }
+        let parent_closed = self.settings.parent_closed();
+        self.apply_settings_effects(parent_closed)
     }
 
     fn finish_shutdown_if_safe(&mut self) -> Task<Msg> {
@@ -1419,10 +1524,69 @@ impl ProductShell {
         match msg {
             Message::Open(target) => self.open_settings(target),
             Message::Close => self.close_settings(),
-            Message::Opened(id) => {
-                // 句柄已在 open_settings 登记；旧创建回包不能复活已关闭的窗口。
-                let _ = id;
+            Message::Created(key, id) => {
+                if !self.settings.on_native_opened(key, id) {
+                    // 迟到的创建结果:只销毁它自己,不能覆盖 / 复活当前实例。
+                    return iced::window::close(id);
+                }
+                if matches!(
+                    self.settings.phase(),
+                    bytehost_settings::dialog::Phase::Closing
+                ) {
+                    // 创建期间已经请求关闭:销毁晚到实例并确认 Closed。
+                    // The actual Closed subscription confirms destruction. The close
+                    // timeout created by the original request remains the fallback.
+                    return iced::window::close(id);
+                }
+                let Some(main) = self.window else {
+                    // 主窗还没就绪:保留 Failed 与重试入口,并清理这次实例。
+                    self.settings
+                        .on_bind_failed(key, "settings opened before the main window was ready");
+                    if let Some(id) = self.settings.take_window_for(key) {
+                        return iced::window::close(id);
+                    }
+                    return Task::none();
+                };
+                iced::window::size(main).then(move |size| {
+                    // Resize is an effect with no Output; `then` would never run.
+                    iced::window::resize(id, size).chain(
+                        bytehost_desktop::dialog::attach_child(main, id).map(move |result| {
+                            Msg::Settings(crate::settings::Message::Bound(
+                                key,
+                                result.map_err(|error| error.to_string()),
+                            ))
+                        }),
+                    )
+                })
+            }
+            Message::Bound(key, result) => match result {
+                Ok(()) => {
+                    let effects = self.settings.on_bound(key);
+                    self.apply_settings_effects(effects)
+                }
+                Err(detail) => {
+                    // 只有当前 attempt 的失败才清理由它自己的实例;旧 session /
+                    // 旧 attempt 的失败直接丢弃,不能关闭当前新窗口。
+                    if !self.settings.on_bind_failed(key, detail) {
+                        return Task::none();
+                    }
+                    // 保留 Failed 相位与 key(显式重试需要),只销毁失败实例。
+                    if let Some(id) = self.settings.take_window_for(key) {
+                        iced::window::close(id)
+                    } else {
+                        Task::none()
+                    }
+                }
+            },
+            Message::SyncResult(key, detail) => {
+                if let Some(detail) = detail {
+                    self.settings.on_sync_failed(key, detail);
+                }
                 Task::none()
+            }
+            Message::DestroyTimedOut(key) => {
+                let effects = self.settings.on_destroy_timed_out(key);
+                self.apply_settings_effects(effects)
             }
             Message::Select(id) => {
                 self.settings.select(&id);
@@ -1430,10 +1594,72 @@ impl ProductShell {
             }
             Message::Escape(id) => {
                 if self.settings.window == Some(id) {
-                    self.close_settings()
+                    self.escape_settings()
                 } else {
                     Task::none()
                 }
+            }
+            Message::Retry => {
+                let effects = self.settings.retry();
+                self.apply_settings_effects(effects)
+            }
+            Message::Git(intent) => self.update_settings_git(intent),
+            Message::GitToken(provider, value) => {
+                self.settings.git.set_token(provider, value.expose());
+                // value 在此 drop 时清零。
+                Task::none()
+            }
+            Message::GitQueryLoaded(ticket, result) => {
+                match result {
+                    Ok(snapshot) => {
+                        self.settings.git.apply_query(ticket, snapshot);
+                    }
+                    Err(error) => {
+                        self.settings.git.query_failed(ticket, error);
+                    }
+                }
+                Task::none()
+            }
+            Message::GitConnectLoaded(provider, ticket, result) => {
+                match result {
+                    Ok((account, outcome)) => {
+                        let accepted =
+                            self.settings
+                                .git
+                                .connect_succeeded(ticket, account, outcome.clone());
+                        if !accepted && outcome.credential_committed {
+                            // 取消 / 被取代的请求已经完成持久化:事实不能静默
+                            // 丢弃。保留部分提交告警,并重新查询权威账户事实。
+                            self.settings.git.observe_orphan_commit(&outcome);
+                            return self.begin_settings_git_query();
+                        }
+                    }
+                    Err(error) => {
+                        self.settings.git.connect_failed(ticket, error);
+                    }
+                }
+                let _ = provider;
+                Task::none()
+            }
+            Message::GitDisconnectLoaded(provider, ticket, result) => {
+                match result {
+                    Ok(outcome) => {
+                        let accepted = self
+                            .settings
+                            .git
+                            .disconnect_succeeded(ticket, outcome.clone());
+                        if !accepted && outcome.credential_committed {
+                            // 断开已发生,重新查询而不是把 UI 留在"已连接"。
+                            self.settings.git.observe_orphan_commit(&outcome);
+                            return self.begin_settings_git_query();
+                        }
+                    }
+                    Err(error) => {
+                        self.settings.git.disconnect_failed(ticket, error);
+                    }
+                }
+                let _ = provider;
+                Task::none()
             }
             Message::ThemeSelected(scheme) => {
                 self.settings.theme_error = crate::settings::theme::select(scheme);
@@ -1454,18 +1680,111 @@ impl ProductShell {
         }
     }
 
+    /// Git 页动作:产品只负责把类型化意图翻译成服务调用与窗口动作。
+    fn update_settings_git(&mut self, intent: bytehost_settings::git::GitIntent) -> Task<Msg> {
+        use crate::settings::{GIT_KEYCHAIN_SERVICE, Message as S, git_accounts_path};
+        use bytehost_settings::git::GitIntent;
+        match intent {
+            GitIntent::Connect { provider } => {
+                self.settings.git.begin_edit(provider);
+                Task::none()
+            }
+            GitIntent::Submit { provider } => {
+                let Some(ticket) = self.settings.git.begin_connect(provider) else {
+                    return Task::none();
+                };
+                let admission = self.settings.admission();
+                // 服务层提交准入:网络阶段取消后不得开始持久化;同 provider
+                // 只有最新 ticket 能写入。
+                admission.register(ticket);
+                let token =
+                    bytehost_git_accounts::SecretToken::new(self.settings.git.token(provider));
+                Task::perform(
+                    async move {
+                        let service = bytehost_git_accounts::system_service_with_admission(
+                            GIT_KEYCHAIN_SERVICE,
+                            git_accounts_path(),
+                            admission,
+                        );
+                        service
+                            .connect_with_account_at(provider, &token, Some(ticket))
+                            .await
+                    },
+                    move |result| Msg::Settings(S::GitConnectLoaded(provider, ticket, result)),
+                )
+            }
+            GitIntent::Cancel { provider } => {
+                if let Some(ticket) = self.settings.git.cancel(provider) {
+                    self.settings.admission().cancel(ticket);
+                }
+                Task::none()
+            }
+            GitIntent::Disconnect { provider } => {
+                let Some(ticket) = self.settings.git.begin_disconnect(provider) else {
+                    return Task::none();
+                };
+                let admission = self.settings.admission();
+                admission.register(ticket);
+                Task::perform(
+                    async move {
+                        let service = bytehost_git_accounts::system_service_with_admission(
+                            GIT_KEYCHAIN_SERVICE,
+                            git_accounts_path(),
+                            admission,
+                        );
+                        service.disconnect_at(provider, Some(ticket))
+                    },
+                    move |result| Msg::Settings(S::GitDisconnectLoaded(provider, ticket, result)),
+                )
+            }
+            GitIntent::OpenTokenPage { provider } => {
+                let program = if cfg!(target_os = "macos") {
+                    "open"
+                } else {
+                    "xdg-open"
+                };
+                let _ = std::process::Command::new(program)
+                    .arg(provider.token_creation_url())
+                    .spawn();
+                Task::none()
+            }
+            GitIntent::RetryQuery => self.begin_settings_git_query(),
+        }
+    }
+
     /// 设置窗口的内容(与主窗共用同一个产品状态,不复制任何业务状态)。
     pub fn settings_view(&self) -> Element<'_, Msg> {
         use bytehost_settings_ui::Shell;
 
         let text = Self::settings_text();
         let current = self.settings.page();
-        let is_apps = current.is_some_and(|id| id.as_str() == bytehost_settings::APPS_ID);
+        let page = current.map(|id| id.as_str()).unwrap_or_default();
 
-        let content: Element<'_, Msg> = if is_apps {
-            self.settings_apps_view(text)
+        let content: Element<'_, Msg> = match page {
+            bytehost_settings::GIT_ID => self.settings_git_view(text),
+            bytehost_settings::APPS_ID => self.settings_apps_view(text),
+            _ => self.settings_theme_view(text),
+        };
+
+        let content: Element<'_, Msg> = if let Some(detail) = self.settings.bind_error.as_deref() {
+            let colors = byteui::theme::color::current();
+            column![
+                iced::widget::text("设置窗口未能绑定到主窗口。")
+                    .size(byteui::theme::font::body())
+                    .color(colors.red),
+                iced::widget::text(detail)
+                    .size(byteui::theme::font::label())
+                    .color(colors.dim),
+                iced::widget::button("重试")
+                    .padding([4, 12])
+                    .on_press(Msg::Settings(crate::settings::Message::Retry))
+                    .style(byteui::feedback::dialog::action_button_style(colors.cream)),
+                content,
+            ]
+            .spacing(8)
+            .into()
         } else {
-            self.settings_theme_view(text)
+            content
         };
 
         bytehost_settings_ui::settings_shell(Shell {
@@ -1477,8 +1796,112 @@ impl ProductShell {
             on_close_hover: None,
             close_hovered: false,
             text,
-            scroll_content: !is_apps,
+            scroll_content: page != bytehost_settings::APPS_ID,
             width: Length::Fill,
+        })
+    }
+
+    /// 设置 overlay 的整窗视图:半透明遮罩 + 按父客户区 40% / 75% 居中的共享卡片。
+    ///
+    /// 窗口本身已经对齐父客户区(原生子窗口),这里只负责视觉层级;点击遮罩
+    /// 不关闭,但会落在子窗口上,不会穿透到主窗的 wry 子视图。
+    pub fn settings_overlay_view(&self) -> Element<'_, Msg> {
+        use bytehost_settings::dialog::{DialogGeometry, LogicalSize};
+        use iced::widget::container;
+
+        let (width, height) = self.shell.window();
+        let rect =
+            DialogGeometry::default().card_rect(LogicalSize::new(width.max(1.0), height.max(1.0)));
+        let card = container(self.settings_view())
+            .width(Length::Fixed(rect.width))
+            .height(Length::Fixed(rect.height));
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .style(|_theme: &iced::Theme| container::Style {
+                background: Some(
+                    iced::Color {
+                        a: 0.55,
+                        ..iced::Color::BLACK
+                    }
+                    .into(),
+                ),
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    /// 设置窗创建 / 绑定失败后的主窗口入口。
+    ///
+    /// 失败时设置窗会被销毁,错误和重试不能只画在已经消失的窗口里;主窗口
+    /// 顶部保留同一份 `bind_error` 与显式重试。
+    fn settings_failure_banner(&self) -> Option<Element<'_, Msg>> {
+        if !matches!(
+            self.settings.phase(),
+            bytehost_settings::dialog::Phase::Failed(_)
+        ) {
+            return None;
+        }
+        let detail = self.settings.bind_error.as_deref()?;
+        let colors = byteui::theme::color::current();
+        let banner_bg = colors.bg;
+        let banner_border = colors.red;
+        let card = container(
+            column![
+                iced::widget::text("设置窗口未能打开。")
+                    .size(byteui::theme::font::body())
+                    .color(colors.cream),
+                iced::widget::text(detail)
+                    .size(byteui::theme::font::label())
+                    .color(colors.dim),
+                iced::widget::row![
+                    iced::widget::button("重试")
+                        .padding([4, 12])
+                        .on_press(Msg::Settings(crate::settings::Message::Retry))
+                        .style(byteui::feedback::dialog::action_button_style(colors.cream)),
+                    iced::widget::button("关闭")
+                        .padding([4, 12])
+                        .on_press(Msg::Settings(crate::settings::Message::Close))
+                        .style(byteui::feedback::dialog::action_button_style(colors.dim)),
+                ]
+                .spacing(8),
+            ]
+            .spacing(6),
+        )
+        .padding(12)
+        .max_width(560)
+        .style(move |_theme: &iced::Theme| iced::widget::container::Style {
+            background: Some(banner_bg.into()),
+            border: iced::Border {
+                color: banner_border,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..iced::widget::container::Style::default()
+        });
+        Some(
+            container(card)
+                .width(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Center)
+                .padding([16, 16])
+                .into(),
+        )
+    }
+
+    /// 共享 Git 页:视图与状态规则只有一份,服务由产品注入。
+    fn settings_git_view<'a>(&'a self, text: bytehost_settings_ui::Text<'a>) -> Element<'a, Msg> {
+        bytehost_settings_ui::git_accounts_page(bytehost_settings_ui::GitAccountsPage {
+            state: &self.settings.git,
+            on_token: &|provider, value| {
+                Msg::Settings(crate::settings::Message::GitToken(
+                    provider,
+                    bytehost_git_accounts::SecretToken::new(value),
+                ))
+            },
+            on_intent: &|intent| Msg::Settings(crate::settings::Message::Git(intent)),
+            text,
         })
     }
 
@@ -2260,7 +2683,7 @@ impl ProductShell {
 
     /// 这个原生窗口是不是设置窗。
     pub fn is_settings_window(&self, id: window::Id) -> bool {
-        self.settings.window == Some(id)
+        self.settings.owns_window(id)
     }
 
     pub fn window_size(&self) -> (f32, f32) {
@@ -2491,7 +2914,11 @@ impl Product<Msg> for ProductShell {
             }
             Msg::WindowStateRefresh(id) => {
                 if self.window == Some(id) && !self.closing {
-                    Task::batch([self.restyle_window(), self.query_window_state()])
+                    Task::batch([
+                        self.restyle_window(),
+                        self.query_window_state(),
+                        self.sync_settings_overlay(),
+                    ])
                 } else {
                     Task::none()
                 }
@@ -2521,7 +2948,11 @@ impl Product<Msg> for ProductShell {
                 let resized = matches!(m, ShellMsg::Resized { .. });
                 let task = self.on_shell(m);
                 if resized {
-                    Task::batch([task, self.query_window_state()])
+                    Task::batch([
+                        task,
+                        self.query_window_state(),
+                        self.sync_settings_overlay(),
+                    ])
                 } else {
                     task
                 }
@@ -3294,9 +3725,18 @@ impl Product<Msg> for ProductShell {
                     Task::none()
                 }
             }
+            Msg::WindowClosed(id) => {
+                // 设置实例真正销毁后才推进控制器;旧实例只在槽位匹配时清理。
+                if self.settings.owns_window(id) {
+                    let effects = self.settings.on_native_closed(id);
+                    self.apply_settings_effects(effects)
+                } else {
+                    Task::none()
+                }
+            }
             Msg::SettingsEscape(id) => {
                 if self.settings.window == Some(id) {
-                    self.close_settings()
+                    self.escape_settings()
                 } else {
                     Task::none()
                 }
@@ -3333,7 +3773,16 @@ impl Product<Msg> for ProductShell {
                                 .on_press(Msg::Apps(crate::apps::Message::FlushCleanups)),
                         );
                     }
-                    return body.into();
+                    // 设置 overlay 需要全局透明清屏;主窗口的关闭占位页必须自己铺底色,
+                    // 否则会透出桌面。
+                    return iced::widget::container(body)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .style(|_theme: &iced::Theme| iced::widget::container::Style {
+                            background: Some(color::current().bg.into()),
+                            ..iced::widget::container::Style::default()
+                        })
+                        .into();
                 }
                 // 名称编辑框的"失焦保存"钩子:库的 `text_input` 焦点态只能借 Operation 在渲染时读到,
                 // Digger 没有逐帧原生循环,于是每帧派一个一次性消息,由 `update` 在两帧之间读回
@@ -3425,11 +3874,17 @@ impl Product<Msg> for ProductShell {
                     Some(overlay) => iced::widget::stack![body, overlay].into(),
                     None => body,
                 };
-                match self
+                let body: Element<'_, Msg> = match self
                     .group_chat
                     .group_create_overlay(self.projects.current_project())
                 {
                     Some(overlay) => iced::widget::stack![body, overlay].into(),
+                    None => body,
+                };
+                // 设置窗创建 / 绑定失败:入口必须留在主窗口,不能随失败的
+                // 设置窗一起消失。
+                match self.settings_failure_banner() {
+                    Some(banner) => iced::widget::stack![body, banner].into(),
                     None => body,
                 }
             },
@@ -3568,8 +4023,13 @@ fn agent_event(
     status: iced::event::Status,
     id: iced::window::Id,
 ) -> Option<Msg> {
-    // 设置窗只处理 Esc;其余鼠标 / 键盘事件不能进 Agent 终端。
+    // 设置窗只处理未被控件 / 输入法消费的 Esc;其余事件不能进 Agent 终端。
+    // `Captured` 表示页面内确认框 / 文本编辑器先处理了 Esc(含 IME 组合),
+    // 此时关闭设置会违反统一的 Esc 优先级。
     if crate::is_secondary_window(id) {
+        if status != iced::event::Status::Ignored {
+            return None;
+        }
         return match event {
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
@@ -3895,6 +4355,139 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_binding_failure_cannot_close_the_current_dialog() {
+        use bytehost_settings::dialog::Phase;
+        let mut shell = fresh("stale-dialog-bind");
+        shell.settings.open(None);
+        let old = shell.settings.key().unwrap();
+        let old_window = iced::window::Id::unique();
+        assert!(shell.settings.on_native_opened(old, old_window));
+        shell.settings.on_bound(old);
+        shell.settings.close();
+        shell.settings.on_native_closed(old_window);
+
+        shell.settings.open(None);
+        let current = shell.settings.key().unwrap();
+        let current_window = iced::window::Id::unique();
+        assert!(shell.settings.on_native_opened(current, current_window));
+        assert!(shell.settings.on_bound(current).is_empty());
+        assert_ne!(old.session, current.session);
+
+        let _ = shell.update_settings(crate::settings::Message::Bound(
+            old,
+            Err("synthetic stale bind failure".into()),
+        ));
+        assert_eq!(shell.settings.window, Some(current_window));
+        assert_eq!(shell.settings.key(), Some(current));
+        assert!(matches!(shell.settings.phase(), Phase::Open));
+        assert!(shell.settings.bind_error.is_none());
+    }
+
+    #[test]
+    fn current_binding_failure_keeps_a_retryable_visible_state() {
+        use bytehost_settings::dialog::Phase;
+        let mut shell = fresh("current-dialog-bind");
+        shell.settings.open(None);
+        let key = shell.settings.key().unwrap();
+        let window = iced::window::Id::unique();
+        assert!(shell.settings.on_native_opened(key, window));
+
+        let _ = shell.update_settings(crate::settings::Message::Bound(
+            key,
+            Err("synthetic current bind failure".into()),
+        ));
+        assert!(matches!(shell.settings.phase(), Phase::Failed(_)));
+        assert_eq!(shell.settings.key(), Some(key));
+        assert!(shell.settings.window.is_none());
+        assert_eq!(
+            shell.settings.bind_error.as_deref(),
+            Some("synthetic current bind failure")
+        );
+        assert!(shell.settings_failure_banner().is_some());
+
+        let _ = shell.update_settings(crate::settings::Message::Retry);
+        assert!(matches!(shell.settings.phase(), Phase::Opening));
+        assert!(
+            shell.settings.key().is_some_and(|new| {
+                new.session == key.session && new.attempt == key.attempt + 1
+            })
+        );
+        assert!(shell.settings.bind_error.is_none());
+    }
+
+    #[test]
+    fn settings_message_debug_does_not_expose_token_input() {
+        const MARKER: &str = "SYNTHETIC-NOT-A-REAL-TOKEN";
+        let message = crate::settings::Message::GitToken(
+            bytehost_git_accounts::GitProvider::GitHub,
+            bytehost_git_accounts::SecretToken::new(MARKER),
+        );
+        assert!(!format!("{message:?}").contains(MARKER));
+        // 外层 `Msg` 没有派生 Debug;即使将来加,也只应看到打码后的内层。
+        assert!(format!("{message:?}").contains("***"));
+    }
+
+    #[tokio::test]
+    async fn unified_settings_created_runs_binding_after_the_resize_effect() {
+        use iced::futures::StreamExt;
+        use iced_runtime::window::Action as WindowAction;
+        let mut shell = fresh("settings-created-effects");
+        let parent = window::Id::unique();
+        let child = window::Id::unique();
+        shell.window = Some(parent);
+        shell.settings.open(None);
+        let key = shell.settings.key().unwrap();
+        let task = shell.update_settings(crate::settings::Message::Created(key, child));
+        let mut actions = iced_runtime::task::into_stream(task).unwrap();
+        match actions.next().await.unwrap() {
+            iced_runtime::Action::Window(WindowAction::GetSize(id, reply)) => {
+                assert_eq!(id, parent);
+                let _ = reply.send(iced::Size::new(1000.0, 800.0));
+            }
+            _ => panic!("expected parent size query"),
+        }
+        assert!(matches!(actions.next().await,
+            Some(iced_runtime::Action::Window(WindowAction::Resize(id, _))) if id == child));
+        assert!(
+            matches!(actions.next().await,
+            Some(iced_runtime::Action::Window(WindowAction::Run(id, _))) if id == parent),
+            "native binding must run after the output-free resize effect"
+        );
+    }
+
+    #[tokio::test]
+    async fn unified_settings_timeout_closes_the_retired_instance_without_touching_its_replacement()
+    {
+        use iced::futures::StreamExt;
+        use iced_runtime::window::Action as WindowAction;
+        let mut shell = fresh("settings-timeout-effects");
+        shell.settings.open(None);
+        let key = shell.settings.key().unwrap();
+        let old = window::Id::unique();
+        shell.settings.on_native_opened(key, old);
+        shell.settings.on_bound(key);
+        shell.settings.close();
+        let task = shell.update_settings(crate::settings::Message::DestroyTimedOut(key));
+        let mut actions = iced_runtime::task::into_stream(task).unwrap();
+        assert!(matches!(actions.next().await,
+            Some(iced_runtime::Action::Window(WindowAction::Close(id))) if id == old));
+        assert!(
+            actions.next().await.is_none(),
+            "forced cleanup must not rearm a timeout loop"
+        );
+        assert!(shell.settings.owns_window(old));
+        shell.settings.open(None);
+        let new_key = shell.settings.key().unwrap();
+        let replacement = window::Id::unique();
+        shell.settings.on_native_opened(new_key, replacement);
+        shell.settings.on_bound(new_key);
+        assert!(shell.settings.on_native_closed(old).is_empty());
+        assert!(!shell.settings.owns_window(old));
+        assert_eq!(shell.settings.window, Some(replacement));
+        assert_eq!(shell.settings.key(), Some(new_key));
+    }
 
     #[test]
     fn hidden_paths_do_not_trigger_a_tree_reread_but_source_paths_do() {
@@ -4289,7 +4882,13 @@ mod tests {
     fn a_late_settings_open_reply_does_not_resurrect_a_closed_window() {
         let mut shell = fresh("settings-late-open");
         let id = window::Id::unique();
-        let _ = shell.update_settings(crate::settings::Message::Opened(id));
+        let stale = bytehost_settings::dialog::DialogKey {
+            owner: crate::settings::SETTINGS_OWNER,
+            kind: bytehost_settings::dialog::DialogKind::Settings,
+            session: 99,
+            attempt: 1,
+        };
+        let _ = shell.update_settings(crate::settings::Message::Created(stale, id));
         assert!(!shell.settings.is_open());
     }
 

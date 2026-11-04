@@ -24,6 +24,7 @@ bytehost-panel.workspace = true
 # 共享设置状态 / 视图(产品中立;本 crate 是唯一的 Digger 适配层)。
 bytehost-settings.workspace = true
 bytehost-settings-ui.workspace = true
+bytehost-git-accounts.workspace = true
 # Digger 的宿主适配层:执行器 / 请求身份 / 服务生命周期 / 产品信任策略。
 digger-app-host = { path = "../app-host" }
 # Digger 产品身份与数据根(S6a):config_dir / state_dir / product() 等统一由 digger-paths 提供。

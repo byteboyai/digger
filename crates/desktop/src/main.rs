@@ -23,7 +23,7 @@ fn update(shell: &mut ProductShell, msg: Msg) -> iced::Task<Msg> {
 
 fn view(shell: &ProductShell, id: window::Id) -> Element<'_, Msg> {
     if shell.is_settings_window(id) {
-        shell.settings_view()
+        shell.settings_overlay_view()
     } else {
         bytehost_desktop::Product::view(shell)
     }
@@ -44,6 +44,13 @@ fn main() -> iced::Result {
     iced::daemon(boot, update, view)
         .title(title)
         .subscription(product::subscription)
+        // 设置 overlay 是透明子窗口:全局清屏必须透明,主窗口根容器自己铺底色。
+        .style(
+            |_shell: &ProductShell, _theme: &iced::Theme| iced::theme::Style {
+                background_color: iced::Color::TRANSPARENT,
+                text_color: iced::Color::WHITE,
+            },
+        )
         .font(fonts::JETBRAINS_MONO)
         .font(dozer_panel_term::symbols::SYMBOLS_FONT_DATA)
         .run()

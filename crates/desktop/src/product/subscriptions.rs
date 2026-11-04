@@ -10,6 +10,9 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         if let iced::Event::Window(window::Event::CloseRequested) = evt {
             return Some(Msg::CloseRequested(id));
         }
+        if let iced::Event::Window(window::Event::Closed) = evt {
+            return Some(Msg::WindowClosed(id));
+        }
         if crate::is_secondary_window(id) {
             return None;
         }
