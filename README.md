@@ -19,6 +19,7 @@
 - [共享设置：Dozer 抽取到 bytehost，Digger 接入](docs/superpowers/specs/2026-10-29-shared-settings-design.md)（[实施计划](docs/superpowers/plans/2026-10-29-shared-settings.md)）
 - [统一设置模块与对话框宿主](docs/superpowers/specs/2026-11-03-unified-settings-dialog-design.md)（[实施计划](docs/superpowers/plans/2026-11-03-unified-settings-dialog.md)）
 - [统一设置共享版本发布记录](docs/superpowers/reviews/2026-11-04-shared-settings-release.md)：bytehost `v0.4.23` / Dozer `libs-2026-11-04a`；无 patch 发行验证与实机边界。
+- [面板开发前最小稳定化收口 Spec](docs/superpowers/specs/2026-11-05-panel-development-readiness-design.md)（[实施计划](docs/superpowers/plans/2026-11-05-panel-development-readiness.md)，[验收报告](docs/superpowers/reviews/2026-11-05-panel-development-readiness-acceptance.md)）：用量异步隔离、最新代码基线验证与双产品最小实机冒烟。
 - [代码恢复性、性能与工程质量优化](docs/superpowers/specs/2026-11-02-code-reliability-and-performance-design.md)（[实施计划](docs/superpowers/plans/2026-11-02-code-reliability-and-performance.md)）
 - [会话面板 scale 用例 fork 死锁修复](docs/superpowers/specs/2026-11-04-conversations-scale-test-fork-hang-design.md)（[实施计划](docs/superpowers/plans/2026-11-04-conversations-scale-test-fork-hang.md)，[验收报告](docs/superpowers/reviews/2026-11-04-scale-test-fork-acceptance.md)）
 - Engine spike: `spike/md-engine` (CodeMirror 6 vs ProseMirror under ADR-012)
