@@ -168,7 +168,7 @@ SELFTEST_TIMEOUT=120 bash scripts/run-editor-selftest.sh usage
 # FAIL: the page never became ready
 ```
 
-`usage` 场景在同一台机器上用改动前已安装的 `/Applications/Digger.app`（0.1.7）复跑也得到相同失败，说明是既有环境 / 用量 webview 就绪问题，不是本轮 scope epoch 改动引入。日志见 `digger-usage-selftest-new.log` / `digger-usage-selftest-old.log`。因此 M2–M5 仍保留未验，不把 shell lifecycle 的 11 项通过当成 M1–M6 通过。
+`usage` 场景在同一台机器上用改动前已安装的 `/Applications/Digger.app`（0.1.7）复跑也得到相同失败。该对照只证明新旧构建存在相同现象，不能确定环境归因。审核发现自检在选择 Usage 面板之前就等待其 ready，而隔离数据根默认选择 Agent，Usage webview 此时没有创建；启动前置条件本身存在缺陷。日志见 `digger-usage-selftest-new.log` / `digger-usage-selftest-old.log`。修复及复验见下节；M2–M5 仍保留未验，不把生命周期自检当成完整 M1–M6 通过。
 
 没有用无窗口测试替代上述实机结论，也没有为了造故障扩写注入框架。多屏 / Space / 全屏与历史兼容仍在后续发行清单。
 
@@ -188,3 +188,26 @@ SELFTEST_TIMEOUT=120 bash scripts/run-editor-selftest.sh usage
 - 因此本批**不宣布“面板开发基线收口完成”**，Spec 状态保持部分实施；面板功能主线可以在已完成的代码基线上继续，但发布前仍需补 A4 远端结果与 A5 实机结果。
 
 后续保留范围：多屏 / Space / 全屏、完整历史兼容矩阵、性能工程；不作为本批默认门槛。
+
+## 审核修复补记（2026-11-05）
+
+本节覆盖上文对应实现和测试数量的历史记录；本批整体仍为部分实施，未执行推送或远端 CI。
+
+- **自检启动顺序：** Driver 根据场景在 ProductShell 初始化时显式 ShowPanel，随后才进入原有 ready 等待；Usage 场景选 Usage，Shell 场景选编辑器。新增默认布局下的启动回归，并纳入 PR 快速集。
+- **真实项目消息路径：** 新增 `product::tests::usage_route_project_messages_invalidate_hidden_queries_and_closed_lifecycles`，通过 `update_host` 接收 `Projects::Opened/Activate/Close` 和 `Shell::ShowPanel`；没有直接设置 scope/reset。用 oneshot 控制后台回包，覆盖隐藏切换 A/B、显示后按 B 路径查询、旧 A 回包、切回 A、关闭所有项目、同路径重开 B 和旧 B 回包。明确预置 B 的隐藏布局，不假设新项目一定使用默认布局。
+- 现有 `product::tests::usage_route` CI 过滤器现在运行 4 项；新增文件 `product_usage_tests.rs` 通过 include 保留该测试路径。
+
+在原无 patch 隔离目录同步本次最终源码，保留正式 git 来源锁，复验：
+
+| 检查 | 结果 |
+|---|---|
+| 用量适配层测试 | 12 passed |
+| 产品用量路由测试 | 4 passed，包含真实项目消息与可控后台查询 |
+| lifecycle_selftest 单元测试 | 6 passed，包含场景启动面板选择 |
+| `cargo test --locked --offline -p digger-desktop --lib -- --test-threads=1` | 751 passed，19.47s |
+| `cargo check --locked --offline -p digger-desktop --all-targets` | 通过，仅既有 warnings |
+| `cargo fmt --all --check` 与新增 include 文件独立 rustfmt 检查 | 通过 |
+
+本轮全量与编译日志：`review-fix-lib.log`、`review-fix-check.log`，位于本报告原证据目录。
+
+真实 usage 自检复跑：`SELFTEST_TIMEOUT=120 bash scripts/run-editor-selftest.sh usage`，脚本退出 1，无 SUMMARY；本次应用进程在 120s 期限内未完成，日志包含 `com.apple.hiservices-xpcservice` 的 `Connection invalid`，未产生 U1–U8 判定。见 `review-fix-usage-selftest.log`。不能据此确认页面最终握手或 UI 几何通过，也不能仅凭系统服务错误排除其它原因；本次确认修复的是“显示 Usage 之前等待 Usage ready”的确定性启动缺陷，启动单元回归与产品路由自动回归通过，实机验收仍待具备正常图形访问能力的会话执行。

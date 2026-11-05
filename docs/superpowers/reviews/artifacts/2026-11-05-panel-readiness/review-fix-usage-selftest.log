@@ -1,0 +1,6 @@
+diggerd 连接失败,尝试拉起: socket 文件不存在
+2026-11-05 11:34:38.828 digger[54365:1244867] _LSModifyNotification(result->notificationID, keyCount, codesToSet, 0, NULL, NULL, NULL) returned error -50 on line 282 in NotificationTracker *createTrackerForMask(KeyMask, id, CFTypeRef)
+2026-11-05 11:34:38.902 digger[54365:1244914] Connection Invalid error for service com.apple.hiservices-xpcservice.
+2026-11-05 11:34:38.902 digger[54365:1244867] Error received in message reply handler: Connection invalid
+editor selftest: 失败(没有 SUMMARY 行:自检没有跑完)
+  harness 卡在 T6 多半是屏幕息屏或锁屏(页面的动画帧被暂停):唤醒并解锁屏幕后重试
