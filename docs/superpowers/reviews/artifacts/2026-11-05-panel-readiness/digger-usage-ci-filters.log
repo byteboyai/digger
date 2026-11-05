@@ -1,0 +1,89 @@
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:979:4
+    |
+979 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+   --> crates/desktop/src/apps/mod.rs:938:19
+    |
+137 | impl AppsState {
+    | -------------- method in this implementation
+...
+938 |     pub(crate) fn opened(&self) -> bool {
+    |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T//panel-readiness.QLFHub/target-digger/aarch64-apple-darwin/debug/deps/digger_desktop-4fad93f6a091d5f7)
+
+running 12 tests
+test adapters::usage::tests::a_late_a_failure_does_not_touch_b_loading_or_notices ... ok
+test adapters::usage::tests::a_late_a_success_after_b_succeeds_does_not_replace_b ... ok
+test adapters::usage::tests::bare_background_messages_cannot_bypass_the_identity_check ... ok
+test adapters::usage::tests::both_panes_build_in_both_collapse_states ... ok
+test adapters::usage::tests::changing_scope_clears_rows_filter_and_loading ... ok
+test adapters::usage::tests::exhausted_epoch_refuses_new_queries_without_wrapping ... ok
+test adapters::usage::tests::no_project_never_queries_and_close_all_drops_a_late_success ... ok
+test adapters::usage::tests::reopening_the_same_path_gets_a_new_epoch_and_rejects_the_old_success ... ok
+test adapters::usage::tests::same_scope_refreshes_keep_the_latest_and_resync_is_idempotent ... ok
+test adapters::usage::tests::switching_while_hidden_rejects_the_old_result_and_requeries_on_show ... ok
+test adapters::usage::tests::the_agent_filter_exists_only_once_there_is_data ... ok
+test adapters::usage::tests::the_list_collapse_button_talks_to_the_shell_not_to_the_library ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 737 filtered out; finished in 0.00s
+
+usage_adapter=0
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:979:4
+    |
+979 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+   --> crates/desktop/src/apps/mod.rs:938:19
+    |
+137 | impl AppsState {
+    | -------------- method in this implementation
+...
+938 |     pub(crate) fn opened(&self) -> bool {
+    |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T//panel-readiness.QLFHub/target-digger/aarch64-apple-darwin/debug/deps/digger_desktop-4fad93f6a091d5f7)
+
+running 3 tests
+test product::tests::usage_route_rejects_bare_loaded_message ... ok
+test product::tests::usage_route_rejects_result_for_another_scope ... ok
+test product::tests::usage_route_rejects_stale_result_across_close_and_reopen ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.01s
+
+usage_product=0

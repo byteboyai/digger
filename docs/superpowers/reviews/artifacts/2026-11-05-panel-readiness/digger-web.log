@@ -1,0 +1,57 @@
+== npm run check ==
+
+> digger-editor-web@0.0.0 check
+> tsc --noEmit
+
+npm_check=0
+== npm test ==
+
+> digger-editor-web@0.0.0 test
+> tsc -p tsconfig.test.json && node --test tests/*.test.mjs
+
+✔ the fixture protocol version matches the page (0.332583ms)
+✔ every error code in the fixture is a snake_case wire value (0.126833ms)
+✔ the shared reject fixture drives the same state machine branch as Rust (0.768458ms)
+✔ every shared outbound fixture passes the production decoder (0.066125ms)
+✔ the shared incremental contract replaces the specified old interval (0.5205ms)
+✔ a non-stale rejection keeps sent and queued and asks for a snapshot (1.533542ms)
+✔ a stale base without a received transform asks for a snapshot instead of replaying (0.459792ms)
+✔ a stale base replays once when an Agent update transformed the patch (0.258375ms)
+✔ a second stale rejection after one replay stops automatic retries (0.135583ms)
+✔ an ack advances the version, clears sent and flushes the queued patch (0.13ms)
+✔ an out-of-order or duplicate ack never corrupts the confirmed version (0.084459ms)
+✔ a timeout is bounded and starts recovery without losing the draft (0.143292ms)
+✔ closing settles every waiter with a typed error (0.100334ms)
+✔ resolving a conflict with the snapshot adopts Rust's text through onOpen (0.2475ms)
+✔ committing the draft after a conflict sends one whole-document edit (0.553334ms)
+✔ continuous snapshot timeouts end in a typed terminal state with the draft kept (0.179334ms)
+✔ a late full acknowledgement while idle cannot move the version backwards (0.096875ms)
+✔ a protocol mismatch fails closed and never sends edits (0.088458ms)
+✔ a snapshot reply is read-only and does not apply remote changes (0.056334ms)
+✔ the first conflict notification already carries the snapshot and draft (0.081125ms)
+✔ an incremental result replaces the announced block range and maps preserved blocks (0.134708ms)
+✔ an inconsistent incremental result stops and recovers instead of corrupting ranges (0.052041ms)
+✔ old edit rejections cannot consume the current snapshot recovery budget (0.091417ms)
+✔ duplicate incremental acknowledgements are ignored while idle and while sending (0.056667ms)
+✔ the normal ready handshake times out and rejects all waiters (0.107041ms)
+✔ normal handshake rejections fail visibly even without an edit in flight (0.108208ms)
+✔ a successful normal handshake cancels its timeout and late opens preserve edits (0.057791ms)
+✔ replayed old replies preserve recovering, conflict, failed and closed states (0.190875ms)
+✔ invalid wire fields and JSON preserve drafts and converge through bounded recovery (0.278917ms)
+✔ Agent version gaps recover without applying remote text (0.072375ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 51.456667
+npm_test=0
+== fixtures ==
+
+> digger-editor-web@0.0.0 fixtures:check
+> node scripts/make-fixtures.mjs --check
+
+fixtures: ok (12 fixtures match the production parser)
+fixtures=0

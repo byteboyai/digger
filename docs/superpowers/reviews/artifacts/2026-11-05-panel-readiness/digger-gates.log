@@ -1,0 +1,17 @@
+== fmt ==
+fmt=0
+== host deps ==
+digger host-deps check: ok(审视了 3 个业务 crate)
+host=0
+== host selftest ==
+digger host-deps check: ok(审视了 3 个业务 crate)
+...............
+----------------------------------------------------------------------
+Ran 15 tests in 4.432s
+
+OK
+host_self=0
+== shared deps ==
+INFO   ahead-of-remote   本地 main 领先 origin/main 5 个提交;被其他仓库依赖的提交要先推送,否则对方会引用到远端不存在的 rev
+shared-deps: 0 个阻断, 0 个警告
+shared=0

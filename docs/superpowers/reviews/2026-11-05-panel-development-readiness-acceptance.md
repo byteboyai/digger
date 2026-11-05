@@ -18,6 +18,13 @@
 | 共享依赖 | bytehost `v0.4.23` / byteui `v0.5.2` / bytegit `v0.9.2` / Dozer `libs-2026-11-04a`（peeled `15c61c9b`） |
 | 隔离验证目录 | `<TMP>/panel-readiness.QLFHub`（删除 `.cargo/`，独立 `CARGO_TARGET_DIR`） |
 
+## 证据归档
+
+命令日志保存在 [`artifacts/2026-11-05-panel-readiness/`](artifacts/2026-11-05-panel-readiness/)：
+
+- Digger：`digger-check.log`、`digger-gates.log`、`digger-probe-*.log`、`digger-lib-serial.log`、`digger-lib-parallel.log`、`digger-consumer-rust.log`、`digger-web.log`、`digger-embedded.log`、`digger-usage-ci-filters.log`、`digger-metadata-summary.txt`。
+- Dozer：`dozer-gates.log`（首次失败证据）、`dozer-check-rerun.log`、`dozer-gates-rerun.log`、`dozer-runtime-tests.log`、`dozer-settings-tests.log`、`dozer-metadata-summary.txt`。
+
 ## A1 — 基线与既有修改保留
 
 - 五仓库 HEAD、分支、origin/main、tag SHA、dirty 清单见 baseline。

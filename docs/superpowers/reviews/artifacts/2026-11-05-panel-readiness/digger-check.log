@@ -1,0 +1,498 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling libc v0.2.191
+   Compiling serde_core v1.0.229
+    Checking cfg-if v1.0.5
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.15
+   Compiling version_check v0.9.5
+   Compiling parking_lot_core v0.9.12
+   Compiling libm v0.2.16
+    Checking smallvec v1.16.4
+    Checking log v0.4.35
+    Checking memchr v2.8.3
+    Checking once_cell v1.21.4
+   Compiling autocfg v1.5.1
+    Checking pin-project-lite v0.2.17
+    Checking scopeguard v1.2.0
+   Compiling zmij v1.0.23
+   Compiling objc2 v0.6.5
+   Compiling thiserror v2.0.21
+    Checking bytes v1.12.1
+   Compiling serde v1.0.229
+    Checking itoa v1.0.18
+   Compiling zerocopy v0.8.63
+   Compiling num-traits v0.2.19
+    Checking futures-core v0.3.34
+    Checking lock_api v0.4.14
+   Compiling crc32fast v1.5.3
+    Checking futures-sink v0.3.34
+    Checking slab v0.4.12
+    Checking futures-task v0.3.34
+    Checking futures-io v0.3.34
+    Checking objc2-encode v4.1.0
+    Checking futures-channel v0.3.34
+   Compiling serde_json v1.0.154
+    Checking tracing-core v0.1.36
+    Checking equivalent v1.0.3
+    Checking hashbrown v0.17.1
+    Checking simd-adler32 v0.3.10
+   Compiling getrandom v0.4.3
+    Checking adler2 v2.0.1
+    Checking zlib-rs v0.6.8
+    Checking http v1.5.0
+    Checking percent-encoding v2.3.2
+    Checking miniz_oxide v0.9.1
+   Compiling slotmap v1.1.1
+   Compiling httparse v1.10.1
+   Compiling generic-array v0.14.7
+   Compiling jobserver v0.1.35
+    Checking typenum v1.20.1
+   Compiling cfg_aliases v0.2.2
+    Checking errno v0.3.14
+    Checking mio v1.2.4
+    Checking socket2 v0.6.5
+    Checking http-body v1.1.0
+    Checking try-lock v0.2.5
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling cc v1.10.0
+    Checking parking_lot v0.12.5
+    Checking signal-hook-registry v1.4.8
+    Checking tower-service v0.3.3
+    Checking want v0.3.2
+    Checking bitflags v2.13.2
+    Checking indexmap v2.14.2
+    Checking flate2 v1.1.10
+    Checking httpdate v1.0.3
+    Checking base64 v0.23.1
+    Checking atomic-waker v1.1.2
+    Checking ipnet v2.12.2
+    Checking cpufeatures v0.2.17
+   Compiling time-core v0.1.9
+   Compiling num-conv v0.2.2
+    Checking http-body-util v0.1.5
+    Checking arrayvec v0.7.8
+    Checking winnow v0.5.40
+    Checking bumpalo v3.20.3
+    Checking uuid v1.29.0
+    Checking filetime v0.2.29
+    Checking typed-path v0.12.4
+   Compiling objc-sys v0.3.5
+   Compiling time-macros v0.2.32
+    Checking base64 v0.22.1
+    Checking bitflags v1.3.2
+    Checking core-foundation-sys v0.8.7
+   Compiling icu_properties_data v2.4.0
+    Checking tar v0.4.46
+    Checking zopfli v0.8.4
+   Compiling icu_normalizer_data v2.4.0
+    Checking getrandom v0.2.17
+    Checking raw-window-handle v0.6.2
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.7
+    Checking core_maths v0.1.1
+    Checking deranged v0.5.9
+   Compiling objc2-exception-helper v0.1.1
+    Checking option-ext v0.2.0
+    Checking zip v8.6.0
+    Checking powerfmt v0.2.1
+    Checking digest v0.10.7
+    Checking core-foundation v0.10.1
+    Checking euclid v0.22.14
+    Checking dirs-sys v0.5.0
+    Checking stable_deref_trait v1.2.1
+    Checking rustc-hash v1.1.0
+   Compiling pkg-config v0.3.34
+    Checking sha2 v0.10.9
+    Checking smol_str v0.2.2
+    Checking ttf-parser v0.25.1
+    Checking foreign-types-shared v0.3.1
+   Compiling vcpkg v0.2.15
+    Checking memmap2 v0.9.12
+    Checking tinyvec v1.13.3
+    Checking web-time v1.1.0
+    Checking unicode-script v0.5.8
+    Checking rustc-hash v2.1.3
+    Checking lyon_geom v1.0.20
+    Checking time v0.3.55
+    Checking glam v0.25.0
+    Checking lilt v0.8.2
+    Checking unicode-width v0.2.3
+   Compiling paste v1.0.15
+    Checking unicode-bidi v0.3.18
+   Compiling winit v0.30.13
+   Compiling naga v27.0.3
+    Checking malloc_buf v0.0.6
+    Checking yazi v0.2.2
+    Checking lyon_path v1.0.19
+    Checking bit-vec v0.8.0
+   Compiling anyhow v1.0.104
+    Checking foldhash v0.2.0
+    Checking zeno v0.3.3
+    Checking hashbrown v0.16.1
+    Checking bit-set v0.8.0
+    Checking objc v0.2.7
+    Checking codespan-reporting v0.12.0
+   Compiling tokio-macros v2.7.2
+   Compiling serde_derive v1.0.229
+   Compiling futures-macro v0.3.34
+   Compiling thiserror-impl v2.0.21
+   Compiling bytemuck_derive v1.12.1
+   Compiling tracing-attributes v0.1.31
+   Compiling zerocopy-derive v0.8.63
+   Compiling synstructure v0.14.0
+   Compiling zerovec-derive v0.11.7
+   Compiling displaydoc v0.2.7
+   Compiling foreign-types-macros v0.2.4
+    Checking tokio v1.54.1
+   Compiling zeroize_derive v1.5.0
+    Checking futures-util v0.3.34
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+    Checking foreign-types v0.5.0
+    Checking objc2-core-foundation v0.3.2
+    Checking bytemuck v1.25.2
+    Checking tracing v0.1.44
+    Checking block2 v0.6.2
+    Checking fontdb v0.23.0
+    Checking core-graphics-types v0.2.0
+   Compiling wgpu-hal v27.0.4
+    Checking zerofrom v0.1.8
+    Checking aho-corasick v1.1.5
+    Checking regex-syntax v0.8.11
+    Checking sys-locale v0.3.2
+    Checking writeable v0.6.4
+    Checking utf_types v1.0.0
+    Checking iced_core v0.14.0
+    Checking litemap v0.8.3
+    Checking unicode-segmentation v1.13.3
+    Checking font-types v0.12.7
+    Checking font-types v0.10.1
+    Checking unicode-linebreak v0.1.5
+    Checking linebender_resource_handle v0.1.1
+    Checking block v0.1.6
+    Checking self_cell v1.3.0
+    Checking hexf-parse v0.2.1
+    Checking float-cmp v0.9.0
+    Checking rangemap v1.8.0
+    Checking metal v0.32.0
+    Checking objc2-foundation v0.3.2
+    Checking read-fonts v0.35.0
+    Checking objc2-core-graphics v0.3.2
+    Checking read-fonts v0.41.0
+    Checking objc2-core-video v0.3.2
+    Checking strict-num v0.1.1
+    Checking yoke v0.8.4
+    Checking utf8_iter v1.1.0
+    Checking wgpu-types v27.0.1
+    Checking regex-automata v0.4.18
+   Compiling libz-sys v1.1.31
+    Checking serde_spanned v0.6.9
+    Checking toml_datetime v0.6.3
+    Checking futures-executor v0.3.34
+    Checking dozer-model v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking profiling v1.0.18
+    Checking arrayref v0.3.9
+    Checking zerovec v0.11.9
+    Checking toml_edit v0.20.2
+    Checking zerotrie v0.2.5
+    Checking futures v0.3.34
+    Checking tiny-skia-path v0.11.4
+    Checking kurbo v0.11.3
+   Compiling wgpu-core v27.0.3
+    Checking miniz_oxide v0.8.9
+    Checking tinystr v0.8.5
+    Checking potential_utf v0.1.6
+    Checking fdeflate v0.3.7
+   Compiling cookie v0.18.2
+    Checking unicode-ccc v0.4.0
+    Checking toml v0.8.2
+    Checking hyper v1.12.0
+    Checking iced_futures v0.14.0
+    Checking icu_locale_core v2.4.0
+    Checking icu_collections v2.4.0
+    Checking siphasher v1.0.4
+    Checking unicode-bidi-mirroring v0.4.0
+    Checking unicode-properties v0.1.5
+    Checking dozer-services v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling litrs v1.0.1
+    Checking png v0.17.16
+    Checking svgtypes v0.15.3
+    Checking rustybuzz v0.20.1
+   Compiling libgit2-sys v0.18.8+1.9.7
+   Compiling ring v0.17.14
+    Checking half v2.7.1
+   Compiling wgpu v27.0.1
+    Checking simplecss v0.2.2
+    Checking hyper-util v0.1.21
+   Compiling document-features v0.2.12
+    Checking icu_provider v2.4.0
+    Checking unicode-vo v0.1.0
+    Checking weezl v0.1.12
+    Checking data-url v0.3.2
+    Checking svg_fmt v0.4.5
+    Checking skrifa v0.37.0
+    Checking harfrust v0.3.2
+   Compiling crossbeam-utils v0.8.23
+    Checking byteorder-lite v0.1.0
+    Checking roxmltree v0.20.0
+    Checking quick-error v2.0.1
+    Checking color_quant v1.1.0
+    Checking imagesize v0.13.0
+    Checking pico-args v0.5.0
+    Checking zune-core v0.4.12
+    Checking xmlwriter v0.1.0
+    Checking icu_normalizer v2.4.0
+    Checking image-webp v0.2.4
+    Checking gif v0.13.3
+    Checking icu_properties v2.4.0
+    Checking zune-jpeg v0.4.21
+    Checking skrifa v0.44.0
+    Checking bytehost-apps v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking tiny-skia v0.11.4
+    Checking iced_debug v0.14.0
+    Checking usvg v0.45.1
+    Checking rgb v0.8.53
+    Checking zeroize v1.9.1
+   Compiling rustix v1.1.6
+   Compiling wry v0.55.1
+    Checking static_assertions v1.1.0
+    Checking lazy_static v1.5.1
+    Checking same-file v1.0.6
+    Checking float_next_after v1.0.0
+    Checking sharded-slab v0.1.7
+    Checking rustls-pki-types v1.15.1
+    Checking lyon_tessellation v1.0.23
+    Checking walkdir v2.5.0
+    Checking idna_adapter v1.2.2
+    Checking resvg v0.45.1
+    Checking objc2 v0.5.3
+    Checking etagere v0.2.15
+    Checking swash v0.2.10
+    Checking matchers v0.2.0
+    Checking objc2-core-services v0.3.2
+    Checking lyon_algorithms v1.0.22
+    Checking notify-types v2.2.0
+    Checking form_urlencoded v1.2.2
+    Checking tracing-log v0.2.0
+    Checking thread_local v1.1.10
+    Checking untrusted v0.9.0
+    Checking lru v0.16.4
+    Checking nu-ansi-term v0.50.3
+    Checking lyon v1.0.19
+    Checking notify v8.2.1
+    Checking crossbeam-channel v0.5.17
+    Checking idna v1.1.0
+    Checking block2 v0.5.1
+    Checking guillotiere v0.6.2
+    Checking tracing-subscriber v0.3.23
+    Checking dozer-i18n v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking objc2-core-text v0.3.2
+    Checking kurbo v0.10.4
+   Compiling ahash v0.8.12
+    Checking dispatch v0.2.0
+    Checking symlink v0.1.0
+   Compiling rustls v0.23.46
+    Checking objc2-foundation v0.2.2
+    Checking url v2.5.8
+    Checking tracing-appender v0.2.5
+    Checking directories v6.0.0
+    Checking cursor-icon v1.2.0
+    Checking cosmic-text v0.15.0
+    Checking subtle v2.6.1
+    Checking dozer-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling libsqlite3-sys v0.30.1
+    Checking rustls-webpki v0.103.16
+    Checking security-framework-sys v2.17.0
+    Checking core-foundation v0.9.4
+    Checking sync_wrapper v1.0.2
+    Checking iced_graphics v0.14.0
+    Checking tower-layer v0.3.3
+    Checking core-graphics-types v0.1.3
+    Checking wgpu-core-deps-apple v27.0.0
+    Checking security-framework v3.7.0
+    Checking tower v0.5.3
+    Checking hashbrown v0.14.5
+    Checking bytehost-client v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking webpki-roots v1.0.11
+    Checking objc2-app-kit v0.2.2
+    Checking keyring-core v1.0.1
+    Checking dpi v0.1.2
+    Checking ryu v1.0.23
+    Checking hashlink v0.9.1
+    Checking apple-native-keyring-store v1.0.2
+    Checking serde_urlencoded v0.7.1
+    Checking tower-http v0.6.11
+    Checking core-graphics v0.23.2
+    Checking tokio-rustls v0.26.6
+    Checking iced_runtime v0.14.0
+    Checking hyper-rustls v0.27.10
+    Checking fallible-iterator v0.3.0
+    Checking fallible-streaming-iterator v0.1.9
+    Checking reqwest v0.12.28
+    Checking iced_program v0.14.0
+    Checking keyring v4.2.0
+    Checking rusqlite v0.32.1
+    Checking clipboard_macos v0.1.1
+    Checking winnow v1.0.4
+    Checking window_clipboard v0.5.1
+    Checking bytehost-git-accounts v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling ident_case v1.0.1
+   Compiling strsim v0.11.1
+    Checking objc2-metal v0.3.2
+    Checking objc2-cloud-kit v0.3.2
+    Checking objc2-core-data v0.3.2
+    Checking objc2-core-image v0.3.2
+    Checking toml_writer v1.1.3+spec-1.1.0
+   Compiling darling_core v0.24.1
+    Checking toml_parser v1.1.5+spec-1.1.0
+    Checking bytehost-settings v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking iced_winit v0.14.1
+    Checking objc2-quartz-core v0.3.2
+    Checking bytehost-core v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking dirs v6.0.0
+   Compiling thiserror v1.0.69
+    Checking cryoglyph v0.1.0
+   Compiling ref-cast v1.0.27
+    Checking iced_wgpu v0.14.0
+    Checking digger-paths v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/paths)
+    Checking bytehost-webview v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling thiserror-impl v1.0.69
+   Compiling ref-cast-impl v1.0.27
+   Compiling serde_derive_internals v0.30.0
+    Checking dozer-file-io v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking softbuffer v0.4.8
+    Checking objc2-app-kit v0.3.2
+    Checking fastrand v2.5.0
+    Checking iced_tiny_skia v0.14.1
+    Checking tempfile v3.27.0
+   Compiling darling_macro v0.24.1
+   Compiling schemars_derive v1.2.3
+    Checking iced_renderer v0.14.0
+   Compiling darling v0.24.1
+    Checking ppv-lite86 v0.2.21
+    Checking chrono v0.4.45
+    Checking iced_widget v0.14.2
+    Checking rand_core v0.6.4
+   Compiling memoffset v0.6.5
+    Checking dyn-clone v1.0.20
+   Compiling rmcp v3.8.0
+    Checking rand_chacha v0.3.1
+   Compiling rmcp-macros v3.8.0
+    Checking tokio-util v0.7.20
+    Checking termios v0.2.2
+    Checking schemars v1.2.3
+    Checking ioctl-rs v0.1.6
+    Checking serial-core v0.4.0
+   Compiling pastey v0.2.3
+   Compiling pulldown-cmark v0.13.6
+    Checking toml_datetime v1.1.2+spec-1.1.0
+    Checking serial-unix v0.4.0
+    Checking toml_edit v0.25.17+spec-1.1.0
+    Checking rand v0.8.8
+    Checking dozer-client v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking iced v0.14.0
+    Checking sha1 v0.10.7
+    Checking utf-8 v0.7.6
+    Checking unicase v2.10.0
+    Checking pin-utils v0.1.1
+    Checking data-encoding v2.11.1
+    Checking byteorder v1.5.0
+    Checking nix v0.25.1
+    Checking tungstenite v0.24.0
+    Checking serial v0.4.0
+    Checking filedescriptor v0.8.3
+    Checking toml_datetime v0.7.5+spec-1.1.0
+    Checking serde_spanned v1.1.2
+    Checking downcast-rs v1.2.1
+    Checking shell-words v1.1.1
+    Checking similar v2.7.0
+    Checking winnow v0.7.15
+    Checking portable-pty v0.8.1
+    Checking tokio-tungstenite v0.24.0
+    Checking bytehost-panel v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking digger-editor v0.0.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/editor)
+   Compiling signal-hook v0.4.6
+    Checking toml v0.9.12+spec-1.1.0
+    Checking digger-app-host v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/app-host)
+    Checking polling v3.11.0
+    Checking rustix-openpty v0.2.0
+    Checking vte v0.15.0
+    Checking home v0.5.12
+    Checking trash v5.2.9
+   Compiling rfd v0.15.4
+    Checking dozer-preview-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dispatch2 v0.3.1
+    Checking dozer-hook v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking digger-hook v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/digger-hook)
+    Checking alacritty_terminal v0.26.0
+    Checking git2 v0.21.0
+    Checking dozer-mcp v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking digger-mcp v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/digger-mcp)
+    Checking bytegit v0.9.2 (https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa55)
+    Checking dozer-store-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-git-runtime v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking digger-store v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/store)
+    Checking dozerd v0.3.3 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+    Checking diggerd v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/diggerd)
+    Checking objc2-web-kit v0.3.2
+    Checking byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+    Checking dozer-panel-term v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking bytehost-chrome v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking bytehost-settings-ui v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking bytehost-desktop v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+    Checking dozer-panel-host v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-conversations v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-agent v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-group-chat v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-usage v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-todo v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-browser v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-files v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+    Checking dozer-panel-preview v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling digger-desktop v0.1.7 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/digger/crates/desktop)
+warning: field `catalog` is never read
+   --> crates/desktop/src/product.rs:218:5
+    |
+213 | pub struct ProductShell {
+    |            ------------ field in this struct
+...
+218 |     catalog: PanelCatalog,
+    |     ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-desktop` (lib) generated 1 warning
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:979:4
+    |
+979 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+   --> crates/desktop/src/apps/mod.rs:938:19
+    |
+137 | impl AppsState {
+    | -------------- method in this implementation
+...
+938 |     pub(crate) fn opened(&self) -> bool {
+    |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 48.41s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
