@@ -48,6 +48,11 @@ jobs:
             BYTEUI_ICON_SCALE="$scale" cargo run --locked -q -p digger-desktop --bin icon_scale_widget_probe
           done
 
+      - name: 用量作用域生命周期回归
+        run: |
+          cargo test --locked -p digger-desktop --lib adapters::usage::tests -- --test-threads=1
+          cargo test --locked -p digger-desktop --lib product::tests::usage_route -- --test-threads=1
+
       - name: 核心 Rust 行为测试
         run: |
           cargo test --locked -p digger-editor --lib -- --skip typing_in_a_book_parses_a_few_blocks_not_the_book
