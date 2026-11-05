@@ -14,7 +14,7 @@
 | 工具链 | `rustc 1.98.1 (48a229cea 2026-09-01)` / `cargo 1.98.1` |
 | Digger 行为修复 | `1097ab9 fix(usage): isolate background results by scope epoch` |
 | Digger CI | `2ad08ba ci: run usage scope lifecycle regressions` |
-| Dozer 基线修复 | `685b4386 fix(settings): match bytehost v0.4.23 AccountSnapshot` |
+| Dozer 基线修复 | `b2220ede fix(settings): match bytehost v0.4.23 AccountSnapshot` + `f7c90077 chore(lock): sync dozer-app version to 0.5.320` |
 | 共享依赖 | bytehost `v0.4.23` / byteui `v0.5.2` / bytegit `v0.9.2` / Dozer `libs-2026-11-04a`（peeled `15c61c9b`） |
 | 隔离验证目录 | `<TMP>/panel-readiness.QLFHub`（删除 `.cargo/`，独立 `CARGO_TARGET_DIR`） |
 
@@ -109,7 +109,7 @@ Consumer 快速集同样通过：
 1. `Cargo.lock` 的 `dozer-app` 仍是 `0.5.318`，`Cargo.toml` 已是 `0.5.320`；`--locked` 无法通过。
 2. `crates/dozer-app/src/extensions/settings.rs` 的 `AccountSnapshot` 测试字面量缺少 bytehost v0.4.23 的 `unreconciled_providers`，`cargo check --all-targets` 失败。
 
-已提交 Dozer 最小修复 `685b4386`（补字段 + 正式锁版本同步）。修复后：
+已提交 Dozer 最小修复 `b2220ede`（补字段）与 `f7c90077`（正式锁版本同步）。修复后：
 
 ```text
 cargo metadata --locked --format-version 1
@@ -140,7 +140,7 @@ Dozer runtime 对应集：
 ## A4 — 最终提交与远端 CI
 
 - Digger 行为修复与 CI 拆分成本地提交：`1097ab9`、`2ad08ba`。
-- Dozer 基线修复本地提交：`685b4386`。
+- Dozer 基线修复本地提交：`b2220ede`、`f7c90077`。
 - **未推送、未触发远端 CI**：本轮没有获得推送授权，plan 也明确“不授权立即推送 / 发版”。因此没有 CI URL 与 job 结论，不引用旧 SHA 绿灯。
 - Digger 快速集已在 workflow 中加入新回归；远端是否实际执行仍需推送后确认。
 
