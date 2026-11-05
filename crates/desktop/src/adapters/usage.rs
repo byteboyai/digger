@@ -1,4 +1,4 @@
-//! Usage 面板的 **Digger 宿主适配层**(Task 20)。
+//! Usage 面板的 **Digger 宿主适配层**。
 //!
 //! 面板本体(数据层 / 视图层 / web 资源)是共享库 `dozer-panel-usage`,Dozer 与
 //! Digger 共用同一实现(计划 Task 19 第 1 条)。本文件是 Digger 侧唯一的产品适配:
@@ -6,13 +6,13 @@
 //! - **展示语义**:[`PanelDisplay<Msg>`] 实现(agent 图标/颜色、面板头、列表折叠
 //!   按钮、折叠/悬停事件映射)。Digger 尚无品牌资产,agent 一律回落公共 `Bot`
 //!   图标 + 主题色——与库的 `NoGitStats` 同样的"显式最小"口径,不伪造。
-//! - **数据**:[`dozer_services::UsageService`] 由 [`digger_store::LedgerUsageService`]
-//!   提供,数据来自真实的**应用操作**完成事件(见 [`crate::apps`] 的 producer hook),
-//!   不是测试插入的假数据。
+//! - **数据**:[`dozer_services::UsageService`] 由组合根注入 `dozer_client::Client`
+//!   实现,经守护进程 `GetUsageSummary` 读**当前项目**的会话用量(transcripts 存储),
+//!   与 Dozer 同口径;不再是本机应用操作账本。
 //! - **Git 统计**:Digger 一期无 Git 统计,注入 [`NoGitStats`](库内)恒 0 / 空。
 //!
-//! 数据接缝遵循计划 Task 20 第 3 条:"业务 crate 实现,宿主适配层注入"——
-//! [`UsagePanel::new`] 收一个 `Arc<dyn UsageService>`,由组合根传入真实实现。
+//! 数据接缝遵循"业务实现,宿主适配层注入"——[`UsagePanel::new`] 收一个
+//! `Arc<dyn UsageService>`,由组合根传入真实实现。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,11 +32,11 @@ pub struct UsagePanel {
     /// 库的数据/视图状态。
     state: WorkspaceState,
     pub native: super::usage_native::Native,
-    /// 注入的用量服务(真实实现:`LedgerUsageService`)。
+    /// 注入的用量服务(真实实现:`dozer_client::Client`,走守护进程 transcripts 存储)。
     service: Arc<dyn UsageService>,
-    /// 本面板查询的**作用域路径**。Digger 一期无 Project,用产品数据根当唯一
-    /// 作用域——应用操作完成事件也记在同一路径下,二者对齐才能被查到。
-    scope_path: PathBuf,
+    /// 本面板查询的**作用域路径**(当前项目路径)。`None` = 尚未打开 Project,
+    /// 面板保持空态,不发起查询。
+    scope: Option<PathBuf>,
     /// iced 运行时句柄(库的 `spawn_refresh` 要它去后台取数)。`None` = 尚未在
     /// 运行时内挂上(`ProductShell::new` 可在无运行时处被测试调用);此时 `activate`
     /// 只置"统计中",不起刷新——与库对"无 ctx"的处理同型。
@@ -49,19 +49,30 @@ pub struct UsagePanel {
 }
 
 impl UsagePanel {
-    /// 构造:注入真实用量服务 + 作用域路径。运行时句柄用 [`UsagePanel::attach_handle`]
+    /// 构造:注入真实用量服务;作用域由组合根在打开/切换项目时经
+    /// [`UsagePanel::set_scope`] 更新。运行时句柄用 [`UsagePanel::attach_handle`]
     /// 在进入 iced 运行时后补挂(组合根 `boot` 内)。
-    pub fn new(service: Arc<dyn UsageService>, scope_path: PathBuf) -> Self {
+    pub fn new(service: Arc<dyn UsageService>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             state: WorkspaceState::default(),
             native: super::usage_native::Native::new(),
             service,
-            scope_path,
+            scope: None,
             handle: None,
             tx,
             rx: Some(rx),
         }
+    }
+
+    /// 更新查询作用域(打开/切换/关闭项目时由组合根调用)。
+    pub fn set_scope(&mut self, scope: Option<PathBuf>) {
+        self.scope = scope;
+    }
+
+    /// 清空面板数据(作用域没了——关闭全部项目):旧项目的行不该残留。
+    pub fn reset(&mut self) {
+        self.state = WorkspaceState::default();
     }
 
     /// 挂上 iced 运行时句柄(仅可在运行时上下文内调用)。
@@ -79,6 +90,10 @@ impl UsagePanel {
     /// 与 Dozer 侧逐字段一致:注入 Git 统计(这里 [`NoGitStats`])、注入用量服务、
     /// 用运行时句柄与发射器。`emit` 把库消息投回组合根的回流通道(而不是丢弃)。
     pub fn activate(&mut self) {
+        // 尚未打开 Project:保持空态,不向守护进程发查询。
+        let Some(scope) = self.scope.clone() else {
+            return;
+        };
         // 还没挂运行时句柄(如测试环境):只置"统计中",不起刷新。
         let Some(handle) = self.handle.clone() else {
             self.state.set_loading(true);
@@ -88,7 +103,7 @@ impl UsagePanel {
         let ctx = activation::ActivationCtx::new(
             // 库的 `project_id` 仅用于日志/路由归属,Digger 一期用固定实例 id。
             1,
-            Some(self.scope_path.clone()),
+            Some(scope),
             Arc::clone(&self.service),
             Arc::new(NoGitStats),
             handle,
@@ -299,7 +314,9 @@ mod tests {
         let svc: Arc<dyn UsageService> = Arc::new(digger_store::UnavailableUsageService::new(
             "test".to_string(),
         ));
-        UsagePanel::new(svc, PathBuf::from("/tmp/digger-usage-test"))
+        let mut panel = UsagePanel::new(svc);
+        panel.set_scope(Some(PathBuf::from("/tmp/digger-usage-test")));
+        panel
     }
 
     #[test]

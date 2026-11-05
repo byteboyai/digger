@@ -295,10 +295,8 @@ pub struct ProductShell {
     )>,
     shutdown_started: bool,
     shutdown_error: Option<String>,
-    /// Backends can finish before the window has handled every usage acknowledgement.
+    /// Backends can finish before the window has handled every acknowledgement.
     shutdown_result: Option<Result<(), String>>,
-    /// SQLite 用量账本的后台 worker 所有者;退出时排空并 checkpoint。
-    usage_worker: Option<digger_store::UsageWorker>,
     /// 测试用:记录收到的生命周期回调,验证 Surface 事件恰好路由一次(复盘发现 6)。
     #[cfg(test)]
     surface_callbacks: Vec<bytehost_desktop::SurfaceSlot>,
@@ -344,20 +342,13 @@ impl ProductShell {
         };
         let mut model = loaded.into_model();
 
-        // 任务完成用量账本(Task 20):生产者(应用操作)写、用量面板读,同一实例。
-        // 载入失败(损坏)不 panic,也**不**退回一次性临时空账本(复审 #9)——后者会把"读不出来"伪装成 "Ok(空)",且新记录
-        // 写进下次启动就不再引用的临时文件,等于静默丢。改为:查询恒返回 Unavailable、**不接线**用量生产者(没有记录悄悄
-        // 写走),原损坏文件保持原样。
-        let scope_path = paths::config_dir();
-        let (usage_service, usage_worker, usage_handle, boot_note) =
-            load_usage_db(paths::usage_db_path(), paths::usage_ledger_path());
-
-        let mut apps = crate::apps::AppsState::new();
-        // 只有 SQLite 账本可用时才接用量生产者;损坏时**不接**,避免记录写进无引用的临时库。
-        if let Some(handle) = &usage_handle {
-            apps.attach_usage_db(handle.clone(), scope_path.to_string_lossy().to_string());
-        }
-        let usage = crate::adapters::usage::UsagePanel::new(usage_service, scope_path.clone());
+        // 用量面板(Task 20 之后改接守护进程):数据来自 diggerd 的 transcripts 存储
+        // (GetUsageSummary),与 Dozer 同口径;查询作用域 = 当前项目路径,在打开/切换
+        // 项目时经 `on_current_project_changed` 更新。未打开 Project 时面板保持空态。
+        let boot_note = "尚未打开 Project。".to_string();
+        let daemon_client = dozer_client::Client::new(digger_paths::product().socket_path());
+        let usage = crate::adapters::usage::UsagePanel::new(Arc::new(daemon_client.clone()));
+        let apps = crate::apps::AppsState::new();
         let todo_client = dozer_client::Client::new(digger_paths::product().socket_path());
         let todo =
             crate::adapters::todo::TodoPanel::new(Arc::new(todo_client.clone()), todo_client);
@@ -460,7 +451,6 @@ impl ProductShell {
             shutdown_started: false,
             shutdown_error: None,
             shutdown_result: None,
-            usage_worker: usage_worker,
             #[cfg(test)]
             surface_callbacks: Vec::new(),
         };
@@ -892,6 +882,7 @@ impl ProductShell {
         }
         self.activate_files_panel();
         self.activate_todo_panel();
+        self.sync_usage_scope();
         if self.panel_visible(&shell::conversations_id()) {
             let _ = self.activate_conversations_panel();
         }
@@ -912,6 +903,23 @@ impl ProductShell {
             let _ = self.browser.activate(&project);
         }
         self.sync_git_subscription();
+    }
+
+    /// 把用量面板的作用域切到当前项目路径(查询口径与 Dozer 一致:守护进程的
+    /// transcripts 存储按项目 cwd 过滤)。面板可见时按新项目立即拉一次;
+    /// 关闭全部项目时清空面板,不留旧项目的行。
+    fn sync_usage_scope(&mut self) {
+        let project = self.projects.current_project().cloned();
+        match &project {
+            Some(p) => self.usage.set_scope(Some(PathBuf::from(&p.path))),
+            None => {
+                self.usage.set_scope(None);
+                self.usage.reset();
+            }
+        }
+        if project.is_some() && self.panel_visible(&shell::usage_id()) {
+            self.usage.activate();
+        }
     }
 
     /// 把待办面板切到当前项目;面板可见时立即拉一次列表与分类。
@@ -1495,10 +1503,10 @@ impl ProductShell {
                 self.apps.store_last_error().unwrap_or("未知写入错误")
             )
         });
-        if let Some(usage_error) = self.apps.usage_persistence_error().or(cleanup_error) {
+        if let Some(cleanup_error) = cleanup_error {
             self.shutdown_error = Some(match result {
-                Ok(()) => usage_error,
-                Err(error) => format!("{error}\n{usage_error}"),
+                Ok(()) => cleanup_error,
+                Err(error) => format!("{error}\n{cleanup_error}"),
             });
             return Task::none();
         }
@@ -2009,18 +2017,6 @@ impl ProductShell {
                         .on_press(Msg::Apps(crate::apps::Message::DismissNotice)),
                 ]
                 .spacing(12)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
-        }
-        for (run_id, title) in self.apps.failed_usage() {
-            extra_top.push(
-                iced::widget::row![
-                    text_line(format!("用量记录未持久化：{title}（{run_id}）"), tokens.red),
-                    iced::widget::button("重试用量记录")
-                        .on_press(Msg::Apps(crate::apps::Message::RetryUsage(run_id))),
-                ]
-                .spacing(8)
                 .align_y(iced::Alignment::Center)
                 .into(),
             );
@@ -2842,58 +2838,6 @@ impl ShellHost<Msg> for ProductShell {
 
     fn on_top_bar_double_click(&self) -> Msg {
         Msg::ZoomToggle
-    }
-}
-
-/// 载入用量账本并决定产品侧接线(复审 #9)。
-///
-/// 返回 `(用量服务, 可选共享账本, boot 提示)`:
-/// - 成功 → 真账本 + [`LedgerUsageService`](digger_store::LedgerUsageService);
-/// - 损坏/读失败 → **不退回临时空账本**,日志查询恒 `Unavailable`,账本为 `None`(调用方据此
-///   不接线用量生产者——没有记录会悄悄写进一个下次启动就不再引用的文件)。原文件保持原样。
-fn load_usage_db(
-    db_path: std::path::PathBuf,
-    legacy_json: std::path::PathBuf,
-) -> (
-    std::sync::Arc<dyn dozer_services::UsageService>,
-    Option<digger_store::UsageWorker>,
-    Option<digger_store::UsageHandle>,
-    String,
-) {
-    let unavailable = |note: String| {
-        let svc: std::sync::Arc<dyn dozer_services::UsageService> =
-            std::sync::Arc::new(digger_store::UnavailableUsageService::new(note.clone()));
-        (svc, None, None, note)
-    };
-    let mut db = match digger_store::UsageDb::open(&db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            return unavailable(format!(
-                "用量库打开失败,用量查询暂不可用(不会丢数据:原文件未改动): {e}"
-            ));
-        }
-    };
-    let mut note = "尚未打开 Project。可在「应用」页管理并运行应用。".to_string();
-    match db.import_legacy_json(&legacy_json) {
-        Ok(digger_store::ImportOutcome::ArchivePending { runs, error }) => {
-            note = format!("已导入 {runs} 条旧用量记录;旧文件归档待完成: {error}");
-        }
-        Ok(_) => {}
-        Err(e) => {
-            return unavailable(format!(
-                "旧用量账本导入失败,用量查询暂不可用(不会丢数据:旧文件未改动): {e}"
-            ));
-        }
-    }
-    drop(db);
-    match digger_store::spawn_usage_worker(&db_path, 256) {
-        Ok(worker) => {
-            let handle = worker.handle();
-            let svc: std::sync::Arc<dyn dozer_services::UsageService> =
-                std::sync::Arc::new(digger_store::UsageDbService::new(handle.clone()));
-            (svc, Some(worker), Some(handle), note)
-        }
-        Err(e) => unavailable(format!("用量后台服务启动失败,用量查询暂不可用: {e}")),
     }
 }
 
@@ -4025,24 +3969,10 @@ pub fn update_host(shell: &mut ProductShell, msg: HostMessage<Msg>) -> Task<Msg>
         shell.shutdown_started = true;
         let drain = shell.agent.drain_critical();
         let apps = shell.apps.shutdown();
-        let usage_worker = shell.usage_worker.take();
         Task::batch([task, native, grid]).chain(Task::perform(
             async move {
                 let (apps, ()) = tokio::join!(apps, drain);
-                let usage = tokio::task::spawn_blocking(move || {
-                    usage_worker.map(digger_store::UsageWorker::shutdown)
-                })
-                .await;
-                let usage = match usage {
-                    Ok(Some(Err(e))) => Err(e),
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(format!("用量后台任务失败: {e}")),
-                };
-                match (apps, usage) {
-                    (Err(e), _) => Err(e),
-                    (Ok(()), Err(e)) => Err(format!("用量账本退出排空失败: {e}")),
-                    _ => Ok(()),
-                }
+                apps
             },
             Msg::ShutdownFinished,
         ))
@@ -5015,19 +4945,6 @@ mod tests {
         ProductShell::with_shell_path(test_temp_dir(tag).join("shell.json"))
     }
 
-    fn completed_usage_for_exit(run_id: &str) -> digger_store::CompletionEvent {
-        let clock = digger_store::SystemClock;
-        let run = digger_store::begin_run(
-            &clock,
-            run_id,
-            1,
-            "/scope",
-            dozer_model::AgentKind::Unknown,
-            "operation",
-        );
-        digger_store::complete_run(&clock, run, digger_store::TaskOutcome::default())
-    }
-
     #[test]
     fn unsaved_cleanup_intent_blocks_exit_until_explicit_persistence_retry() {
         let mut shell = fresh("cleanup-exit-dirty");
@@ -5056,96 +4973,6 @@ mod tests {
         assert!(parent.join("cleanups.json").exists());
         let _ = shell.finish_shutdown_if_safe();
         assert!(shell.shutdown_error.is_none());
-    }
-
-    #[tokio::test]
-    async fn a_clean_worker_shutdown_does_not_discard_failed_usage() {
-        let mut shell = fresh("usage-exit-failed");
-        let worker = digger_store::spawn_usage_worker(
-            test_temp_dir("usage-exit-failed-db").join("usage.sqlite3"),
-            4,
-        )
-        .unwrap();
-        let handle = worker.handle();
-        shell.apps.attach_usage_db(handle.clone(), "/scope".into());
-        let mut event = completed_usage_for_exit("failed-before-exit");
-        event.tokens_in = u64::MAX;
-        let result = handle.record(event.clone()).unwrap().await.unwrap();
-        assert!(result.is_err());
-        let _ = shell
-            .apps
-            .update(crate::apps::Message::UsagePersisted(event, result));
-        tokio::task::spawn_blocking(move || worker.shutdown())
-            .await
-            .unwrap()
-            .unwrap();
-        shell.closing = true;
-        let task = Product::update(
-            &mut shell,
-            HostMessage::Product(Msg::ShutdownFinished(Ok(()))),
-        );
-        assert!(
-            iced_runtime::task::into_stream(task).is_none(),
-            "a normal exit would drop the failed event"
-        );
-        assert_eq!(shell.apps.failed_usage().len(), 1);
-        assert!(
-            shell
-                .shutdown_error
-                .as_deref()
-                .unwrap()
-                .contains("未确认落盘")
-        );
-    }
-
-    #[tokio::test]
-    async fn a_late_usage_acknowledgement_releases_an_otherwise_clean_exit() {
-        use iced::futures::StreamExt;
-        let mut shell = fresh("usage-exit-pending");
-        let worker = digger_store::spawn_usage_worker(
-            test_temp_dir("usage-exit-pending-db").join("usage.sqlite3"),
-            4,
-        )
-        .unwrap();
-        shell.apps.attach_usage_db(worker.handle(), "/scope".into());
-        let event = completed_usage_for_exit("pending-at-exit");
-        let _ = shell.apps.update(crate::apps::Message::UsagePersisted(
-            event.clone(),
-            Err("retry this record".into()),
-        ));
-        let retry = shell
-            .apps
-            .update(crate::apps::Message::RetryUsage(event.run_id.clone()));
-        assert!(shell.apps.failed_usage().is_empty());
-        assert!(
-            shell.apps.usage_persistence_error().is_some(),
-            "submission is not a durable acknowledgement"
-        );
-        tokio::task::spawn_blocking(move || worker.shutdown())
-            .await
-            .unwrap()
-            .unwrap();
-        shell.closing = true;
-        let task = Product::update(
-            &mut shell,
-            HostMessage::Product(Msg::ShutdownFinished(Ok(()))),
-        );
-        assert!(iced_runtime::task::into_stream(task).is_none());
-        let mut replies = iced_runtime::task::into_stream(retry).unwrap();
-        let reply = loop {
-            if let iced_runtime::Action::Output(message) = replies.next().await.unwrap() {
-                break message;
-            }
-        };
-        let task = Product::update(&mut shell, HostMessage::Product(Msg::Apps(reply)));
-        assert!(shell.apps.usage_persistence_error().is_none());
-        assert!(shell.shutdown_error.is_none());
-        let mut actions = iced_runtime::task::into_stream(task).unwrap();
-        let mut exited = false;
-        while let Some(action) = actions.next().await {
-            exited |= matches!(action, iced_runtime::Action::Exit);
-        }
-        assert!(exited);
     }
 
     fn press(shell: &mut ProductShell, panel: &PanelId) {
@@ -7237,34 +7064,6 @@ mod tests {
         let _ = Product::view(&shell);
         let _ = Product::update(&mut shell, HostMessage::Product(Msg::Exit));
         let _ = Product::view(&shell);
-    }
-
-    /// 复审 #9:损坏账本必须显式 `Unavailable` + **不接线**生产者,而不是退回临时空账本。
-    #[tokio::test]
-    async fn a_corrupt_usage_ledger_is_unavailable_and_left_untouched() {
-        use dozer_services::ServiceErrorKind;
-
-        let dir = test_temp_dir("usage-corrupt");
-        let path = dir.join("usage_ledger.json");
-        let original = b"{ this is not json";
-        std::fs::write(&path, original).unwrap();
-
-        let (service, worker, handle, note) =
-            load_usage_db(dir.join("usage.sqlite3"), path.clone());
-        assert!(
-            worker.is_none() && handle.is_none(),
-            "损坏时不得接线任何账本(含临时空账本)"
-        );
-        assert!(note.contains("暂不可用"), "boot 提示应说明不可用:{note}");
-        let err = service
-            .usage_summary("/p/a".into(), None)
-            .await
-            .expect_err("损坏账本查询必须 Unavailable,而不是 Ok(空)");
-        assert_eq!(err.kind, ServiceErrorKind::Unavailable);
-
-        // 原文件保持原样(未被覆盖/未被悄悄迁移)。
-        assert_eq!(std::fs::read(&path).unwrap(), original);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 复盘发现 6:真实 `ProductShell` 的 Surface 事件经 `update_host` 单次路由,不得无限递归。

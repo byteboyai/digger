@@ -45,138 +45,6 @@ use digger_app_host::trust;
 use crate::paths;
 use surface::{AppSurfaces, SurfaceAction};
 
-/// 任务完成用量的**生产者运行时**(Task 20):把真实的应用操作(安装/启动/停止/卸载…)
-/// 包成一次任务运行,结束时结算进落盘账本,供共享 Usage 面板查询。
-///
-/// - `runner` 持有账本(与面板的 `LedgerUsageService` 共享同一 `Arc<Mutex<UsageLedger>>`)。
-/// - `running` 是在途运行的登记簿,键是**派发请求的 ticket sequence**(同一动作的并发实例
-///   各自唯一,不撞车)。
-/// - `scope_path` 是这些记录归属的作用域(Digger 一期用产品数据根,与面板查询路径对齐)。
-enum UsageSink {
-    /// 旧 JSON 账本(测试 / 小规模兼容路径;同步写入)。
-    Json(digger_store::TaskRunner),
-    /// SQLite 后台 worker(生产路径;提交不等待磁盘)。
-    Worker(digger_store::UsageHandle),
-}
-
-enum UsageFinish {
-    Done {
-        event: digger_store::CompletionEvent,
-        result: Result<bool, String>,
-    },
-    Pending {
-        event: digger_store::CompletionEvent,
-        rx: tokio::sync::oneshot::Receiver<Result<bool, String>>,
-    },
-}
-
-pub struct UsageRuntime {
-    sink: UsageSink,
-    clock: digger_store::SystemClock,
-    running: digger_store::RunningTasks,
-    /// 已完成但尚未确认落盘的事件。重试只重新提交同一个事件(相同 run_id / 结束时刻 / 累计值),
-    /// 不会重新安装、停止或卸载任何应用。
-    failed: std::collections::BTreeMap<String, digger_store::CompletionEvent>,
-    /// Registered before submission, removed only after a durable acknowledgement is handled.
-    unconfirmed: std::collections::BTreeMap<String, digger_store::CompletionEvent>,
-    scope_path: String,
-    /// 本次进程启动的**运行命名空间**:账本按 `run_id` 幂等 upsert,而 `ticket.sequence`
-    /// 每次启动从 0 重新计数。若 `run_id` 只由「动作标签 + sequence」拼成,重启后按相同顺序
-    /// 做同类操作就会算出与上次相同的 id,第二次真实操作会**覆盖**第一次的历史记录(而非新增)。
-    /// 故拼入一个进程内唯一、跨重启不同的前缀;同一次运行的内部重试仍复用同一 id。
-    boot_id: String,
-}
-
-impl UsageRuntime {
-    pub fn new(
-        ledger: std::sync::Arc<std::sync::Mutex<digger_store::UsageLedger>>,
-        scope_path: String,
-    ) -> Self {
-        Self {
-            sink: UsageSink::Json(digger_store::TaskRunner::new(ledger)),
-            clock: digger_store::SystemClock,
-            running: digger_store::RunningTasks::new(),
-            failed: std::collections::BTreeMap::new(),
-            unconfirmed: std::collections::BTreeMap::new(),
-            scope_path,
-            boot_id: new_boot_id(),
-        }
-    }
-
-    pub fn new_db(handle: digger_store::UsageHandle, scope_path: String) -> Self {
-        Self {
-            sink: UsageSink::Worker(handle),
-            clock: digger_store::SystemClock,
-            running: digger_store::RunningTasks::new(),
-            failed: std::collections::BTreeMap::new(),
-            unconfirmed: std::collections::BTreeMap::new(),
-            scope_path,
-            boot_id: new_boot_id(),
-        }
-    }
-
-    fn begin(
-        &self,
-        run_id: String,
-        project_id: i64,
-        project_path: String,
-        agent: dozer_model::AgentKind,
-        title: String,
-    ) -> digger_store::RunningTask {
-        match &self.sink {
-            UsageSink::Json(runner) => runner.begin(run_id, project_id, project_path, agent, title),
-            UsageSink::Worker(_) => {
-                digger_store::begin_run(&self.clock, run_id, project_id, project_path, agent, title)
-            }
-        }
-    }
-
-    /// 结算一次运行。生产路径把完成事件投给后台 worker;结束时刻只在这里取一次。
-    fn finish(&mut self, key: u64) -> Option<UsageFinish> {
-        let run = self.running.take(key)?;
-        // 诚实原则:Digger 当前无 agent 运行时,真实操作不产生 token / 回合,如实记 0;
-        // `files_touched` 一期无从得知(操作由 app-host 执行,不回传文件清单),留空不伪造。
-        let event =
-            digger_store::complete_run(&self.clock, run, digger_store::TaskOutcome::default());
-        Some(self.submit(event))
-    }
-
-    /// 提交一个不可变完成事件。失败 / 异步失败都保留同一事件供 UI 重试。
-    fn submit(&mut self, event: digger_store::CompletionEvent) -> UsageFinish {
-        self.unconfirmed.insert(event.run_id.clone(), event.clone());
-        match &mut self.sink {
-            UsageSink::Json(runner) => {
-                let result = runner
-                    .ledger()
-                    .lock()
-                    .map_err(|_| "用量账本锁被污染".to_string())
-                    .and_then(|mut ledger| ledger.record(event.clone()).map_err(|e| e.to_string()));
-                UsageFinish::Done { event, result }
-            }
-            UsageSink::Worker(handle) => match handle.record(event.clone()) {
-                Ok(rx) => UsageFinish::Pending { event, rx },
-                Err(e) => UsageFinish::Done {
-                    event,
-                    result: Err(e.to_string()),
-                },
-            },
-        }
-    }
-}
-
-/// 生成一个跨进程重启唯一、但**不泄漏用户数据**的运行命名空间前缀。
-///
-/// 无需引入 `uuid` 依赖:纳秒级启动时刻 + 进程 id 的组合已足以区分重启前后两次会话
-/// (即使 PID 被复用,纳秒时刻也几乎不可能撞上)。仅用于账本 id 的消歧,不进日志、不作安全用途。
-fn new_boot_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{:x}-{:x}", nanos, std::process::id())
-}
-
 /// 应用服务的启动状态:窗口先画出来,服务后台起。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Startup {
@@ -210,10 +78,6 @@ pub enum Message {
     FlushCleanups,
     /// 一次浏览器数据存储清除的结果(窗口线程 `remove_data_store` 回调回传)。
     StoreRemovalResult(String, StoreRemovalOutcome),
-    /// 一次用量写入的确认结果(后台 worker 返回;失败必须可见,事件可原样重试)。
-    UsagePersisted(digger_store::CompletionEvent, Result<bool, String>),
-    /// 用户点「重试用量记录」:重试同一个完成事件,不重新执行业务操作。
-    RetryUsage(String),
     /// 一次清除请求已提交到窗口线程(真实结果随后经 [`Message::StoreRemovalResult`] 回);无需处理。
     StoreRemovalSubmitted,
     /// 用户点「重试」:应用服务此前启动失败(`Startup::Unavailable`),重新起一次。
@@ -246,8 +110,6 @@ pub struct AppsState {
     store: StoreCleanup,
     /// 在途卸载的应用 → 卸载模式,用于决定是否要在卸载成功后清浏览器数据。
     pending_uninstall: std::collections::HashMap<String, UninstallMode>,
-    /// 任务完成用量生产者(Task 20);`None` = 未接(测试/未接线时不产生用量记录)。
-    usage: Option<UsageRuntime>,
     /// 最近一条要展示给用户的一次性消息(复审 #8)。状态机产生的 `Effect::Notice`
     /// 此前落进执行器兜底分支被静默丢弃(回滚失败/运行时卸载失败主要靠它暴露),
     /// 现在由组合根接住并渲染为面板顶部可关闭的提示条。
@@ -313,7 +175,6 @@ impl AppsState {
             surfaces: AppSurfaces::new(),
             store: StoreCleanup::load(ledger),
             pending_uninstall: std::collections::HashMap::new(),
-            usage: None,
             notice: None,
             service_root,
             quitting: false,
@@ -325,149 +186,6 @@ impl AppsState {
             list_dirty: false,
             last_poll: std::time::Instant::now(),
         }
-    }
-
-    /// 接入任务用量生产者(Task 20):组合根传入与面板共享的账本 + 作用域路径。
-    pub fn attach_usage(
-        &mut self,
-        ledger: std::sync::Arc<std::sync::Mutex<digger_store::UsageLedger>>,
-        scope_path: String,
-    ) {
-        self.usage = Some(UsageRuntime::new(ledger, scope_path));
-    }
-
-    /// 生产接法:把完成事件投给 SQLite 后台 worker,不在窗口线程写盘。
-    pub fn attach_usage_db(&mut self, handle: digger_store::UsageHandle, scope_path: String) {
-        self.usage = Some(UsageRuntime::new_db(handle, scope_path));
-    }
-
-    /// 在派发一条**用户发起**的真实操作时登记一次任务运行(以请求 ticket sequence 为键)。
-    /// 只对会产生真实副作用、且用户可感知的动作计数(见 [`is_user_invoked_action`])。
-    fn begin_usage_for(&mut self, action: InstallAction, key: u64, title: String) {
-        let Some(usage) = self.usage.as_mut() else {
-            return;
-        };
-        if !is_user_invoked_action(action) {
-            return;
-        }
-        let run_id = format!(
-            "digger:{}:{}:{}",
-            usage.boot_id,
-            action_run_label(action),
-            key
-        );
-        let run = usage.begin(
-            run_id,
-            1,
-            usage.scope_path.clone(),
-            dozer_model::AgentKind::Unknown,
-            title,
-        );
-        usage.running.insert(key, run);
-    }
-
-    /// 一次真实操作完成:结算成用量记录(写账本)。无登记的键(非用户动作/未接线)则不动。
-    fn settle_usage_for(&mut self, key: u64) -> Option<iced::Task<Message>> {
-        let usage = self.usage.as_mut()?;
-        // 诚实原则:Digger 当前无 agent 运行时,真实操作不产生 token / 回合,如实记 0;
-        // `files_touched` 一期无从得知(操作由 app-host 执行,不回传文件清单),留空不伪造。
-        let finish = usage.finish(key)?;
-        self.handle_usage_finish(finish)
-    }
-
-    fn handle_usage_finish(&mut self, finish: UsageFinish) -> Option<iced::Task<Message>> {
-        match finish {
-            UsageFinish::Done { event, result } => {
-                self.complete_usage_submission(event, result);
-                None
-            }
-            UsageFinish::Pending { event, rx } => Some(iced::Task::perform(
-                async move {
-                    let result = match rx.await {
-                        Ok(result) => result,
-                        Err(_) => Err("用量后台服务已停止".to_string()),
-                    };
-                    (event, result)
-                },
-                |(event, result)| Message::UsagePersisted(event, result),
-            )),
-        }
-    }
-
-    fn remember_failed_usage(&mut self, event: digger_store::CompletionEvent, error: &str) {
-        self.push_notice(
-            bytehost_panel::notice::NoticeLevel::Error,
-            format!(
-                "用量记录未持久化(run {}),可在提示条点「重试用量记录」;不会重新执行业务操作: {error}",
-                event.run_id
-            ),
-            format!("usage-persist:{}", event.run_id),
-        );
-        if let Some(usage) = self.usage.as_mut() {
-            usage
-                .unconfirmed
-                .insert(event.run_id.clone(), event.clone());
-            usage.failed.insert(event.run_id.clone(), event);
-        }
-    }
-
-    /// 重试一个此前失败的同一完成事件(相同 run_id / 结束时刻 / 累计值)。
-    fn retry_usage_for(&mut self, run_id: &str) -> Option<iced::Task<Message>> {
-        let usage = self.usage.as_mut()?;
-        let event = usage.failed.remove(run_id)?;
-        let finish = usage.submit(event);
-        self.handle_usage_finish(finish)
-    }
-
-    /// 尚未确认落盘的用量事件(`run_id`, 标题),供设置页 / 顶栏展示重试入口。
-    pub fn failed_usage(&self) -> Vec<(String, String)> {
-        self.usage
-            .as_ref()
-            .map(|u| {
-                u.failed
-                    .values()
-                    .map(|e| (e.run_id.clone(), e.title.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn complete_usage_submission(
-        &mut self,
-        event: digger_store::CompletionEvent,
-        result: Result<bool, String>,
-    ) {
-        match result {
-            Ok(_) => {
-                if let Some(usage) = self.usage.as_mut() {
-                    usage.failed.remove(&event.run_id);
-                    usage.unconfirmed.remove(&event.run_id);
-                }
-            }
-            Err(error) => self.remember_failed_usage(event, &error),
-        }
-    }
-
-    /// A drained worker does not imply all writes succeeded or their acknowledgements were handled.
-    /// Keep the immutable events until that fact is known before permitting a normal product exit.
-    pub fn usage_persistence_error(&self) -> Option<String> {
-        let usage = self.usage.as_ref()?;
-        if usage.unconfirmed.is_empty() && usage.running.is_empty() {
-            return None;
-        }
-        let failed = usage.failed.len();
-        let waiting = usage.unconfirmed.len().saturating_sub(failed);
-        let settling = usage.running.len();
-        Some(format!(
-            "还有 {} 条用量记录未确认落盘（{failed} 条失败，{waiting} 条等待确认，{settling} 条待结算）。强制退出可能丢失这些记录。",
-            usage.unconfirmed.len() + settling
-        ))
-    }
-
-    /// 供测试/诊断:当前在途的运行数(不接线时恒 0)。
-    #[allow(dead_code)]
-    pub fn usage_in_flight(&self) -> usize {
-        self.usage.as_ref().map(|u| u.running.len()).unwrap_or(0)
     }
 
     /// 接住状态机的一条瞬时消息(复审 #8):同一 `key` 覆盖为最新,避免重复。
@@ -630,13 +348,6 @@ impl AppsState {
             }
             // 清除请求已提交(真实结果异步回);无操作。
             Message::StoreRemovalSubmitted => iced::Task::none(),
-            Message::UsagePersisted(event, result) => {
-                self.complete_usage_submission(event, result);
-                iced::Task::none()
-            }
-            Message::RetryUsage(run_id) => self
-                .retry_usage_for(&run_id)
-                .unwrap_or_else(iced::Task::none),
             // 由产品组合根拦截并打开设置窗口,状态机无动作。
             Message::OpenSettings => iced::Task::none(),
         };
@@ -705,36 +416,24 @@ impl AppsState {
                 }
                 self.pending_uninstall.insert(id.clone(), mode);
                 let effect = InstallEffect::Uninstall(id.clone(), mode);
-                let ticket = self.exec.run_install_traced(
+                let _ticket = self.exec.run_install_traced(
                     self.scope,
                     self.panel,
                     self.generation,
                     effect,
                     None,
                 );
-                if let Some(ticket) = ticket {
-                    self.begin_usage_for(
-                        InstallAction::Uninstall,
-                        ticket.sequence,
-                        format!("卸载应用 {id}"),
-                    );
-                }
                 None
             }
             // 其余可派发的 effect 走执行器;执行器认不了的一律忽略(通知/跨面板刷新由组合根后续接)。
             other => {
-                let action = dispatched_action(&other);
-                let title = dispatched_title(&other);
-                let ticket = self.exec.run_install_traced(
+                let _ticket = self.exec.run_install_traced(
                     self.scope,
                     self.panel,
                     self.generation,
                     other,
                     None,
                 );
-                if let (Some(action), Some(ticket)) = (action, ticket) {
-                    self.begin_usage_for(action, ticket.sequence, title);
-                }
                 None
             }
         }
@@ -846,13 +545,7 @@ impl AppsState {
                 detail,
             } => {
                 if self.requests.accept(*ticket) {
-                    // 一次真实操作完成:结算它登记的任务运行(后台写用量账本),再翻成状态机消息。
-                    let usage = self.settle_usage_for(ticket.sequence);
-                    let install = self.install_outcome(ticket.key, result.clone(), detail.clone());
-                    match usage {
-                        Some(task) => iced::Task::batch([task, install]),
-                        None => install,
-                    }
+                    self.install_outcome(ticket.key, result.clone(), detail.clone())
                 } else {
                     iced::Task::none()
                 }
@@ -1421,86 +1114,6 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 该动作是否算一次**用户发起的真实任务运行**(计入用量)。
-///
-/// 只算会产生真实副作用、用户可感知的写操作:安装/启动(安装后启动)/停止/卸载/回滚,
-/// 以及运行时安装/卸载。**出计划/探针/genesis 不算**——它们是只读规划/服务启动,
-/// 不对应用产生改动,也不是用户"跑的一次任务"。
-fn is_user_invoked_action(action: InstallAction) -> bool {
-    matches!(
-        action,
-        InstallAction::Install
-            | InstallAction::Stop
-            | InstallAction::Uninstall
-            | InstallAction::Rollback
-            | InstallAction::RuntimeInstall
-            | InstallAction::RuntimeUninstall
-    )
-}
-
-/// 动作 → `run_id` 里的稳定标签(仅用于构造幂等键,不含用户数据)。
-fn action_run_label(action: InstallAction) -> &'static str {
-    match action {
-        InstallAction::Install => "install",
-        InstallAction::Stop => "stop",
-        InstallAction::Uninstall => "uninstall",
-        InstallAction::Rollback => "rollback",
-        InstallAction::RuntimeInstall => "runtime-install",
-        InstallAction::RuntimeUninstall => "runtime-uninstall",
-        InstallAction::Plan => "plan",
-        InstallAction::Probe => "probe",
-        InstallAction::RuntimePlan => "runtime-plan",
-        InstallAction::Genesis => "genesis",
-    }
-}
-
-/// 由一条 effect 判断它会成为哪种完成型动作(用于登记任务运行)。
-/// `None` = 不由执行器发请求(原生对话框/排期/刷新)。
-fn dispatched_action(effect: &InstallEffect) -> Option<InstallAction> {
-    match effect {
-        InstallEffect::Install { .. } => Some(InstallAction::Install),
-        InstallEffect::Stop(_) => Some(InstallAction::Stop),
-        InstallEffect::Rollback(_) => Some(InstallAction::Rollback),
-        InstallEffect::Uninstall(_, _) => Some(InstallAction::Uninstall),
-        InstallEffect::InstallRuntime(_) => Some(InstallAction::RuntimeInstall),
-        InstallEffect::UninstallRuntime(_, _) => Some(InstallAction::RuntimeUninstall),
-        // 计划/探针/genesis 是只读规划或服务启动,不计入用量。
-        InstallEffect::Plan(_)
-        | InstallEffect::Probe
-        | InstallEffect::RuntimePlan(_)
-        | InstallEffect::List => None,
-        _ => None,
-    }
-}
-
-/// 动作的展示标题(用量面板副行)。不含用户数据之外的秘密。
-fn dispatched_title(effect: &InstallEffect) -> String {
-    match effect {
-        InstallEffect::Install { source, .. } => {
-            format!("安装应用({})", source_label(source))
-        }
-        InstallEffect::Stop(id) => format!("启动/停止应用 {id}"),
-        InstallEffect::Rollback(id) => format!("回滚应用 {id}"),
-        InstallEffect::Uninstall(id, _) => format!("卸载应用 {id}"),
-        InstallEffect::InstallRuntime(_) => "安装运行时".to_string(),
-        InstallEffect::UninstallRuntime(runtime, version) => {
-            format!("卸载运行时 {runtime:?} {version}")
-        }
-        _ => "应用操作".to_string(),
-    }
-}
-
-/// 安装来源的极简标签(只有种类,不带路径/URL——URL 可能含查询串等敏感内容)。
-fn source_label(source: &bytehost_apps::proto::AppSource) -> &'static str {
-    use bytehost_apps::proto::AppSource;
-    match source {
-        AppSource::LocalDir { .. } => "本机目录",
-        AppSource::Archive { .. } => "本机压缩包",
-        AppSource::Url { .. } => "远程 URL",
-    }
-}
-
-/// 统一失败文本(面板状态机接收 `AppApiError` 别名 `Failure`)。
 fn failure(err: &AppApiError) -> AppApiError {
     AppApiError::Host(AppFailure::new(
         err.kind().unwrap_or(AppErrorKind::Internal),
@@ -1530,7 +1143,6 @@ impl ReplySink for ChannelSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dozer_services::UsageService as _;
 
     fn temp_ledger(name: &str) -> PathBuf {
         let dir =
@@ -1588,209 +1200,6 @@ mod tests {
         );
         assert!(!s.store_is_pending("notes"));
         assert!(s.pending_uninstall.is_empty(), "失败后不残留模式");
-    }
-
-    // ---- Task 20:应用操作 → 用量账本 → 共享 UsageService 的端到端接线 ----
-
-    fn usage_ledger_path(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("digger-usage-link-{}-{}", std::process::id(), name));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir.join("usage_ledger.json")
-    }
-
-    fn shared_ledger(path: &std::path::Path) -> Arc<std::sync::Mutex<digger_store::UsageLedger>> {
-        Arc::new(std::sync::Mutex::new(
-            digger_store::UsageLedger::load(path).unwrap(),
-        ))
-    }
-
-    #[test]
-    fn an_operation_waiting_for_its_completion_message_also_blocks_clean_exit() {
-        let path = usage_ledger_path("exit-outcome-pending");
-        let mut state = AppsState::with_ledger_path(temp_ledger("exit-outcome-pending"));
-        state.attach_usage(shared_ledger(&path), "/scope".into());
-        state.begin_usage_for(InstallAction::Install, 7, "operation".into());
-        assert!(
-            state
-                .usage_persistence_error()
-                .unwrap()
-                .contains("1 条待结算")
-        );
-        let _ = state.settle_usage_for(7);
-        assert!(state.usage_persistence_error().is_none());
-    }
-
-    #[test]
-    fn a_failed_usage_submission_keeps_the_exact_event_for_retry() {
-        let dir =
-            std::env::temp_dir().join(format!("digger-apps-usage-retry-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let worker = digger_store::spawn_usage_worker(dir.join("state/usage.sqlite3"), 4).unwrap();
-        let handle = worker.handle();
-        let mut s = AppsState::with_ledger_path(dir.join("store_cleanups.json"));
-        s.attach_usage_db(handle, "/scope".into());
-        s.begin_usage_for(InstallAction::Install, 7, "安装应用 notes".into());
-        // Close the worker before the settle: the submission fails synchronously.
-        worker.shutdown().unwrap();
-        let _ = s.settle_usage_for(7);
-        let before = s
-            .usage
-            .as_ref()
-            .unwrap()
-            .failed
-            .values()
-            .next()
-            .cloned()
-            .expect("the failed event is retained");
-        assert_eq!(s.failed_usage().len(), 1);
-        assert_eq!(s.usage_in_flight(), 0);
-
-        // Retry must resubmit the same event (run_id, start/finish, counters) and must not
-        // create a new running task or re-run the business action.
-        let _ = s.retry_usage_for(&before.run_id);
-        assert_eq!(s.usage_in_flight(), 0);
-        let after = s
-            .usage
-            .as_ref()
-            .unwrap()
-            .failed
-            .get(&before.run_id)
-            .cloned()
-            .expect("still failed with the same run id");
-        assert_eq!(before, after);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 一次用户发起的真实操作(begin→settle)在账本里落一条记录,经**真实**
-    /// `LedgerUsageService` 在相同作用域下可查到(与面板查询同型)。
-    #[tokio::test]
-    async fn a_completed_app_op_becomes_a_queryable_usage_record() {
-        let path = usage_ledger_path("op");
-        let scope = "/digger/scope".to_string();
-        let ledger = shared_ledger(&path);
-        let mut s = AppsState::with_ledger_path(temp_ledger("op"));
-        s.attach_usage(ledger.clone(), scope.clone());
-
-        s.begin_usage_for(InstallAction::Install, 7, "安装应用(本机目录)".into());
-        assert_eq!(s.usage_in_flight(), 1, "用户动作登记为在途");
-        s.settle_usage_for(7);
-        assert_eq!(s.usage_in_flight(), 0, "结算后不在途");
-
-        let service = digger_store::LedgerUsageService::new(ledger);
-        let rows = service.usage_summary(scope.clone(), None).await.unwrap();
-        assert_eq!(rows.len(), 1, "面板查得到这条记录");
-        assert_eq!(rows[0].1.tokens_in, 0, "无 agent 运行时,如实为 0");
-        assert_eq!(rows[0].0.title, "安装应用(本机目录)");
-    }
-
-    /// 记录写盘后重启(重载账本)仍在——真实落盘,不是内存态。
-    #[tokio::test]
-    async fn a_completed_app_op_survives_a_restart() {
-        let path = usage_ledger_path("restart");
-        let scope = "/digger/scope".to_string();
-        {
-            let ledger = shared_ledger(&path);
-            let mut s = AppsState::with_ledger_path(temp_ledger("restart"));
-            s.attach_usage(ledger, scope.clone());
-            s.begin_usage_for(InstallAction::Uninstall, 11, "卸载应用 notes".into());
-            s.settle_usage_for(11);
-        }
-        // 模拟重启:从磁盘重新载入账本再查。
-        let service = digger_store::LedgerUsageService::load(&path).unwrap();
-        let rows = service.usage_summary(scope, None).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(
-            rows[0].0.conversation_id.starts_with("digger:")
-                && rows[0].0.conversation_id.ends_with(":uninstall:11"),
-            "run_id 仍含动作标签 + 键: {}",
-            rows[0].0.conversation_id
-        );
-    }
-
-    /// 复审 #1 回归:跨重启的**不同**操作(相同动作、相同 sequence,因 RequestTable 每次启动
-    /// 从 0 计数)必须各留一条,而不是因 run_id 相同被覆盖。修复前账本按 run_id upsert,
-    /// 第二次会盖掉第一次 → 只 1 条;修复后应 2 条。
-    #[tokio::test]
-    async fn distinct_ops_across_restarts_do_not_overwrite_each_other() {
-        let path = usage_ledger_path("cross-restart");
-        let scope = "/digger/scope".to_string();
-
-        // 第一次「会话」:sequence 1。
-        {
-            let ledger = shared_ledger(&path);
-            let mut s = AppsState::with_ledger_path(temp_ledger("cr-a"));
-            s.attach_usage(ledger, scope.clone());
-            s.begin_usage_for(InstallAction::Install, 1, "第一次安装".into());
-            s.settle_usage_for(1);
-        }
-        // 重启:新进程(新的 boot_id),sequence 仍从 1 开始。
-        {
-            let ledger = shared_ledger(&path);
-            let mut s = AppsState::with_ledger_path(temp_ledger("cr-b"));
-            s.attach_usage(ledger, scope.clone());
-            s.begin_usage_for(InstallAction::Install, 1, "第二次安装".into());
-            s.settle_usage_for(1);
-        }
-
-        let service = digger_store::LedgerUsageService::load(&path).unwrap();
-        let rows = service.usage_summary(scope, None).await.unwrap();
-        assert_eq!(rows.len(), 2, "跨重启的不同操作各留一条,不被覆盖");
-        let titles: Vec<_> = rows.iter().map(|r| r.0.title.clone()).collect();
-        assert!(titles.contains(&"第一次安装".to_string()));
-        assert!(titles.contains(&"第二次安装".to_string()));
-    }
-
-    /// 未登记的动作键 settle 是 no-op(非用户动作不产生记录);重复 settle 不重复记。
-    #[tokio::test]
-    async fn non_user_actions_do_not_record_and_settle_is_idempotent() {
-        let path = usage_ledger_path("idem");
-        let scope = "/digger/scope".to_string();
-        let ledger = shared_ledger(&path);
-        let mut s = AppsState::with_ledger_path(temp_ledger("idem"));
-        s.attach_usage(ledger.clone(), scope.clone());
-
-        // 只读的「出计划」不该登记在途。
-        s.begin_usage_for(InstallAction::Plan, 1, "计划".into());
-        assert_eq!(s.usage_in_flight(), 0, "只读动作不计入用量");
-        s.settle_usage_for(1);
-        assert_eq!(ledger.lock().unwrap().len(), 0);
-
-        // 用户动作:重复 settle 第二次无登记可结算,不新增第二条。
-        s.begin_usage_for(InstallAction::Stop, 2, "启动/停止应用 notes".into());
-        s.settle_usage_for(2);
-        s.settle_usage_for(2);
-        assert_eq!(ledger.lock().unwrap().len(), 1);
-    }
-
-    /// 两个作用域的记录互不相串(scope 隔离)。
-    #[tokio::test]
-    async fn two_scopes_do_not_cross() {
-        let path = usage_ledger_path("scopes");
-        let ledger = shared_ledger(&path);
-        let mut a = AppsState::with_ledger_path(temp_ledger("scope-a"));
-        a.attach_usage(ledger.clone(), "/scope/a".into());
-        a.begin_usage_for(InstallAction::Install, 1, "a".into());
-        a.settle_usage_for(1);
-        let mut b = AppsState::with_ledger_path(temp_ledger("scope-b"));
-        b.attach_usage(ledger.clone(), "/scope/b".into());
-        b.begin_usage_for(InstallAction::Install, 2, "b".into());
-        b.settle_usage_for(2);
-
-        let service = digger_store::LedgerUsageService::new(ledger);
-        let ra = service
-            .usage_summary("/scope/a".into(), None)
-            .await
-            .unwrap();
-        let rb = service
-            .usage_summary("/scope/b".into(), None)
-            .await
-            .unwrap();
-        assert_eq!(ra.len(), 1);
-        assert_eq!(rb.len(), 1);
-        assert_eq!(ra[0].0.title, "a");
-        assert_eq!(rb[0].0.title, "b");
     }
 
     /// 复审 #7 回归:服务启动失败后必须能重试。
@@ -1903,9 +1312,7 @@ mod tests {
     async fn a_notice_effect_becomes_a_visible_notice() {
         use bytehost_panel::notice::NoticeLevel;
 
-        let ledger = shared_ledger(&usage_ledger_path("notice"));
         let mut s = AppsState::with_ledger_path(temp_ledger("notice"));
-        s.attach_usage(ledger, "/digger/scope".into());
         assert!(s.notice().is_none());
 
         // 直接派发一条 Notice effect(模拟状态机吐出的失败提示)。
@@ -1922,24 +1329,5 @@ mod tests {
         // 用户关闭。
         let _ = s.update(Message::DismissNotice);
         assert!(s.notice().is_none());
-    }
-
-    /// 读失败(损坏账本)与"确实为空"必须能区分:前者 `Unavailable`,后者 `Ok(空)`。
-    #[tokio::test]
-    async fn read_failure_is_distinct_from_empty() {
-        let path = usage_ledger_path("corrupt");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"{ not json").unwrap();
-        // 损坏:载入即失败(不伪装成空账本)。
-        assert!(digger_store::LedgerUsageService::load(&path).is_err());
-
-        // 空:全新路径给 Ok(空)。
-        let empty = usage_ledger_path("empty");
-        let service = digger_store::LedgerUsageService::load(&empty).unwrap();
-        let rows = service
-            .usage_summary("/scope/x".into(), None)
-            .await
-            .unwrap();
-        assert!(rows.is_empty());
     }
 }

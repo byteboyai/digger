@@ -111,21 +111,6 @@ pub fn view(state: &AppsState) -> Element<'_, Message> {
         );
     }
 
-    for (run_id, title) in state.failed_usage() {
-        extra_top.push(
-            row![
-                text(format!("用量记录未持久化：{title}（{run_id}）"))
-                    .size(font::label())
-                    .color(tokens.red),
-                button(text("重试用量记录").size(font::label()).color(tokens.gold))
-                    .padding([4, 12])
-                    .on_press(Message::RetryUsage(run_id)),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center)
-            .into(),
-        );
-    }
     if let Some(reason) = state.store_unavailable_reason() {
         extra_top.push(
             text(format!("浏览器数据清理台账不可读：{reason}"))
