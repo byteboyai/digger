@@ -98,7 +98,10 @@ pub enum Msg {
     /// 「应用」面板的消息(Task 14)。
     Apps(crate::apps::Message),
     /// 「用量」面板的库消息(Task 20)。
+    /// 本地交互(筛选、折叠悬停等),不经作用域身份检查。
     Usage(dozer_panel_usage::Message),
+    /// 后台取数结果:带 scope / epoch,必须先通过作用域身份检查。
+    UsageResult(crate::adapters::usage::UsageResult),
     NativeUsage(crate::adapters::usage_native::Event),
     /// 「待办」面板的库消息(S3b-1)。
     Todo(dozer_panel_todo::Message),
@@ -573,6 +576,11 @@ impl ProductShell {
             && self.shell.maximized().is_none_or(|m| m == side)
     }
 
+    /// 生命周期自检用:注入一行样例用量数据(不经后台身份路由)。
+    pub(crate) fn seed_usage_sample(&mut self) {
+        self.usage.seed_sample();
+    }
+
     /// 用量面板此刻的三态(唯一判断,见 [`UsageLayout`])。
     pub(crate) fn usage_layout(&self) -> UsageLayout {
         if !self.usage.has_agent_filter() {
@@ -912,13 +920,17 @@ impl ProductShell {
         let project = self.projects.current_project().cloned();
         match &project {
             Some(p) => self.usage.set_scope(Some(PathBuf::from(&p.path))),
-            None => {
-                self.usage.set_scope(None);
-                self.usage.reset();
-            }
+            None => self.usage.set_scope(None),
         }
         if project.is_some() && self.panel_visible(&shell::usage_id()) {
             self.usage.activate();
+        }
+    }
+
+    /// Digger 一期无 Toast:把库的 outbox 提示落地到 stderr,不静默吞掉。
+    fn drain_usage_notices(&mut self) {
+        for (level, text) in self.usage.take_notices() {
+            eprintln!("digger: usage 面板/{level}: {text}"); // cli-output
         }
     }
 
@@ -3150,9 +3162,14 @@ impl Product<Msg> for ProductShell {
                     dozer_panel_usage::Message::CollapseHover(_) => return Task::none(),
                     m => self.usage.update(m),
                 }
-                // Digger 一期无 Toast:把库的 outbox 提示落地到 stderr,不静默吞掉。
-                for (level, text) in self.usage.take_notices() {
-                    eprintln!("digger: usage 面板/{level}: {text}"); // cli-output
+                self.drain_usage_notices();
+                Task::none()
+            }
+            Msg::UsageResult(result) => {
+                // 旧 scope / 旧 epoch 的回包在这里被丢弃,不触碰 rows / loading /
+                // 通知,也不进入共享 update。
+                if self.usage.apply_result(result) {
+                    self.drain_usage_notices();
                 }
                 Task::none()
             }
@@ -4208,9 +4225,11 @@ pub fn boot() -> (ProductShell, Task<Msg>) {
         Some(rx) => iced::Task::stream(crate::apps::reply_stream(rx).map(Msg::Apps)),
         None => Task::none(),
     };
-    // 用量面板后台取数结果回流:同型,接成 iced 流回投 `Msg::Usage`。
+    // 用量面板后台取数结果回流:同型,接成 iced 流回投带身份的 `Msg::UsageResult`。
     let usage_task = match shell.usage.take_receiver() {
-        Some(rx) => iced::Task::stream(crate::adapters::usage::receiver_stream(rx).map(Msg::Usage)),
+        Some(rx) => {
+            iced::Task::stream(crate::adapters::usage::receiver_stream(rx).map(Msg::UsageResult))
+        }
         None => Task::none(),
     };
     let size_task = {
@@ -6907,9 +6926,16 @@ mod tests {
     }
 
     fn load_sample_rows(shell: &mut ProductShell) {
+        let scope = PathBuf::from("/sample/project");
+        shell.usage.set_scope(Some(scope.clone()));
+        let (scope, epoch) = shell.usage.scope_identity().expect("sample scope");
         send(
             shell,
-            Msg::Usage(crate::adapters::usage::sample_loaded_message()),
+            Msg::UsageResult(crate::adapters::usage::UsageResult {
+                scope,
+                epoch,
+                message: crate::adapters::usage::sample_loaded_message(),
+            }),
         );
     }
 
@@ -6933,6 +6959,68 @@ mod tests {
             Msg::Shell(ShellMsg::TogglePane(shell::usage_id())),
         );
         assert_eq!(shell.usage_layout(), UsageLayout::Paired);
+    }
+
+    #[test]
+    fn usage_route_rejects_stale_result_across_close_and_reopen() {
+        let mut shell = fresh("usage-route-stale");
+        let path = PathBuf::from("/projects/a");
+        shell.usage.set_scope(Some(path.clone()));
+        let (scope, epoch) = shell.usage.scope_identity().expect("first lifecycle");
+        let stale = crate::adapters::usage::UsageResult {
+            scope,
+            epoch,
+            message: crate::adapters::usage::sample_loaded_message(),
+        };
+
+        // 关闭全部项目后重新打开同一路径:生命周期变了,旧回包必须被拒绝。
+        shell.usage.set_scope(None);
+        shell.usage.set_scope(Some(path));
+        send(&mut shell, Msg::UsageResult(stale));
+        assert!(!shell.usage.has_agent_filter(), "old result must not land");
+        assert_eq!(shell.usage_layout(), UsageLayout::ContentOnly);
+
+        // 新生命周期的结果走同一条产品路由,正常落地。
+        let (scope, epoch) = shell.usage.scope_identity().expect("second lifecycle");
+        send(
+            &mut shell,
+            Msg::UsageResult(crate::adapters::usage::UsageResult {
+                scope,
+                epoch,
+                message: crate::adapters::usage::sample_loaded_message(),
+            }),
+        );
+        assert!(shell.usage.has_agent_filter());
+        assert_eq!(shell.usage_layout(), UsageLayout::Paired);
+    }
+
+    #[test]
+    fn usage_route_rejects_result_for_another_scope() {
+        let mut shell = fresh("usage-route-other-scope");
+        shell.usage.set_scope(Some(PathBuf::from("/projects/b")));
+        let (_, epoch) = shell.usage.scope_identity().expect("current lifecycle");
+        send(
+            &mut shell,
+            Msg::UsageResult(crate::adapters::usage::UsageResult {
+                scope: PathBuf::from("/projects/a"),
+                epoch,
+                message: crate::adapters::usage::sample_loaded_message(),
+            }),
+        );
+        assert!(!shell.usage.has_agent_filter());
+        assert_eq!(shell.usage_layout(), UsageLayout::ContentOnly);
+    }
+
+    #[test]
+    fn usage_route_rejects_bare_loaded_message() {
+        let mut shell = fresh("usage-route-bare-loaded");
+        shell.usage.set_scope(Some(PathBuf::from("/projects/a")));
+        send(
+            &mut shell,
+            Msg::Usage(crate::adapters::usage::sample_loaded_message()),
+        );
+        assert!(!shell.usage.has_agent_filter());
+        assert_eq!(shell.usage_layout(), UsageLayout::ContentOnly);
     }
 
     /// 评审关注点 3:文件里写着 collapsed 但此刻没有数据 —— 不能显示成一个空列表占位。

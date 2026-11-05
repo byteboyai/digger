@@ -356,7 +356,8 @@ impl Driver {
                 Action::Resize(w, h) => iced::window::resize(id, Size::new(*w, *h)),
                 Action::Close => Task::done(Msg::Exit),
                 Action::InjectUsage => {
-                    Task::done(Msg::Usage(crate::adapters::usage::sample_loaded_message()))
+                    shell.seed_usage_sample();
+                    Task::none()
                 }
             };
             chain = chain

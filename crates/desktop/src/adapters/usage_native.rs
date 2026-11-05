@@ -83,6 +83,17 @@ impl Native {
     pub fn take_receiver(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Event>> {
         self.rx.take()
     }
+
+    /// 作用域切换 / 关闭时立即把期望载荷置为空态。
+    ///
+    /// 只清 Rust 状态不够:若下一次 `sync` 之前 webview 仍持有旧载荷,旧项目的
+    /// 图表会继续显示。这里把空载荷写进 Surface,后续同步会按正常推送语义送出去。
+    pub fn clear_payload(&mut self) {
+        self.surface.set_desired(dozer_model::Stamped::new(
+            crate::settings::language::stamp(),
+            dozer_panel_usage::current_view_payload(&WorkspaceState::default()),
+        ));
+    }
     pub fn update(&mut self, event: Event) {
         match event {
             Event::Ready(g) if self.live && g == self.epoch.load(Ordering::SeqCst) => {
@@ -215,6 +226,33 @@ impl Native {
 #[cfg(test)]
 mod theme_tests {
     use super::*;
+
+    #[test]
+    fn clearing_the_payload_replaces_the_old_scope_rows() {
+        let mut native = Native::new();
+        native.surface.observe_instance(true, false);
+        native.surface.apply_ready();
+        let mut state = WorkspaceState::default();
+        dozer_panel_usage::update(&mut state, crate::adapters::usage::sample_loaded_message());
+        native.surface.set_desired(dozer_model::Stamped::new(
+            crate::settings::language::stamp(),
+            dozer_panel_usage::current_view_payload(&state),
+        ));
+        let (_, loaded) = native
+            .surface
+            .take_pending_script()
+            .expect("loaded payload must be pending");
+        assert!(loaded.contains(r#"\"conversation_count\":1"#), "{loaded}");
+
+        native.clear_payload();
+        let (_, cleared) = native
+            .surface
+            .take_pending_script()
+            .expect("cleared payload must be pending");
+        assert!(cleared.contains(r#"\"kind\":\"empty\""#), "{cleared}");
+        assert!(!cleared.contains("conversation_count"), "{cleared}");
+        assert_ne!(loaded, cleared);
+    }
 
     #[test]
     fn a_theme_change_rebuilds_the_document_and_waits_for_a_new_handshake() {
