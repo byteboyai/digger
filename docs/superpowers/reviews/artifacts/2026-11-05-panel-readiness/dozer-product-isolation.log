@@ -1,0 +1,13 @@
+   Compiling dozerd v0.3.3 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/panel-readiness.QLFHub/dozer/crates/dozerd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.13s
+     Running tests/product_isolation.rs (/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T//panel-readiness.QLFHub/target-dozer/aarch64-apple-darwin/debug/deps/product_isolation-07aa5c2dca2024a1)
+
+running 5 tests
+test isolated_roots_sockets_and_dbs_do_not_overlap ... ok
+test app_host_is_unavailable_when_the_feature_is_off ... ok
+test events_do_not_cross_between_two_daemons ... ok
+test second_daemon_on_the_same_root_exits_without_touching_data ... ok
+test sigterm_and_sigint_reap_sessions_and_release_socket_lock ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s
+

@@ -23,7 +23,7 @@
 命令日志保存在 [`artifacts/2026-11-05-panel-readiness/`](artifacts/2026-11-05-panel-readiness/)：
 
 - Digger：`digger-check.log`、`digger-gates.log`、`digger-probe-*.log`、`digger-lib-serial.log`、`digger-lib-parallel.log`、`digger-consumer-rust.log`、`digger-web.log`、`digger-embedded.log`、`digger-usage-ci-filters.log`、`digger-metadata-summary.txt`、`digger-lifecycle-selftest.log`、`digger-usage-selftest-{new,old}.log`。
-- Dozer：`dozer-gates.log`（首次失败证据）、`dozer-check-rerun.log`、`dozer-gates-rerun.log`、`dozer-runtime-tests.log`、`dozer-settings-tests.log`、`dozer-metadata-summary.txt`。
+- Dozer：`dozer-gates.log`（首次失败证据）、`dozer-check-rerun.log`、`dozer-gates-rerun.log`、`dozer-runtime-tests.log`、`dozer-settings-tests.log`、`dozer-product-isolation.log`、`dozer-metadata-summary.txt`。
 
 ## A1 — 基线与既有修改保留
 
@@ -131,6 +131,7 @@ Dozer runtime 对应集：
 |---|---|
 | `dozer-file-io` + `dozer-preview-core` | 29 + 166 passed |
 | `dozerd --lib --test runtime_regressions` | 555 + 6 passed |
+| `dozerd --test product_isolation`（含 helper 构建） | 5 passed |
 | `dozer-client` + `dozer-core --lib` | 70 + 118 passed |
 | preview/todo/agent/conversations/services/store-project | 83 / 86 / 410 / 69 / 29 / 33 passed |
 | `dozer-app extensions::settings` | 43 passed |
