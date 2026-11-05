@@ -20,6 +20,7 @@
 - [统一设置模块与对话框宿主](docs/superpowers/specs/2026-11-03-unified-settings-dialog-design.md)（[实施计划](docs/superpowers/plans/2026-11-03-unified-settings-dialog.md)）
 - [统一设置共享版本发布记录](docs/superpowers/reviews/2026-11-04-shared-settings-release.md)：bytehost `v0.4.23` / Dozer `libs-2026-11-04a`；无 patch 发行验证与实机边界。
 - [代码恢复性、性能与工程质量优化](docs/superpowers/specs/2026-11-02-code-reliability-and-performance-design.md)（[实施计划](docs/superpowers/plans/2026-11-02-code-reliability-and-performance.md)）
+- [会话面板 scale 用例 fork 死锁修复](docs/superpowers/specs/2026-11-04-conversations-scale-test-fork-hang-design.md)（[实施计划](docs/superpowers/plans/2026-11-04-conversations-scale-test-fork-hang.md)，[验收报告](docs/superpowers/reviews/2026-11-04-scale-test-fork-acceptance.md)）
 - Engine spike: `spike/md-engine` (CodeMirror 6 vs ProseMirror under ADR-012)
 - Block identity spike: `spike/block-identity` (stable block ids across edits, with property tests)
 - Parser agreement spike: `spike/parser-agreement` (Rust vs Lezer block boundaries, with a conformance check)
@@ -49,6 +50,9 @@ PR CI runs editor unit tests (excluding the book stress test), representative pr
 ```bash
 cargo test -p digger-editor --lib -- --skip typing_in_a_book_parses_a_few_blocks_not_the_book
 cargo test --release -p digger-editor
+for scale in 0.5 1 2; do
+  BYTEUI_ICON_SCALE="$scale" cargo run -p digger-desktop --bin icon_scale_widget_probe
+done
 (cd crates/desktop/web && npm ci && npm run check && npm test)
 bash scripts/build-editor-web.sh --check
 CARGO_TARGET_DIR="$PWD/target" bash scripts/bench-editor-sync.sh /private/tmp/digger-performance

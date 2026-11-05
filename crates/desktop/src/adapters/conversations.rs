@@ -102,9 +102,39 @@ impl ConversationsPanel {
         transcript: Arc<dyn TranscriptService>,
         marker_path: std::path::PathBuf,
     ) -> Self {
+        let import_marker = ImportMarker::load(&marker_path);
+        Self::new_with_import_marker(
+            conversation,
+            summary,
+            transcript,
+            import_marker,
+            marker_path,
+        )
+    }
+    /// Headless construction for widget probes: the import marker stays in
+    /// memory, so building a panel performs no filesystem access.
+    pub fn new_headless(
+        conversation: Arc<dyn ConversationService>,
+        summary: Arc<dyn SummaryService>,
+        transcript: Arc<dyn TranscriptService>,
+    ) -> Self {
+        Self::new_with_import_marker(
+            conversation,
+            summary,
+            transcript,
+            ImportMarker::default(),
+            std::path::PathBuf::new(),
+        )
+    }
+    fn new_with_import_marker(
+        conversation: Arc<dyn ConversationService>,
+        summary: Arc<dyn SummaryService>,
+        transcript: Arc<dyn TranscriptService>,
+        import_marker: ImportMarker,
+        marker_path: std::path::PathBuf,
+    ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (import_tx, import_rx) = tokio::sync::mpsc::unbounded_channel();
-        let import_marker = ImportMarker::load(&marker_path);
         Self {
             native: super::review_native::ReviewNative::new(),
             imports: HashMap::new(),

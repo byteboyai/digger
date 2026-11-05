@@ -10,6 +10,11 @@ publish = false
 name = "digger"
 path = "src/main.rs"
 
+# 无窗口 icon-scale 布局探针:由 scale 用例 fork,不初始化测试 harness / daemon。
+[[bin]]
+name = "icon_scale_widget_probe"
+path = "src/bin/icon_scale_widget_probe.rs"
+
 [dependencies]
 bytehost-core.workspace = true
 # 共享窗口骨架:顶栏 / 图标栏 / 面板区 / 分隔线 / 放大态 / 布局持久化。
@@ -69,7 +74,10 @@ iced_core.workspace = true
 iced_widget = { version = "0.14", default-features = false }
 # 渲染后端:iced_renderer 在 release 下必须启用 wgpu/tiny-skia 之一,否则 `compile_error!`。
 # 经 `iced` facade 的 `wgpu` feature 启用(与 Dozer 同栈,见 workspace 依赖)。
-iced_renderer = { version = "0.14", default-features = false }
+# `tiny-skia` 是无窗口布局探针(`scale_widget_checks` / `icon_scale_widget_probe`)
+# 的软件渲染器:不需要 GPU 或图形会话。
+iced_renderer = { version = "0.14", default-features = false, features = ["tiny-skia"] }
+iced_tiny_skia = { version = "0.14", default-features = false }
 iced_wgpu = { version = "0.14", default-features = false }
 wry.workspace = true
 objc2-foundation.workspace = true
@@ -86,8 +94,6 @@ dozer-panel-todo.workspace = true
 
 [dev-dependencies]
 # Headless widget layout/operation tests without a window or GPU.
-iced_renderer = { version = "0.14", default-features = false, features = ["tiny-skia"] }
-iced_tiny_skia = { version = "0.14", default-features = false }
 tempfile = "3"
 # 集成测试在进程内拉起真实 diggerd(S3b-1 Task 6)。
 dozerd.workspace = true

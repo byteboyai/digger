@@ -54,6 +54,8 @@ pub mod group_chat_geometry;
 pub mod group_chat_native;
 pub mod group_chat_overlay;
 pub mod notice;
+/// 会话面板 icon-scale 布局断言:单元测试与 `icon_scale_widget_probe` 共用。
+pub mod scale_widget_checks;
 
 pub mod conversations_import;
 pub mod conversations_search_menu;

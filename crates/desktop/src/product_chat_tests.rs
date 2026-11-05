@@ -318,6 +318,9 @@ fn forged_events_have_no_effect_and_never_spawn_an_agent() {
     ready(&mut shell);
     let generation = shell.group_chat.native.generation().unwrap();
     with_selected_group_and_messages(&mut shell, vec![agent_message(5, GroupMessageStatus::Running)]);
+    // Let the selection's own list/poll calls settle before taking the
+    // baseline; the forged pages below must not add anything.
+    rt.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(80)).await });
     let before = fake.calls.lock().unwrap().len();
     for page in [
         Page::SelectGroup { group_id: 999 },
@@ -332,7 +335,10 @@ fn forged_events_have_no_effect_and_never_spawn_an_agent() {
         let _ = host(&mut shell, Msg::GroupChatNative(ChatEvent::Page(generation, page)));
     }
     rt.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(80)).await });
-    assert_eq!(fake.calls.lock().unwrap().len(), before, "{:?}", fake.calls.lock().unwrap());
+    // Lock once: a second `lock()` inside the assertion message would deadlock
+    // this test against itself.
+    let calls = fake.calls.lock().unwrap();
+    assert_eq!(calls.len(), before, "{calls:?}");
     assert!(!shell.panel_visible(&shell::todo_id()));
 }
 

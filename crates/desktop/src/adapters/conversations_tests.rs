@@ -1,6 +1,8 @@
 use super::*;
 use crate::adapters::agent::{AgentShell, AgentShellMsg, Status};
 use crate::adapters::conversations_display::ConversationsDisplay;
+pub(crate) use crate::adapters::scale_widget_checks::view_texts;
+use crate::adapters::scale_widget_checks::{area, click, layout, ready, with_layout};
 use dozer_model::{
     AgentKind, ConversationSummary, ProjectInfo, SessionRow, SessionSummaryPayload, SummaryJobInfo,
     TurnRecord,
@@ -143,26 +145,6 @@ pub(crate) fn receive(
 fn apply(panel: &mut ConversationsPanel, rt: &tokio::runtime::Runtime, p: &ProjectInfo) {
     let (pid, m) = receive(panel, rt);
     let _ = panel.update(pid, m, Some(p));
-}
-fn ready() -> AgentShell {
-    AgentShell {
-        status: Status::Ready,
-    }
-}
-pub(crate) fn area(width: f32, collapsed: bool) -> bytehost_chrome::BodyArea {
-    bytehost_chrome::BodyArea {
-        side: bytehost_chrome::Side::Right,
-        rect: bytehost_chrome::Rect {
-            x: 0.,
-            y: 0.,
-            w: width,
-            h: 600.,
-        },
-        pair: None,
-        mirrored: false,
-        split: 0.35,
-        collapsed,
-    }
 }
 fn tree(
     panel: &ConversationsPanel,
@@ -352,7 +334,7 @@ fn service_failures_surface_as_a_dismissable_notice() {
     assert!(texts.iter().any(|s| s.contains("read rejected")));
     let mut view = panel.view(Some(&a), &area(500., false), &shared);
     let close = layout(&mut view, 500.)
-        .3
+        .2
         .0
         .into_iter()
         .find(|(s, _)| s == "×")
@@ -504,100 +486,6 @@ fn session_open_uses_the_librarys_normal_two_hundred_turn_fetch() {
     assert!(texts.iter().any(|s| s.contains("暂无对话")), "{texts:?}");
 }
 
-/// Exercise the actual iced layout and Operation::text tree without a desktop window.
-#[derive(Default)]
-struct Texts(Vec<(String, iced_core::Rectangle)>);
-impl iced_core::widget::Operation for Texts {
-    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn iced_core::widget::Operation)) {
-        operate(self)
-    }
-    fn text(
-        &mut self,
-        _: Option<&iced_core::widget::Id>,
-        bounds: iced_core::Rectangle,
-        text: &str,
-    ) {
-        self.0.push((text.into(), bounds));
-    }
-}
-fn renderer() -> iced_renderer::Renderer {
-    iced_renderer::fallback::Renderer::Secondary(iced_tiny_skia::Renderer::new(
-        iced::Font::DEFAULT,
-        iced_core::Pixels(14.),
-    ))
-}
-fn layout(
-    view: &mut iced::Element<'_, Msg>,
-    width: f32,
-) -> (
-    iced_core::widget::Tree,
-    iced_core::layout::Node,
-    iced_renderer::Renderer,
-    Texts,
-) {
-    let renderer = renderer();
-    let mut tree = iced_core::widget::Tree::new(view.as_widget());
-    let node = view.as_widget_mut().layout(
-        &mut tree,
-        &renderer,
-        &iced_core::layout::Limits::new(iced_core::Size::ZERO, iced_core::Size::new(width, 600.)),
-    );
-    fn check(node: &iced_core::layout::Node) {
-        let bounds = node.bounds();
-        assert!(
-            bounds.width >= 0. && bounds.height >= 0.,
-            "negative geometry {bounds:?}"
-        );
-        for child in node.children() {
-            check(child);
-        }
-    }
-    check(&node);
-    let mut texts = Texts::default();
-    view.as_widget_mut().operate(
-        &mut tree,
-        iced_core::Layout::new(&node),
-        &renderer,
-        &mut texts,
-    );
-    (tree, node, renderer, texts)
-}
-pub(crate) fn view_texts(
-    panel: &ConversationsPanel,
-    project: Option<&ProjectInfo>,
-    shell: &AgentShell,
-    width: f32,
-    collapsed: bool,
-) -> Vec<String> {
-    let mut view = panel.view(project, &area(width, collapsed), shell);
-    layout(&mut view, width)
-        .3
-        .0
-        .into_iter()
-        .map(|(text, _)| text)
-        .collect()
-}
-fn click(view: &mut iced::Element<'_, Msg>, point: iced_core::Point, width: f32) -> Vec<Msg> {
-    let (mut tree, node, renderer, _) = layout(view, width);
-    let mut messages = vec![];
-    for event in [
-        iced_core::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left),
-        iced_core::mouse::Event::ButtonReleased(iced_core::mouse::Button::Left),
-    ] {
-        let mut shell = iced_core::Shell::new(&mut messages);
-        view.as_widget_mut().update(
-            &mut tree,
-            &iced_core::Event::Mouse(event),
-            iced_core::Layout::new(&node),
-            iced_core::mouse::Cursor::Available(point),
-            &renderer,
-            &mut iced_core::clipboard::Null,
-            &mut shell,
-            &iced_core::Rectangle::with_size(iced_core::Size::new(width, 600.)),
-        );
-    }
-    messages
-}
 #[test]
 fn conversations_display_relative_time_is_localized_and_saturates_future_timestamps() {
     use crate::adapters::conversations_display::relative_time;
@@ -621,11 +509,11 @@ fn conversations_display_wraps_messages_with_the_project_id_and_receiver_is_take
 fn conversations_collapse_tooltip_retains_its_tree_and_the_button_dispatches_shell_toggle() {
     let display = ConversationsDisplay::new(1);
     let mut view = display.list_collapse_button("collapse".into(), "expand".into());
-    let (tree, node, _, _) = layout(&mut view, 100.);
+    let (tree, node, _) = layout(&mut view, 100.);
     let before = tree.children.len();
     let messages = click(&mut view, node.bounds().center(), 100.);
     assert!(messages.iter().any(|m|matches!(m,Msg::Shell(bytehost_chrome::ShellMsg::TogglePane(id)) if *id==crate::shell::conversations_id())));
-    let (tree, _, _, _) = layout(&mut view, 100.);
+    let (tree, _, _) = layout(&mut view, 100.);
     assert_eq!(tree.children.len(), before);
 }
 #[test]
@@ -638,7 +526,7 @@ fn conversations_unavailable_retry_button_dispatches_the_shared_agent_shell_mess
         status: Status::Unavailable("socket permission denied".into()),
     };
     let mut view = panel.view(Some(&a), &area(600., false), &shell);
-    let texts = layout(&mut view, 600.).3;
+    let texts = layout(&mut view, 600.).2;
     let retry = texts
         .0
         .iter()
@@ -688,13 +576,13 @@ fn conversations_pair_uses_the_real_list_width_and_collapse_leaves_only_the_revi
     });
     area.split = 0.3;
     let mut view = panel.view(Some(&a), &area, &shared);
-    let (_, _, _, texts) = layout(&mut view, 1000.);
+    let (_, _, texts) = layout(&mut view, 1000.);
     let title = texts.0.iter().find(|(s, _)| s == "one").unwrap().1;
     assert!(title.x >= 694. && title.width <= 300., "{title:?}");
     drop(view);
     area.collapsed = true;
     let mut view = panel.view(Some(&a), &area, &shared);
-    let texts = layout(&mut view, 1000.).3.0;
+    let texts = layout(&mut view, 1000.).2.0;
     assert!(
         texts
             .iter()
@@ -735,61 +623,6 @@ fn conversations_pane_styles_match_the_agent_list_and_review_regions() {
     assert_eq!(list.line_height, 1.2);
 }
 
-fn actual_view_has_pane_toggle(
-    panel: &ConversationsPanel,
-    project: &ProjectInfo,
-    collapsed: bool,
-    mirrored: bool,
-) -> bool {
-    let shared = ready();
-    let mut area = area(1000., collapsed);
-    area.mirrored = mirrored;
-    area.side = if mirrored {
-        bytehost_chrome::Side::Left
-    } else {
-        bytehost_chrome::Side::Right
-    };
-    area.pair = Some(bytehost_chrome::PairRects {
-        first: bytehost_chrome::Rect {
-            x: if mirrored { 0. } else { 650. },
-            y: 0.,
-            w: 350.,
-            h: 600.,
-        },
-        second: bytehost_chrome::Rect {
-            x: if mirrored { 356. } else { 0. },
-            y: 0.,
-            w: 644.,
-            h: 600.,
-        },
-        divider: bytehost_chrome::Rect {
-            x: if mirrored { 350. } else { 644. },
-            y: 0.,
-            w: 6.,
-            h: 600.,
-        },
-    });
-    let mut view = panel.view(Some(project), &area, &shared);
-    let (_, node, _, _) = layout(&mut view, 1000.);
-    fn centers(layout: iced_core::Layout<'_>, points: &mut Vec<iced_core::Point>) {
-        points.push(layout.bounds().center());
-        for child in layout.children() {
-            centers(child, points);
-        }
-    }
-    // Probe centers from the actual laid-out widget tree, including icon buttons
-    // whose text is deliberately only present in their tooltip overlay.
-    let mut points = vec![];
-    centers(iced_core::Layout::new(&node), &mut points);
-    points.into_iter().any(|point| {
-        click(&mut view, point, 1000.).iter().any(|message| {
-            matches!(message,
-            Msg::Shell(bytehost_chrome::ShellMsg::TogglePane(id))
-                if *id == crate::shell::conversations_id())
-        })
-    })
-}
-
 #[test]
 fn the_actual_expanded_conversations_view_has_a_clickable_collapse_control() {
     let rt = runtime();
@@ -799,7 +632,7 @@ fn the_actual_expanded_conversations_view_has_a_clickable_collapse_control() {
     let _ = panel.update(1, Message::SessionsRefreshed(1, Ok(vec![])), Some(&project));
     for mirrored in [false, true] {
         assert!(
-            actual_view_has_pane_toggle(&panel, &project, false, mirrored),
+            crate::adapters::scale_widget_checks::pane_toggle_clickable(&panel, false, mirrored),
             "expanded mirrored={mirrored}"
         );
     }
@@ -814,7 +647,7 @@ fn the_actual_collapsed_conversations_view_has_a_clickable_expand_control() {
     let _ = panel.update(1, Message::SessionsRefreshed(1, Ok(vec![])), Some(&project));
     for mirrored in [false, true] {
         assert!(
-            actual_view_has_pane_toggle(&panel, &project, true, mirrored),
+            crate::adapters::scale_widget_checks::pane_toggle_clickable(&panel, true, mirrored),
             "collapsed mirrored={mirrored}"
         );
     }
@@ -961,7 +794,6 @@ pub(crate) fn search_focus_feedback(
     };
     let ready = ready();
     let mut view = panel.view(Some(project), &area(500., false), &ready);
-    let (mut tree, node, renderer, _) = layout(&mut view, 500.);
     let mut focus: Box<dyn iced_core::widget::Operation> = if focused {
         Box::new(iced_core::widget::operation::focusable::focus(
             dozer_panel_conversations::view::conversation_search_field_id(),
@@ -969,18 +801,16 @@ pub(crate) fn search_focus_feedback(
     } else {
         Box::new(iced_core::widget::operation::focusable::unfocus())
     };
-    view.as_widget_mut().operate(
-        &mut tree,
-        iced_core::Layout::new(&node),
-        &renderer,
-        focus.as_mut(),
-    );
-    view.as_widget_mut().operate(
-        &mut tree,
-        iced_core::Layout::new(&node),
-        &renderer,
-        operation.as_mut(),
-    );
+    with_layout(&mut view, 500., |view, tree, node, renderer, _| {
+        view.as_widget_mut()
+            .operate(tree, iced_core::Layout::new(node), renderer, focus.as_mut());
+        view.as_widget_mut().operate(
+            tree,
+            iced_core::Layout::new(node),
+            renderer,
+            operation.as_mut(),
+        );
+    });
     let _ = operation.finish();
     drop(operation);
     let iced_runtime::Action::Output(message) = rt.block_on(stream.next()).unwrap() else {
@@ -997,15 +827,6 @@ fn conversations_real_search_text_input_captures_characters_before_agent_subscri
     panel.ensure_state(&a);
     let ready = ready();
     let mut view = panel.view(Some(&a), &area(500., false), &ready);
-    let (mut tree, node, renderer, _) = layout(&mut view, 500.);
-    view.as_widget_mut().operate(
-        &mut tree,
-        iced_core::Layout::new(&node),
-        &renderer,
-        &mut iced_core::widget::operation::focusable::focus(
-            dozer_panel_conversations::view::conversation_search_field_id(),
-        ),
-    );
     let event = iced::keyboard::Event::KeyPressed {
         key: iced::keyboard::Key::Character("x".into()),
         modified_key: iced::keyboard::Key::Character("x".into()),
@@ -1017,20 +838,34 @@ fn conversations_real_search_text_input_captures_characters_before_agent_subscri
         text: Some("x".into()),
         repeat: false,
     };
-    let mut messages = vec![];
-    let mut shell = iced_core::Shell::new(&mut messages);
-    view.as_widget_mut().update(
-        &mut tree,
-        &iced::Event::Keyboard(event.clone()),
-        iced_core::Layout::new(&node),
-        iced_core::mouse::Cursor::Unavailable,
-        &renderer,
-        &mut iced_core::clipboard::Null,
-        &mut shell,
-        &iced_core::Rectangle::with_size(iced_core::Size::new(500., 600.)),
-    );
-    assert!(shell.is_event_captured());
-    assert!(crate::product::agent_key_message(shell.event_status(), &event).is_none());
+    let (messages, captured, ignored) =
+        with_layout(&mut view, 500., |view, tree, node, renderer, _| {
+            view.as_widget_mut().operate(
+                tree,
+                iced_core::Layout::new(node),
+                renderer,
+                &mut iced_core::widget::operation::focusable::focus(
+                    dozer_panel_conversations::view::conversation_search_field_id(),
+                ),
+            );
+            let mut messages = vec![];
+            let mut shell = iced_core::Shell::new(&mut messages);
+            view.as_widget_mut().update(
+                tree,
+                &iced::Event::Keyboard(event.clone()),
+                iced_core::Layout::new(node),
+                iced_core::mouse::Cursor::Unavailable,
+                renderer,
+                &mut iced_core::clipboard::Null,
+                &mut shell,
+                &iced_core::Rectangle::with_size(iced_core::Size::new(500., 600.)),
+            );
+            let captured = shell.is_event_captured();
+            let ignored = crate::product::agent_key_message(shell.event_status(), &event).is_none();
+            (messages, captured, ignored)
+        });
+    assert!(captured);
+    assert!(ignored);
     assert!(
         messages
             .iter()
@@ -1524,7 +1359,7 @@ fn actual_import_and_retry_buttons_dispatch_start_and_importing_is_disabled() {
     ] {
         panel.imports.insert(1, state);
         let mut view = panel.view(Some(&p), &area(700., false), &shared);
-        let texts = layout(&mut view, 700.).3;
+        let texts = layout(&mut view, 700.).2;
         let point = texts
             .0
             .iter()
@@ -1676,7 +1511,7 @@ fn clicking_a_row_opens_the_detail_and_shows_loading_until_loaded() {
     let shared = ready();
     let mut view = panel.view(Some(&a), &area(600., false), &shared);
     let at = layout(&mut view, 600.)
-        .3
+        .2
         .0
         .into_iter()
         .find(|(s, _)| s == "one")
@@ -1774,7 +1609,7 @@ fn load_more_appends_and_renavigates_with_a_new_nonce() {
         let shared = ready();
         let mut view = panel.view(Some(&a), &area(600., true), &shared);
         let at = layout(&mut view, 600.)
-            .3
+            .2
             .0
             .into_iter()
             .find(|(label, _)| label == "加载更多…")
@@ -2004,153 +1839,15 @@ fn switching_back_shows_the_previous_projects_detail_again() {
 fn collapsed_notice_is_dismissible_and_outside_the_native_review() {
     let rt = runtime();
     let (mut panel, _, _) = panel(&rt);
-    let a = project(1, "/a");
-    panel.ensure_state(&a);
-    let error = format!(
-        "无法读取会话文件 /private/tmp/history/{}: connection lost",
-        "nested-path/".repeat(50)
-    );
-    panel.notice.push(error.clone());
-    let shared = ready();
-    let mut view = panel.view(Some(&a), &area(600., true), &shared);
-    let (_, node, _, texts) = layout(&mut view, 600.);
-    let texts = texts.0;
-    let close = texts.iter().find(|(s, _)| s == "×").unwrap().1;
-    assert!(texts.iter().any(|(s, _)| s == &error));
-    assert!(
-        close.y >= 0. && close.y + close.height <= panel.review_notice_height(true),
-        "dismiss control {close:?} must be in the initial notice viewport"
-    );
-    let bounds = super::super::review_geometry::review_bounds(
-        bytehost_chrome::Rect {
-            x: 0.,
-            y: panel.review_notice_height(true),
-            w: 600.,
-            h: 600. - panel.review_notice_height(true),
-        },
-        byteui::theme::icon_size::scale(),
-    );
-    assert!(close.y + close.height <= bounds.y, "{close:?} {bounds:?}");
-    let header = texts.iter().find(|(s, _)| s == "对话").unwrap().1;
-    assert!(
-        header.y + header.height <= bounds.y,
-        "header {header:?} covered by native {bounds:?}"
-    );
-    fn rectangles(layout: iced_core::Layout<'_>, out: &mut Vec<iced_core::Rectangle>) {
-        out.push(layout.bounds());
-        for child in layout.children() {
-            rectangles(child, out);
-        }
-    }
-    let mut rects = vec![];
-    rectangles(iced_core::Layout::new(&node), &mut rects);
-    let mut found = false;
-    for rect in rects {
-        if click(&mut view, rect.center(), 600.)
-            .iter()
-            .any(|msg| matches!(msg, Msg::ConversationsNoticeDismiss))
-        {
-            found = true;
-            assert!(
-                rect.y >= 0. && rect.y + rect.height <= panel.review_notice_height(true),
-                "entire dismiss hit bounds {rect:?} must be inside initial notice viewport at scale {}",
-                byteui::theme::icon_size::scale()
-            );
-        }
-    }
-    assert!(found, "notice dismiss button must be hittable");
-    assert!(
-        click(&mut view, close.center(), 600.)
-            .iter()
-            .any(|m| matches!(m, Msg::ConversationsNoticeDismiss))
-    );
+    crate::adapters::scale_widget_checks::check_collapsed_notice(&mut panel).unwrap();
 }
 
 #[test]
 fn actual_widget_header_and_collapse_control_are_above_native_review() {
-    let display = ConversationsDisplay::new(1);
-    let mut head = display.panel_head(
-        byteui::interaction::icons::IconKind::BotMessageSquare,
-        "对话".into(),
-        None,
-    );
-    let (_, head_node, _, _) = layout(&mut head, 600.);
-    let divider = head_node.children().last().unwrap().bounds();
-    let style = super::super::conversations_display::review_pane_style();
-    assert!(divider.height > 0.);
-    assert!(
-        style.padding.top + divider.y + divider.height
-            <= byteui::theme::geometry::preview_chrome_top_px(),
-        "actual divider {divider:?} plus pane top {} exceeds native chrome {} at scale {}",
-        style.padding.top,
-        byteui::theme::geometry::preview_chrome_top_px(),
-        byteui::theme::icon_size::scale()
-    );
-    assert!(
-        head_node.size().height > byteui::theme::geometry::tab_button_size(),
-        "header must contain its existing divider"
-    );
     let rt = runtime();
     let (mut panel, _, _) = panel(&rt);
-    let a = project(1, "/a");
-    panel.ensure_state(&a);
-    let shared = ready();
-    for collapsed in [false, true] {
-        let mut view = panel.view(Some(&a), &area(600., collapsed), &shared);
-        let (_, node, _, texts) = layout(&mut view, 600.);
-        let bounds = super::super::review_geometry::review_bounds(
-            if collapsed {
-                bytehost_chrome::Rect::new(0., 0., 600., 600.)
-            } else {
-                let block = node.children().last().unwrap().bounds();
-                bytehost_chrome::Rect::new(block.x, block.y, block.width, block.height)
-            },
-            byteui::theme::icon_size::scale(),
-        );
-        let header = texts.0.iter().find(|(s, _)| s == "对话").unwrap().1;
-        assert!(
-            header.y + header.height <= bounds.y,
-            "{header:?} {bounds:?}"
-        );
-        fn rectangles(layout: iced_core::Layout<'_>, out: &mut Vec<iced_core::Rectangle>) {
-            out.push(layout.bounds());
-            for child in layout.children() {
-                rectangles(child, out);
-            }
-        }
-        let mut all = vec![];
-        rectangles(iced_core::Layout::new(&node), &mut all);
-        let mut found_divider = false;
-        for rect in &all {
-            if rect.height == 1.
-                && rect.width > bounds.w / 2.
-                && rect.x < bounds.x + bounds.w
-                && rect.x + rect.width > bounds.x
-            {
-                found_divider = true;
-                assert!(
-                    rect.y + rect.height <= bounds.y,
-                    "actual pane divider {rect:?} covered by native {bounds:?} at scale {}",
-                    byteui::theme::icon_size::scale()
-                );
-            }
-        }
-        assert!(found_divider, "actual review pane divider must be laid out");
-        let mut found = false;
-        for rect in all {
-            if click(&mut view, rect.center(), 600.)
-                .iter()
-                .any(|msg| matches!(msg, Msg::Shell(bytehost_chrome::ShellMsg::TogglePane(_))))
-            {
-                found = true;
-                assert!(
-                    rect.y + rect.height <= bounds.y,
-                    "collapse button {rect:?} covered by native {bounds:?}"
-                );
-            }
-        }
-        assert!(found, "real collapse button must be hittable");
-    }
+    crate::adapters::scale_widget_checks::check_header_and_divider(&mut panel).unwrap();
+    crate::adapters::scale_widget_checks::check_collapse_control_above_review(&mut panel).unwrap();
 }
 
 #[test]
@@ -2183,22 +1880,50 @@ fn native_failure_keeps_a_readable_fallback_and_existing_collapsed_notice() {
     );
 }
 
+/// Resolve the dedicated probe binary without forking the full libtest
+/// harness. Integration tests get `CARGO_BIN_EXE_*`; unit-test builds do not,
+/// so fall back to the sibling of `target/<profile>/deps/<test-binary>`.
+fn icon_scale_probe_path() -> std::path::PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_icon_scale_widget_probe") {
+        let path = std::path::PathBuf::from(path);
+        if path.exists() {
+            return path;
+        }
+    }
+    let test_binary = std::env::current_exe().expect("test binary path");
+    let target_profile = test_binary
+        .parent()
+        .and_then(|deps| deps.parent())
+        .expect("target profile directory");
+    target_profile.join(format!(
+        "icon_scale_widget_probe{}",
+        std::env::consts::EXE_SUFFIX
+    ))
+}
+
 #[test]
 fn review_widgets_preserve_header_and_notice_clearance_at_supported_scales() {
     const CHILD: &str = "S7C_REVIEW_SCALE_WIDGET_CHILD";
-    if std::env::var_os(CHILD).is_some() {
-        let expected: f32 = std::env::var(CHILD).unwrap().parse().unwrap();
-        assert_eq!(byteui::theme::icon_size::scale(), expected);
-        actual_widget_header_and_collapse_control_are_above_native_review();
-        collapsed_notice_is_dismissible_and_outside_the_native_review();
-        return;
-    }
-    // The production widgets read byteui globals. Isolate each scale in a child
-    // running only this test, without mutating globals in the shared test runner.
+    let probe = icon_scale_probe_path();
+    // Keep the probe away from the user's font directory: it only reads the
+    // layout, but an isolated HOME makes the one-time system-font scan smaller
+    // and deterministic. The probe still has no daemon/config dependency.
+    let home = tempfile::tempdir().expect("isolated HOME for probe");
+    // The production widgets read byteui globals. Isolate each scale in the
+    // minimal probe process instead of forking the full test harness.
     for scale in ["0.5", "1", "2"] {
-        let output=std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact","adapters::conversations::tests::review_widgets_preserve_header_and_notice_clearance_at_supported_scales","--test-threads=1","--nocapture"])
-            .env(CHILD,scale).env("BYTEUI_ICON_SCALE",scale).output().unwrap();
+        let output = std::process::Command::new(&probe)
+            .env(CHILD, scale)
+            .env("BYTEUI_ICON_SCALE", scale)
+            .env("HOME", home.path())
+            .output()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "failed to run probe {}: {error}; \
+                     build it with `cargo build -p digger-desktop --bin icon_scale_widget_probe`",
+                    probe.display()
+                )
+            });
         assert!(
             output.status.success(),
             "scale {scale}: stdout {} stderr {}",
