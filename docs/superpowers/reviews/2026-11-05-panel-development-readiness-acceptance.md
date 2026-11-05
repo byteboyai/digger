@@ -22,7 +22,7 @@
 
 命令日志保存在 [`artifacts/2026-11-05-panel-readiness/`](artifacts/2026-11-05-panel-readiness/)：
 
-- Digger：`digger-check.log`、`digger-gates.log`、`digger-probe-*.log`、`digger-lib-serial.log`、`digger-lib-parallel.log`、`digger-consumer-rust.log`、`digger-web.log`、`digger-embedded.log`、`digger-usage-ci-filters.log`、`digger-metadata-summary.txt`。
+- Digger：`digger-check.log`、`digger-gates.log`、`digger-probe-*.log`、`digger-lib-serial.log`、`digger-lib-parallel.log`、`digger-consumer-rust.log`、`digger-web.log`、`digger-embedded.log`、`digger-usage-ci-filters.log`、`digger-metadata-summary.txt`、`digger-lifecycle-selftest.log`、`digger-usage-selftest-{new,old}.log`。
 - Dozer：`dozer-gates.log`（首次失败证据）、`dozer-check-rerun.log`、`dozer-gates-rerun.log`、`dozer-runtime-tests.log`、`dozer-settings-tests.log`、`dozer-metadata-summary.txt`。
 
 ## A1 — 基线与既有修改保留
@@ -154,12 +154,20 @@ Dozer runtime 对应集：
 | M5 A/B 项目用量切换、关闭全部、重开 | **未执行** | 自动回归已覆盖慢回包身份；实机图表未验 |
 | M6 正常退出与测试实例清理 | **未执行** | 未启动最终候选 GUI 实例 |
 
-已完成的构建侧准备：
+已完成的构建 / 真实窗口侧准备：
 
 ```text
 bash scripts/package-macos.sh debug
 # Bundled: target/aarch64-apple-darwin/bundle/macos/Digger.app
+
+SELFTEST_TIMEOUT=120 bash scripts/run-editor-selftest.sh lifecycle
+# SUMMARY shell lifecycle selftest: 11 passed, 0 failed
+
+SELFTEST_TIMEOUT=120 bash scripts/run-editor-selftest.sh usage
+# FAIL: the page never became ready
 ```
+
+`usage` 场景在同一台机器上用改动前已安装的 `/Applications/Digger.app`（0.1.7）复跑也得到相同失败，说明是既有环境 / 用量 webview 就绪问题，不是本轮 scope epoch 改动引入。日志见 `digger-usage-selftest-new.log` / `digger-usage-selftest-old.log`。因此 M2–M5 仍保留未验，不把 shell lifecycle 的 11 项通过当成 M1–M6 通过。
 
 没有用无窗口测试替代上述实机结论，也没有为了造故障扩写注入框架。多屏 / Space / 全屏与历史兼容仍在后续发行清单。
 

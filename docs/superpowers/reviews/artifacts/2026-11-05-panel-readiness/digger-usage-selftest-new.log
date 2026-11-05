@@ -1,0 +1,2 @@
+diggerd 连接失败,尝试拉起: socket 文件不存在
+FAIL: lifecycle selftest could not run: the page never became ready

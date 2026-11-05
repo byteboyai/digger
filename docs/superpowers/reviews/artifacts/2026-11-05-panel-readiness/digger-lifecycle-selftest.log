@@ -1,0 +1,14 @@
+diggerd 连接失败,尝试拉起: socket 文件不存在
+PASS: S1 the editor is shown in the left zone, below its own bar, with the default 640 px zone
+PASS: S2 selecting another panel on the same rail hides the editor (it stays alive)
+PASS: S3 selecting the editor again shows it at the same place
+PASS: S4 clicking the active icon collapses the zone and hides the editor
+PASS: S5 clicking it again expands the zone and shows the editor
+PASS: S6 dragging the divider between the zones resizes the editor
+PASS: S7 enlarging the window moves and resizes it
+PASS: S8 a resize that happens while the editor is hidden is applied when it comes back
+PASS: S9 maximizing its zone fills the maximize box
+PASS: S10 dragging the editor icon to the other rail moves it into the right zone
+PASS: S11 closing destroys the webview and the handle table is empty again
+SUMMARY shell lifecycle selftest: 11 passed, 0 failed
+editor selftest: ok
