@@ -52,6 +52,7 @@ jobs:
         run: |
           cargo test --locked -p digger-desktop --lib adapters::usage::tests -- --test-threads=1
           cargo test --locked -p digger-desktop --lib product::tests::usage_route -- --test-threads=1
+          cargo test --locked -p digger-desktop --lib lifecycle_selftest::tests::startup_shows_the_scenario_page_before_waiting_for_ready -- --exact
 
       - name: 核心 Rust 行为测试
         run: |

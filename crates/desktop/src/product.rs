@@ -397,9 +397,12 @@ impl ProductShell {
         let (preview_cmds_tx, preview_cmds_rx) = tokio::sync::mpsc::unbounded_channel();
         let preview_cmds_rx = std::sync::Mutex::new(Some(preview_cmds_rx));
         let lifecycle = crate::lifecycle_selftest::Driver::from_env();
-        // 自检模式需要编辑器一开始就看得见。
-        if markdown.is_selftest() || lifecycle.is_some() {
+        // 先显示场景对应的页面,再由 driver 等待它的 ready。
+        if markdown.is_selftest() {
             shell::update(&mut model, ShellMsg::ShowPanel(shell::markdown_id()));
+        }
+        if let Some(driver) = &lifecycle {
+            driver.prepare_shell(&mut model);
         }
 
         let mut shell = Self {
@@ -6924,6 +6927,8 @@ mod tests {
     fn send(shell: &mut ProductShell, m: Msg) {
         let _ = Product::update(shell, HostMessage::Product(m));
     }
+
+    include!("product_usage_tests.rs");
 
     fn load_sample_rows(shell: &mut ProductShell) {
         let scope = PathBuf::from("/sample/project");

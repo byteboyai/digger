@@ -223,6 +223,15 @@ impl UsagePanel {
         self.scope.clone().map(|scope| (scope, self.scope_epoch))
     }
 
+    #[cfg(test)]
+    pub(crate) fn row_titles(&self) -> Vec<String> {
+        self.state
+            .rows()
+            .iter()
+            .map(|(meta, _)| meta.title.clone())
+            .collect()
+    }
+
     /// 测试用:epoch 是否已耗尽。
     #[cfg(test)]
     pub(crate) fn epoch_exhausted(&self) -> bool {

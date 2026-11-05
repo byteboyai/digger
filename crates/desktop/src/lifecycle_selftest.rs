@@ -306,14 +306,27 @@ impl Driver {
         } else {
             Scenario::Shell
         };
-        Some(Self {
+        Some(Self::new(scenario))
+    }
+
+    fn new(scenario: Scenario) -> Self {
+        Self {
             scenario,
             step: 0,
             steps: steps(scenario),
             started: Instant::now(),
             passes: 0,
             fails: 0,
-        })
+        }
+    }
+
+    /// 自检等待 ready 之前,先显示该场景实际需要创建的页面。
+    pub fn prepare_shell(&self, model: &mut bytehost_chrome::ShellModel) {
+        let panel = match self.scenario {
+            Scenario::Shell => shell::markdown_id(),
+            Scenario::Usage => shell::usage_id(),
+        };
+        shell::update(model, ShellMsg::ShowPanel(panel));
     }
 
     pub fn first() -> Task<Msg> {
@@ -520,6 +533,26 @@ fn judge(expect: Expect, probe: Option<Seen>, window: (f32, f32)) -> (bool, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_shows_the_scenario_page_before_waiting_for_ready() {
+        for (scenario, panel, side) in [
+            (Scenario::Usage, shell::usage_id(), Side::Right),
+            (Scenario::Shell, shell::markdown_id(), Side::Left),
+        ] {
+            let defaults = shell::defaults();
+            let mut model = bytehost_chrome::ShellModel::new(
+                defaults.rails,
+                defaults.selected,
+                defaults.left_width,
+                defaults.window,
+            )
+            .unwrap();
+            Driver::new(scenario).prepare_shell(&mut model);
+            assert_eq!(model.selected(side), &panel);
+            assert!(!model.collapsed(side));
+        }
+    }
 
     fn probe(
         exists: bool,
