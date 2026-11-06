@@ -85,7 +85,7 @@ struct LastIncremental {
 
 /// Everything about block identity that cannot be recovered from the text (ADR-012): saved with the text in one
 /// transaction so the two never disagree.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct State {
     pub version: u64,
     pub text: String,
@@ -117,6 +117,75 @@ pub enum EditError {
 }
 
 /// UTF-16 position → byte offset (None if it falls inside a surrogate pair or past the end).
+/// 持久化块身份状态的 schema。任何其它值都必须只读/拒绝,不能按当前格式打开。
+pub const STATE_SCHEMA: u32 = 1;
+
+/// 严格校验“保存快照”的正文与块身份是否自洽。
+///
+/// 这不是 `import_state` 的宽松外部编辑路径:落库前的快照必须逐字段可信。
+pub fn validate_snapshot(text: &str, state: &State, schema: u32) -> Result<(), String> {
+    if schema != STATE_SCHEMA {
+        return Err(format!("块身份 schema {schema} 不是支持的 {STATE_SCHEMA}"));
+    }
+    if state.text != text {
+        return Err("块身份状态里的 text 与保存正文不一致".into());
+    }
+    let parsed = parse_blocks(text);
+    if parsed.len() != state.ids.len() {
+        return Err(format!(
+            "正文解析出 {} 个块,状态记录 {} 个 id",
+            parsed.len(),
+            state.ids.len()
+        ));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(state.ids.len());
+    for id in &state.ids {
+        if !seen.insert(*id) {
+            return Err(format!("块 id {id} 重复"));
+        }
+    }
+    let max_id = state.ids.iter().copied().max().unwrap_or(0);
+    if state.next_id <= max_id {
+        return Err(format!(
+            "next_id {} 不大于最大块 id {max_id}",
+            state.next_id
+        ));
+    }
+    let mut alias_sources = std::collections::HashSet::new();
+    for (old, new, run) in &state.aliases {
+        if old == new {
+            return Err(format!("alias {old} 指向自身"));
+        }
+        if !alias_sources.insert(*old) {
+            return Err(format!("alias 源 {old} 重复"));
+        }
+        if *run > state.runs {
+            return Err(format!(
+                "alias {old} 的 run {run} 超过文档 runs {}",
+                state.runs
+            ));
+        }
+        if *new >= state.next_id {
+            return Err(format!("alias 目标 {new} 不小于 next_id {}", state.next_id));
+        }
+    }
+    for (id, run, version) in &state.history {
+        if *run > state.runs {
+            return Err(format!(
+                "history 块 {id} 的 run {run} 超过文档 runs {}",
+                state.runs
+            ));
+        }
+        if *version > state.version {
+            return Err(format!(
+                "history 块 {id} 的 version {version} 超过文档版本 {}",
+                state.version
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn byte_offset(text: &str, utf16: usize) -> Option<usize> {
     let mut u = 0;
     for (i, c) in text.char_indices() {

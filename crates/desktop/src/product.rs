@@ -137,6 +137,7 @@ pub enum Msg {
     FilesMenuDismiss,
     /// 「编辑器」面板的消息(ADR-013)。
     Markdown(crate::markdown::Message),
+    EditWritingFile(i64, PathBuf),
     /// 项目页签与注册表(顶栏页签行)。
     Projects(crate::projects::Message),
     /// 每帧焦点探针:`view` 刚渲染完(库的 `text_input` 焦点态已写回),`id` 是渲染时聚焦的项目。
@@ -211,6 +212,9 @@ pub enum Msg {
 type PreviewCommands = (i64, Vec<dozer_model::PreviewCommand>);
 
 pub struct ProductShell {
+    pending_writing_transition: Option<(u64, Box<Msg>)>,
+    writing_transition_seq: u64,
+    writing_transition_permit: bool,
     window: Option<window::Id>,
     window_minimized: bool,
     animation_focused: bool,
@@ -406,6 +410,9 @@ impl ProductShell {
         }
 
         let mut shell = Self {
+            pending_writing_transition: None,
+            writing_transition_seq: 0,
+            writing_transition_permit: false,
             window: None,
             window_minimized: false,
             animation_focused: true,
@@ -894,6 +901,11 @@ impl ProductShell {
         self.activate_files_panel();
         self.activate_todo_panel();
         self.sync_usage_scope();
+        self.markdown.set_project(
+            self.projects
+                .current_project()
+                .map(|p| PathBuf::from(&p.path)),
+        );
         if self.panel_visible(&shell::conversations_id()) {
             let _ = self.activate_conversations_panel();
         }
@@ -2534,6 +2546,20 @@ impl ProductShell {
             }
             _ => {}
         }
+        let writing_target = match &message {
+            F::ContextMenuOpen {
+                path,
+                is_dir: false,
+            }
+            | F::TabContextMenuOpen { path, .. }
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md")) =>
+            {
+                Some(path.clone())
+            }
+            _ => None,
+        };
         let task = self.files.update(message, project_id);
         // 库把"只有产品做得到"的事放进队列:右键菜单落到 iced 浮层,
         // 双击文件进预览(D3);选目录暂时无入口(能力已关)。
@@ -2543,7 +2569,7 @@ impl ProductShell {
         // 真窗口层级,浮在 wry 页面之上,弹出时不用把文件内容藏起来。
         #[cfg(target_os = "macos")]
         {
-            task = Task::batch([task, self.show_native_files_menus()]);
+            task = Task::batch([task, self.show_native_files_menus(writing_target)]);
         }
         for request in self.files.take_host_requests() {
             if let Some(path) = crate::adapters::files::FilesPanel::open_path(&request) {
@@ -2672,14 +2698,46 @@ impl ProductShell {
     /// macOS:逐条弹出库排出的原生菜单,选中项作为 `Msg::Files` 投回。`show` 同步阻塞到用户
     /// 选完(Dozer 同样如此);窗口还没就绪时 `show_task` 返回 `Task::none`,什么也不发生。
     #[cfg(target_os = "macos")]
-    fn show_native_files_menus(&mut self) -> Task<Msg> {
+    fn show_native_files_menus(&mut self, writing_target: Option<PathBuf>) -> Task<Msg> {
         let mut tasks = Vec::new();
         for (items, at) in self.files.take_menu_requests() {
-            let native = crate::adapters::native_menu::to_native_items(items);
-            tasks.push(
-                crate::adapters::native_menu::show_task(self.window, native, at, true)
-                    .map(Msg::Files),
-            );
+            let items = items
+                .into_iter()
+                .map(|item| match item {
+                    dozer_panel_files::menu::MenuItem::Entry {
+                        icon,
+                        label,
+                        enabled,
+                        msg,
+                    } => dozer_panel_files::menu::MenuItem::Entry {
+                        icon,
+                        label,
+                        enabled,
+                        msg: Msg::Files(msg),
+                    },
+                    dozer_panel_files::menu::MenuItem::Separator => {
+                        dozer_panel_files::menu::MenuItem::Separator
+                    }
+                })
+                .collect();
+            let mut native = crate::adapters::native_menu::to_native_items(items);
+            if let (Some(path), Some(pid)) = (&writing_target, self.projects.current_project_id()) {
+                native.push(byteui::native_menu::Item::Separator);
+                native.push(byteui::native_menu::Item::Entry {
+                    icon: None,
+                    icon_color: None,
+                    label: "在写字台编辑".into(),
+                    color: byteui::theme::color::current().body,
+                    enabled: true,
+                    msg: Msg::EditWritingFile(pid, path.clone()),
+                });
+            }
+            tasks.push(crate::adapters::native_menu::show_task(
+                self.window,
+                native,
+                at,
+                true,
+            ));
         }
         Task::batch(tasks)
     }
@@ -2895,6 +2953,52 @@ impl Product<Msg> for ProductShell {
             // `route_lifecycle` 完成(复盘发现 6:在此调用会让 `route_lifecycle` → `update` 形成无限递归)。
             return Task::none();
         };
+        // Project selection and shutdown must not mutate product state until the
+        // active page has flushed and its latest draft is durable.
+        let changes_writing_context = match &m {
+            Msg::Projects(crate::projects::Message::Opened(Ok(Some(info)))) => {
+                self.projects.current_project_id() != Some(info.id)
+            }
+            Msg::Projects(crate::projects::Message::Activate(id)) => {
+                self.projects.current_project_id() != Some(*id)
+            }
+            Msg::Projects(crate::projects::Message::Close(id)) => {
+                self.projects.current_project_id() == Some(*id)
+            }
+            Msg::Projects(crate::projects::Message::Listed(Ok(list))) => self
+                .projects
+                .current_project_id()
+                .is_some_and(|id| !list.projects.iter().any(|p| p.id == id)),
+            Msg::Project(dozer_panel_project::Message::DeleteProjectConfirm) => true,
+            Msg::Exit => true,
+            _ => false,
+        };
+        if changes_writing_context
+            && !self.writing_transition_permit
+            && self.markdown.needs_transition_barrier()
+        {
+            if self.pending_writing_transition.is_some() {
+                return Task::none();
+            }
+            self.writing_transition_seq = self
+                .writing_transition_seq
+                .checked_add(1)
+                .expect("writing transition exhausted");
+            let token = self.writing_transition_seq;
+            self.pending_writing_transition = Some((token, Box::new(m)));
+            let task = self
+                .markdown
+                .update(crate::markdown::Message::HostTransition(token))
+                .map(Msg::Markdown);
+            return if self.markdown.has_transition_choice() {
+                Task::batch([
+                    task,
+                    self.on_shell(ShellMsg::ShowPanel(shell::markdown_id())),
+                ])
+            } else {
+                task
+            };
+        }
         match m {
             Msg::WindowReady(id, size) => {
                 self.window = Some(id);
@@ -3183,7 +3287,11 @@ impl Product<Msg> for ProductShell {
                     .tooltip_deadline()
                     .is_some_and(|deadline| std::time::Instant::now() >= deadline);
                 let apps = self.apps.update(crate::apps::Message::Tick).map(Msg::Apps);
-                Task::batch([apps, self.query_window_state()])
+                Task::batch([
+                    apps,
+                    self.query_window_state(),
+                    self.markdown.maintenance().map(Msg::Markdown),
+                ])
             }
             Msg::NativeUsage(event) => {
                 self.usage.native.update(event);
@@ -3370,7 +3478,58 @@ impl Product<Msg> for ProductShell {
                 }
                 Task::none()
             }
-            Msg::Markdown(m) => self.markdown.update(m).map(Msg::Markdown),
+            Msg::Markdown(crate::markdown::Message::HostTransitionReady(token, result)) => {
+                if !self
+                    .pending_writing_transition
+                    .as_ref()
+                    .is_some_and(|(expected, _)| *expected == token)
+                {
+                    return Task::none();
+                }
+                let (_, message) = self.pending_writing_transition.take().unwrap();
+                if result.is_err() {
+                    return Task::none();
+                }
+                self.writing_transition_permit = true;
+                let action = Product::update(self, HostMessage::Product(*message));
+                self.writing_transition_permit = false;
+                Task::batch([
+                    action,
+                    self.markdown.release_transition().map(Msg::Markdown),
+                ])
+            }
+            Msg::EditWritingFile(pid, path) => {
+                if self.projects.current_project_id() != Some(pid) {
+                    return Task::none();
+                }
+                let Some(project) = self.projects.current_project() else {
+                    return Task::none();
+                };
+                if !path.starts_with(Path::new(&project.path))
+                    || !path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                {
+                    return Task::none();
+                }
+                let show = self.on_shell(ShellMsg::ShowPanel(shell::markdown_id()));
+                let open = self
+                    .markdown
+                    .update(crate::markdown::Message::OpenFile(path))
+                    .map(Msg::Markdown);
+                Task::batch([show, open])
+            }
+            Msg::Markdown(m) => {
+                let task = self.markdown.update(m).map(Msg::Markdown);
+                if self.markdown.has_transition_choice() {
+                    Task::batch([
+                        task,
+                        self.on_shell(ShellMsg::ShowPanel(shell::markdown_id())),
+                    ])
+                } else {
+                    task
+                }
+            }
             Msg::Projects(m) => {
                 // 打开/切换项目:若「项目」面板此刻就在眼前,立刻把它切到新项目
                 // (否则要等下一次切入才拉数据——用户刚打开的项目看着是空的)。
@@ -4045,6 +4204,16 @@ fn agent_event(
     }
     match event {
         iced::Event::Keyboard(event) => {
+            if let iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Character(key),
+                modifiers,
+                ..
+            } = &event
+                && modifiers.command()
+                && key.eq_ignore_ascii_case("s")
+            {
+                return Some(Msg::Markdown(crate::markdown::Message::Save));
+            }
             if crate::AGENT_KEYS_BLOCKED.load(std::sync::atomic::Ordering::Relaxed) {
                 None
             } else {
@@ -5571,6 +5740,57 @@ mod tests {
         assert_eq!(again.projects.current_project_id(), Some(1));
     }
 
+    #[test]
+    fn project_messages_attach_the_writing_workbench_and_switch_documents_by_project() {
+        use crate::projects::Message as P;
+        let dir = test_temp_dir("markdown-project-switch");
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        {
+            let mut workbench = crate::markdown::workbench::Workbench::new();
+            workbench.open_project(a.clone()).unwrap();
+            workbench.create("A 章", "a.md").unwrap();
+        }
+        let info = |id, name: &str, path: &std::path::Path| dozer_model::ProjectInfo {
+            id,
+            path: path.to_string_lossy().into_owned(),
+            name: name.into(),
+            last_active_ms: 1,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let mut shell = ProductShell::with_shell_path(dir.join("shell.json"));
+        send(
+            &mut shell,
+            Msg::Projects(P::Opened(Ok(Some(info(1, "a", &a))))),
+        );
+        assert_eq!(
+            shell
+                .markdown
+                .current_document()
+                .map(|doc| doc.document.title.as_str()),
+            Some("A 章")
+        );
+        send(
+            &mut shell,
+            Msg::Projects(P::Opened(Ok(Some(info(2, "b", &b))))),
+        );
+        assert!(shell.markdown.current_document().is_none());
+        send(
+            &mut shell,
+            Msg::Projects(P::Opened(Ok(Some(info(1, "a", &a))))),
+        );
+        assert_eq!(
+            shell
+                .markdown
+                .current_document()
+                .map(|doc| doc.document.title.as_str()),
+            Some("A 章")
+        );
+    }
+
     /// 布局按项目一份(Task 9):切项目页签换布局,窗口大小仍写全局。
     #[test]
     fn switching_project_tabs_swaps_the_layout_and_keeps_the_window_global() {
@@ -6926,9 +7146,11 @@ mod tests {
 
     fn send(shell: &mut ProductShell, m: Msg) {
         let _ = Product::update(shell, HostMessage::Product(m));
+        shell.markdown.settle_load_for_test();
     }
 
     include!("product_usage_tests.rs");
+    include!("product_writing_tests.rs");
 
     fn load_sample_rows(shell: &mut ProductShell) {
         let scope = PathBuf::from("/sample/project");

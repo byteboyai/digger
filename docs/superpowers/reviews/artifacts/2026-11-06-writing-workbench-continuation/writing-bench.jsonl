@@ -1,0 +1,15 @@
+{"blocks":100,"bytes":4090,"edit_us":53,"mirror_us":12939,"profile":"release","recovery_read_us":210,"recovery_write_us":8475,"reopen_us":846,"sample":0,"save_us":946,"snapshot_us":13}
+{"blocks":100,"bytes":4090,"edit_us":32,"mirror_us":13400,"profile":"release","recovery_read_us":384,"recovery_write_us":9632,"reopen_us":865,"sample":1,"save_us":417,"snapshot_us":10}
+{"blocks":100,"bytes":4090,"edit_us":35,"mirror_us":12465,"profile":"release","recovery_read_us":300,"recovery_write_us":8542,"reopen_us":772,"sample":2,"save_us":453,"snapshot_us":10}
+{"blocks":100,"bytes":4090,"edit_us":29,"mirror_us":13410,"profile":"release","recovery_read_us":357,"recovery_write_us":8621,"reopen_us":862,"sample":3,"save_us":419,"snapshot_us":10}
+{"blocks":100,"bytes":4090,"edit_us":32,"mirror_us":14172,"profile":"release","recovery_read_us":661,"recovery_write_us":9576,"reopen_us":982,"sample":4,"save_us":705,"snapshot_us":12}
+{"blocks":1000,"bytes":41890,"edit_us":76,"mirror_us":15317,"profile":"release","recovery_read_us":1163,"recovery_write_us":9281,"reopen_us":1339,"sample":0,"save_us":1360,"snapshot_us":74}
+{"blocks":1000,"bytes":41890,"edit_us":82,"mirror_us":14461,"profile":"release","recovery_read_us":1022,"recovery_write_us":9516,"reopen_us":1308,"sample":1,"save_us":1143,"snapshot_us":75}
+{"blocks":1000,"bytes":41890,"edit_us":74,"mirror_us":14294,"profile":"release","recovery_read_us":956,"recovery_write_us":9340,"reopen_us":1337,"sample":2,"save_us":1186,"snapshot_us":76}
+{"blocks":1000,"bytes":41890,"edit_us":64,"mirror_us":13778,"profile":"release","recovery_read_us":642,"recovery_write_us":8485,"reopen_us":851,"sample":3,"save_us":920,"snapshot_us":61}
+{"blocks":1000,"bytes":41890,"edit_us":43,"mirror_us":13197,"profile":"release","recovery_read_us":689,"recovery_write_us":9397,"reopen_us":821,"sample":4,"save_us":685,"snapshot_us":39}
+{"blocks":5000,"bytes":213890,"edit_us":162,"mirror_us":18684,"profile":"release","recovery_read_us":2688,"recovery_write_us":10872,"reopen_us":2624,"sample":0,"save_us":2912,"snapshot_us":184}
+{"blocks":5000,"bytes":213890,"edit_us":156,"mirror_us":18817,"profile":"release","recovery_read_us":2711,"recovery_write_us":11761,"reopen_us":2561,"sample":1,"save_us":2894,"snapshot_us":174}
+{"blocks":5000,"bytes":213890,"edit_us":158,"mirror_us":18462,"profile":"release","recovery_read_us":2641,"recovery_write_us":10773,"reopen_us":2444,"sample":2,"save_us":2757,"snapshot_us":181}
+{"blocks":5000,"bytes":213890,"edit_us":152,"mirror_us":20101,"profile":"release","recovery_read_us":2689,"recovery_write_us":18662,"reopen_us":2576,"sample":3,"save_us":2896,"snapshot_us":183}
+{"blocks":5000,"bytes":213890,"edit_us":156,"mirror_us":17874,"profile":"release","recovery_read_us":2818,"recovery_write_us":11735,"reopen_us":2653,"sample":4,"save_us":2622,"snapshot_us":172}

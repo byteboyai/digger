@@ -1,0 +1,2 @@
+COMMAND: bash scripts/check-host-deps.sh
+digger host-deps check: ok(审视了 3 个业务 crate)

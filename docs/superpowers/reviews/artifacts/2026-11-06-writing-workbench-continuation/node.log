@@ -1,0 +1,218 @@
+
+> digger-editor-web@0.0.0 test
+> tsc -p tsconfig.test.json && node --test tests/*.test.mjs
+
+TAP version 13
+# Subtest: the fixture protocol version matches the page
+ok 1 - the fixture protocol version matches the page
+  ---
+  duration_ms: 0.370625
+  type: 'test'
+  ...
+# Subtest: every error code in the fixture is a snake_case wire value
+ok 2 - every error code in the fixture is a snake_case wire value
+  ---
+  duration_ms: 0.118709
+  type: 'test'
+  ...
+# Subtest: the shared reject fixture drives the same state machine branch as Rust
+ok 3 - the shared reject fixture drives the same state machine branch as Rust
+  ---
+  duration_ms: 0.781625
+  type: 'test'
+  ...
+# Subtest: every shared outbound fixture passes the production decoder
+ok 4 - every shared outbound fixture passes the production decoder
+  ---
+  duration_ms: 0.060375
+  type: 'test'
+  ...
+# Subtest: the shared incremental contract replaces the specified old interval
+ok 5 - the shared incremental contract replaces the specified old interval
+  ---
+  duration_ms: 0.480292
+  type: 'test'
+  ...
+# Subtest: a non-stale rejection keeps sent and queued and asks for a snapshot
+ok 6 - a non-stale rejection keeps sent and queued and asks for a snapshot
+  ---
+  duration_ms: 1.97825
+  type: 'test'
+  ...
+# Subtest: a stale base without a received transform asks for a snapshot instead of replaying
+ok 7 - a stale base without a received transform asks for a snapshot instead of replaying
+  ---
+  duration_ms: 0.198333
+  type: 'test'
+  ...
+# Subtest: a stale base replays once when an Agent update transformed the patch
+ok 8 - a stale base replays once when an Agent update transformed the patch
+  ---
+  duration_ms: 0.298042
+  type: 'test'
+  ...
+# Subtest: a second stale rejection after one replay stops automatic retries
+ok 9 - a second stale rejection after one replay stops automatic retries
+  ---
+  duration_ms: 0.360292
+  type: 'test'
+  ...
+# Subtest: an ack advances the version, clears sent and flushes the queued patch
+ok 10 - an ack advances the version, clears sent and flushes the queued patch
+  ---
+  duration_ms: 0.213417
+  type: 'test'
+  ...
+# Subtest: an out-of-order or duplicate ack never corrupts the confirmed version
+ok 11 - an out-of-order or duplicate ack never corrupts the confirmed version
+  ---
+  duration_ms: 0.120292
+  type: 'test'
+  ...
+# Subtest: a timeout is bounded and starts recovery without losing the draft
+ok 12 - a timeout is bounded and starts recovery without losing the draft
+  ---
+  duration_ms: 0.193917
+  type: 'test'
+  ...
+# Subtest: closing settles every waiter with a typed error
+ok 13 - closing settles every waiter with a typed error
+  ---
+  duration_ms: 0.117542
+  type: 'test'
+  ...
+# Subtest: resolving a conflict with the snapshot adopts Rust's text through onOpen
+ok 14 - resolving a conflict with the snapshot adopts Rust's text through onOpen
+  ---
+  duration_ms: 0.49925
+  type: 'test'
+  ...
+# Subtest: committing the draft after a conflict sends one whole-document edit
+ok 15 - committing the draft after a conflict sends one whole-document edit
+  ---
+  duration_ms: 0.58675
+  type: 'test'
+  ...
+# Subtest: continuous snapshot timeouts end in a typed terminal state with the draft kept
+ok 16 - continuous snapshot timeouts end in a typed terminal state with the draft kept
+  ---
+  duration_ms: 0.18475
+  type: 'test'
+  ...
+# Subtest: a late full acknowledgement while idle cannot move the version backwards
+ok 17 - a late full acknowledgement while idle cannot move the version backwards
+  ---
+  duration_ms: 0.076334
+  type: 'test'
+  ...
+# Subtest: a protocol mismatch fails closed and never sends edits
+ok 18 - a protocol mismatch fails closed and never sends edits
+  ---
+  duration_ms: 0.076458
+  type: 'test'
+  ...
+# Subtest: a snapshot reply is read-only and does not apply remote changes
+ok 19 - a snapshot reply is read-only and does not apply remote changes
+  ---
+  duration_ms: 0.053459
+  type: 'test'
+  ...
+# Subtest: the first conflict notification already carries the snapshot and draft
+ok 20 - the first conflict notification already carries the snapshot and draft
+  ---
+  duration_ms: 0.075333
+  type: 'test'
+  ...
+# Subtest: an incremental result replaces the announced block range and maps preserved blocks
+ok 21 - an incremental result replaces the announced block range and maps preserved blocks
+  ---
+  duration_ms: 0.123834
+  type: 'test'
+  ...
+# Subtest: an inconsistent incremental result stops and recovers instead of corrupting ranges
+ok 22 - an inconsistent incremental result stops and recovers instead of corrupting ranges
+  ---
+  duration_ms: 0.04675
+  type: 'test'
+  ...
+# Subtest: old edit rejections cannot consume the current snapshot recovery budget
+ok 23 - old edit rejections cannot consume the current snapshot recovery budget
+  ---
+  duration_ms: 0.096833
+  type: 'test'
+  ...
+# Subtest: duplicate incremental acknowledgements are ignored while idle and while sending
+ok 24 - duplicate incremental acknowledgements are ignored while idle and while sending
+  ---
+  duration_ms: 0.057417
+  type: 'test'
+  ...
+# Subtest: the normal ready handshake times out and rejects all waiters
+ok 25 - the normal ready handshake times out and rejects all waiters
+  ---
+  duration_ms: 0.112459
+  type: 'test'
+  ...
+# Subtest: normal handshake rejections fail visibly even without an edit in flight
+ok 26 - normal handshake rejections fail visibly even without an edit in flight
+  ---
+  duration_ms: 0.176667
+  type: 'test'
+  ...
+# Subtest: a successful normal handshake cancels its timeout and late opens preserve edits
+ok 27 - a successful normal handshake cancels its timeout and late opens preserve edits
+  ---
+  duration_ms: 0.099292
+  type: 'test'
+  ...
+# Subtest: replayed old replies preserve recovering, conflict, failed and closed states
+ok 28 - replayed old replies preserve recovering, conflict, failed and closed states
+  ---
+  duration_ms: 0.59425
+  type: 'test'
+  ...
+# Subtest: invalid wire fields and JSON preserve drafts and converge through bounded recovery
+ok 29 - invalid wire fields and JSON preserve drafts and converge through bounded recovery
+  ---
+  duration_ms: 0.387833
+  type: 'test'
+  ...
+# Subtest: Agent version gaps recover without applying remote text
+ok 30 - Agent version gaps recover without applying remote text
+  ---
+  duration_ms: 0.08575
+  type: 'test'
+  ...
+# Subtest: a flush barrier reports the confirmed version once sent and queued are empty
+ok 31 - a flush barrier reports the confirmed version once sent and queued are empty
+  ---
+  duration_ms: 0.116125
+  type: 'test'
+  ...
+# Subtest: a flush barrier reports an error instead of a save watermark during conflict
+ok 32 - a flush barrier reports an error instead of a save watermark during conflict
+  ---
+  duration_ms: 0.071709
+  type: 'test'
+  ...
+# Subtest: a transition flush waits for IME to finish before freezing the input
+ok 33 - a transition flush waits for IME to finish before freezing the input
+  ---
+  duration_ms: 0.071875
+  type: 'test'
+  ...
+# Subtest: cancelling a transition flush cannot freeze the page after a late IME end
+ok 34 - cancelling a transition flush cannot freeze the page after a late IME end
+  ---
+  duration_ms: 0.043667
+  type: 'test'
+  ...
+1..34
+# tests 34
+# suites 0
+# pass 34
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 55.005542

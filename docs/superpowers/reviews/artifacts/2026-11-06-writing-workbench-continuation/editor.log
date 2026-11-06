@@ -1,0 +1,55 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/target/aarch64-apple-darwin/debug/deps/digger_editor-18f4f6e19b4edf65)
+
+running 47 tests
+test blocks::parse::tests::setext_heading_and_reference_definitions ... ok
+test blocks::parse::tests::splits_a_chapter_into_top_level_blocks_with_exact_ranges ... ok
+test blocks::reconcile::tests::identical_blocks_are_assigned_by_their_surroundings ... ok
+test blocks::reconcile::tests::typing_a_heading_marker_keeps_the_id ... ok
+test blocks::reconcile::tests::an_edited_block_next_to_an_unrelated_new_block_is_not_a_split ... ok
+test bridge::tests::a_message_without_or_with_the_wrong_nonce_is_refused ... ok
+test blocks::reconcile::tests::short_blocks_do_not_match_by_chance ... ok
+test bridge::tests::a_read_only_snapshot_is_allowed_in_normal_mode_and_does_not_change_the_document ... ok
+test blocks::reconcile::tests::unchanged_text_keeps_every_id ... ok
+test blocks::reconcile::tests::moved_and_deleted_blocks ... ok
+test bridge::tests::a_stale_base_is_refused_with_the_current_version ... ok
+test blocks::reconcile::tests::split_and_merge_follow_the_policy ... ok
+test bridge::tests::an_incompatible_protocol_stops_the_handshake ... ok
+test bridge::tests::an_edit_is_applied_and_answered_with_blocks ... ok
+test bridge::tests::nothing_is_dropped_silently ... ok
+test blocks::reconcile::tests::a_short_block_survives_a_small_edit ... ok
+test blocks::reconcile::tests::half_untouched_sentences_keep_the_id_even_when_the_rest_is_rewritten ... ok
+test bridge::tests::ready_is_answered_with_the_whole_document ... ok
+test bridge::tests::an_older_request_id_is_refused_without_guessing ... ok
+test bridge::tests::the_agent_hook_and_the_harness_reports_are_refused_in_normal_operation ... ok
+test bridge::tests::request_ids_are_applied_once_and_duplicates_are_answered_from_cache ... ok
+test doc::tests::a_batch_of_utf16_endpoints_converts_in_one_pass ... ok
+test bridge::tests::selftest_mode_accepts_the_agent_hook_and_reports ... ok
+test blocks::reconcile::tests::unrelated_new_text_never_steals_an_id ... ok
+test bridge::tests::wire_format_is_the_one_the_spike_validated ... ok
+test doc::tests::a_small_document_full_edit_result_does_not_scan_the_text_for_fnv ... ok
+test bridge::tests::the_host_can_drive_the_agent_stand_in_in_normal_operation ... ok
+test doc::tests::block_ranges_are_in_utf16_units ... ok
+test doc::tests::a_deleted_block_is_a_normal_outcome ... ok
+test bridge::tests::the_same_request_id_with_different_content_is_a_protocol_error ... ok
+test blocks::reconcile::tests::a_small_edit_keeps_the_id_and_a_large_insertion_before_it_does_not_matter ... ok
+test doc::tests::a_failed_step_rolls_the_whole_plan_back ... ok
+test doc::tests::forwarding_from_an_earlier_run_does_not_bypass_the_precondition ... ok
+test doc::tests::a_second_step_may_name_a_block_the_first_step_rewrote ... ok
+test doc::tests::a_block_the_author_changed_is_not_overwritten ... ok
+test doc::tests::edits_keep_ids_and_reject_stale_bases ... ok
+test doc::tests::utf16_positions_and_surrogate_pairs ... ok
+test doc::tests::agent_operations_address_blocks_by_id_and_report_their_patch ... ok
+test doc::tests::an_incremental_block_result_equals_the_full_block_list ... ok
+test blocks::reconcile::tests::a_long_character_diff_is_bounded_and_still_keeps_ids_unique ... ok
+test doc::tests::multi_span_patches_also_agree ... ok
+test blocks::reconcile::tests::repeated_tokens_beyond_u16_do_not_overflow ... ok
+test doc::tests::cached_lengths_always_match_a_full_recount ... ok
+test doc::tests::the_author_and_the_agent_race_for_many_documents_and_nothing_is_overwritten ... ok
+test doc::tests::random_incremental_replies_match_every_field_of_full_results ... ok
+test doc::tests::incremental_reparse_equals_full_reparse_under_adversarial_edits ... ok
+test doc::tests::typing_in_a_book_parses_a_few_blocks_not_the_book has been running for over 60 seconds
+test doc::tests::typing_in_a_book_parses_a_few_blocks_not_the_book ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 81.57s
+

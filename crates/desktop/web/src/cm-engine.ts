@@ -1,4 +1,4 @@
-import { Annotation, EditorState, StateEffect, Transaction, type Range } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, StateEffect, Transaction, type Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType, keymap } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
@@ -257,6 +257,7 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
     return i + m.length;
   };
   let loaded: { from: number; to: number }[] = [];
+  const inputAccess = new Compartment();
   return {
     name: "codemirror6-live-preview",
     rust,
@@ -267,6 +268,7 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
           doc: "",
           extensions: [
             history(),
+            inputAccess.of([EditorView.editable.of(true), EditorState.readOnly.of(false)]),
             // Cmd/Ctrl-Z, Shift-Cmd-Z, Cmd-Y: without this keymap the shortcuts do nothing (the undo COMMAND works,
             // the key was never bound — found by hand-testing the Agent-patch undo).
             keymap.of(historyKeymap),
@@ -281,7 +283,7 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
       // not inside an update (this is called from the update listener): rebuild the live preview right after it
       let wasComposing = false;
       view.contentDOM.addEventListener("compositionstart", () => { wasComposing = true; eventLog("compositionstart"); });
-      view.contentDOM.addEventListener("compositionend", () => { wasComposing = false; eventLog("compositionend"); });
+      view.contentDOM.addEventListener("compositionend", () => { wasComposing = false; eventLog("compositionend"); setTimeout(() => sync.compositionEnded(), 0); });
       // composition that stops without a compositionend event = something interrupted it
       setInterval(() => { if (wasComposing && !view.composing) { wasComposing = false; eventLog("COMPOSITION INTERRUPTED (view stopped composing without compositionend)"); } }, 100);
       sync = new RustSync(
@@ -304,6 +306,8 @@ export function createCm(post: (o: unknown) => void = () => {}): Engine {
         },
         {
           getText: () => view.state.doc.toString(),
+          isComposing: () => view.composing,
+          onInputLock: (locked) => view.dispatch({ effects: inputAccess.reconfigure([EditorView.editable.of(!locked), EditorState.readOnly.of(locked)]) }),
           computeHash: window.__DIGGER__?.mode === "selftest",
           onState: (state) => {
             if (state === "conflict" && sync.conflictInfo) {

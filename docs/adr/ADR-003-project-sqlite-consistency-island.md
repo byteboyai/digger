@@ -345,3 +345,9 @@ ADR implementation is complete when automated tests prove:
 11. read projections report the revision they observed;
 12. no Agent, WebView or Domain adapter can obtain an unrestricted SQLite write handle.
 
+
+**Update (2026-11-05, Writing W1).** The first Creator Domain slice implements the minimal coordinator in
+`crates/store/src/writing/`: Document/Version/Commit/project revision/Outbox/idempotency in one SQLite transaction,
+with CAS on the document's durable revision and an immutable `(text, block-state)` snapshot. Generic governance,
+AggregateVersion and cross-domain scheduling remain deferred; the new schema is versioned independently and is not
+promised to be writable by older binaries. See `docs/superpowers/notes/2026-11-05-writing-workbench-baseline.md`.

@@ -1,0 +1,13 @@
+{
+  "crates/desktop/src/markdown/mod.rs": "bdb4fea84664f5cf982a012056d841b85eaff94d54ff61f5010630affda03b77",
+  "crates/desktop/src/markdown/workbench.rs": "211fc4bcde6f4811676ead1519133bdc5883c766afce54cef129a1d125b9ada8",
+  "crates/desktop/src/markdown/tests.rs": "15bf776dd1aa0d1cc7b99ebe62ad34b81d6f3be5aa5bb8fb757e7eb2a9132838",
+  "crates/desktop/src/product.rs": "8e664a9d176d74b2a4b30a417f81c7916978051a3a61c88996f04e0d3f8aeed0",
+  "crates/desktop/src/product_writing_tests.rs": "67079491fa460bd18c161f8a51990a6a155c682060fade57b26d24e1a993f3d9",
+  "crates/store/src/writing/recovery.rs": "9fe210472a7a333cb1692c90b5cae5dec371f039ebeb743df578b1f189665a63",
+  "crates/store/src/writing/tests.rs": "af34fe8ff3b7c1dc99df7b02cf240e618df23d2e8d53d8c49635c16498352813",
+  "crates/editor/src/protocol.rs": "cec0473ccbb9d6a85d8d53fe06c65d16c025d8476f26649cae0d3854799397b3",
+  "crates/desktop/web/src/rust-sync.ts": "80ae570fa2fb92e6779d96ac53ef494cfd359147167f198b2585d4f354ef334d",
+  "crates/desktop/web/src/cm-engine.ts": "4b8c61b133219611d95a4d56c1087d8023e281f4661f5e20d1aab4db4664729c",
+  "crates/desktop/web/dist/cm.html": "43b5d0cdb0d24adf83e917050a6d6f3321e8f4a99b54d3dcc026c4ece7e7b0c0"
+}

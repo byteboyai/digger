@@ -572,10 +572,10 @@ mod tests {
 
     #[test]
     fn the_expected_rectangles_are_the_hand_computed_ones() {
-        // left zone 640: content x 44+6+1, y 40+6+1, w 640-8, h 900-40-22-8; the editor bar (56) comes off the top
+        // left zone 640: content x 44+6+1, y 40+6+1, w 640-8, h 900-40-22-8; the editor bar (84) comes off the top
         assert_eq!(
             want(Area::Left { pref: 640.0 }, WINDOW),
-            (51.0, 103.0, 632.0, 774.0)
+            (51.0, 131.0, 632.0, 746.0)
         );
         // a narrow window clamps the preference: W=700 ⇒ zones 604, upper max(604-320,320)=320
         assert_eq!(
@@ -585,10 +585,10 @@ mod tests {
         // right zone with left 500: zones 1344, right = 844; x = 44+500+8+1
         assert_eq!(
             want(Area::Right { pref: 500.0 }, WINDOW),
-            (553.0, 103.0, 844.0 - 8.0, 774.0)
+            (553.0, 131.0, 844.0 - 8.0, 746.0)
         );
-        // maximize box: x 84, y 80+56, w 1440-88-80, h 900-40-80-56
-        assert_eq!(want(Area::Maximized, WINDOW), (84.0, 136.0, 1272.0, 724.0));
+        // maximize box: x 84, y 80+84, w 1440-88-80, h 900-40-80-84
+        assert_eq!(want(Area::Maximized, WINDOW), (84.0, 164.0, 1272.0, 696.0));
     }
 
     #[test]
@@ -603,7 +603,7 @@ mod tests {
         assert!(
             !judge(
                 visible,
-                probe(true, true, Some((w.0, w.1 - 56.0, w.2, w.3)), 1),
+                probe(true, true, Some((w.0, w.1 - BAR_HEIGHT, w.2, w.3)), 1),
                 WINDOW
             )
             .0

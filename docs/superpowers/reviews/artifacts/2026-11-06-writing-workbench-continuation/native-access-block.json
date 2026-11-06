@@ -1,0 +1,14 @@
+{
+  "observations": [
+    {
+      "target": "com.apple.finder",
+      "result": "Computer Use was not approved to use Finder"
+    },
+    {
+      "target": "/Applications/Digger.app",
+      "result": "Computer Use was not approved to use Digger"
+    }
+  ],
+  "gui_acceptance": "not passed",
+  "permission_request": "Digger and isolated QA app access requested; no approval received yet"
+}

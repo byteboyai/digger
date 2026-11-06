@@ -37,6 +37,12 @@ pub enum Report {
 pub enum Handled {
     /// 要发回页面的消息。
     Reply(EditorOutbound),
+    /// 页面确认一次 flush 屏障已排空。
+    Flushed {
+        request_id: u64,
+        version: u64,
+        error: Option<String>,
+    },
     /// 自检上报,宿主打印并据此退出。
     Report(Report),
 }
@@ -123,6 +129,32 @@ impl Bridge {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// 保存快照的所有权:取走 pending history,由调用方在提交失败时通过
+    /// [`Bridge::restore_history`] 归还。正文与块身份来自同一个 `State`。
+    pub fn export_snapshot(&mut self) -> crate::doc::State {
+        self.doc.export_state()
+    }
+
+    /// 保存失败时把未确认的 history 放回文档,避免下一次快照丢行。
+    pub fn restore_history(&mut self, rows: Vec<(u64, u64, u64)>) {
+        self.doc.restore_history(rows);
+    }
+
+    /// 切换文稿:用已保存的块身份重建 Doc(或从纯文本开始)。同时清空请求门,
+    /// 旧 request id 不能跨文稿复用。
+    pub fn replace_document(&mut self, state: Option<&crate::doc::State>, text: &str) {
+        self.doc = match state {
+            Some(state) => Doc::import_state(state, text),
+            None => {
+                let mut doc = Doc::new();
+                doc.load(text);
+                doc
+            }
+        };
+        self.last_request = None;
+        self.highest_request = 0;
     }
 
     /// 让替身 Agent 改文档,返回要推给页面的 `update`。没有可改的块或步骤失败时返回 `None`(文档不变)。
@@ -257,6 +289,15 @@ impl Bridge {
                     }
                 }
             }
+            EditorInbound::Flushed {
+                request_id,
+                version,
+                error,
+            } => Handled::Flushed {
+                request_id,
+                version,
+                error,
+            },
             EditorInbound::Snapshot { request_id } => {
                 let fp = fingerprint(raw);
                 match self.gate(request_id, fp) {

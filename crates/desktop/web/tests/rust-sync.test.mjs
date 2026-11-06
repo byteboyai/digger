@@ -521,3 +521,88 @@ test("Agent version gaps recover without applying remote text", () => {
   assert.equal(sync.draftText(),"draft");
   sync.close();
 });
+
+test("a flush barrier reports the confirmed version once sent and queued are empty", () => {
+  const { sync, posts } = harness();
+  openText(sync);
+  sync.receive({ t: "flush", request_id: 7 });
+  assert.deepEqual(
+    posts.at(-1),
+    { t: "flushed", request_id: 7, version: 1, error: null },
+    "idle flush is immediate",
+  );
+
+  sync.local(insert("abcd", 4, 4, "x"));
+  const edit = posts.find((p) => p.t === "edit");
+  assert.ok(edit);
+  sync.receive({ t: "flush", request_id: 8 });
+  assert.equal(
+    posts.filter((p) => p.t === "flushed" && p.request_id === 8).length,
+    0,
+    "flush must wait for the in-flight edit acknowledgement",
+  );
+  sync.receive({
+    t: "blocks",
+    request_id: edit.request_id,
+    version: 2,
+    hash: "h",
+    len16: 5,
+    blocks: baseBlocks(5),
+  });
+  const flushed = posts.find((p) => p.t === "flushed" && p.request_id === 8);
+  assert.ok(flushed, "the barrier is released after the ack");
+  assert.equal(flushed.version, 2);
+  assert.equal(flushed.error, null);
+});
+
+test("a flush barrier reports an error instead of a save watermark during conflict", () => {
+  const { sync, posts } = harness();
+  openText(sync);
+  sync.local(insert("abcd", 4, 4, "x"));
+  const edit = posts.find((p) => p.t === "edit");
+  sync.receive({ t: "reject", code: "internal", reason: "boom", request_id: edit.request_id });
+  const snapshot = posts.find((p) => p.t === "snapshot");
+  sync.receive({
+    t: "snapshot",
+    request_id: snapshot.request_id,
+    text: "RUST",
+    version: 7,
+    hash: "h",
+    len16: 4,
+    blocks: [],
+  });
+  assert.equal(sync.state, "conflict");
+  sync.receive({ t: "flush", request_id: 9 });
+  const flushed = posts.find((p) => p.t === "flushed" && p.request_id === 9);
+  assert.ok(flushed);
+  assert.match(flushed.error, /冲突/);
+});
+
+test("a transition flush waits for IME to finish before freezing the input", () => {
+  let composing = true;
+  const locks = [];
+  const { sync, posts } = harness({ isComposing: () => composing, onInputLock: locked => locks.push(locked) });
+  openText(sync);
+  sync.receive({ t: "flush", request_id: 91, freeze: true });
+  assert.equal(posts.filter(p => p.t === "flushed").length, 0);
+  assert.deepEqual(locks, []);
+  composing = false;
+  sync.compositionEnded();
+  assert.deepEqual(locks, [true]);
+  assert.equal(posts.at(-1).request_id, 91);
+  sync.receive({ t: "input_lock", locked: false });
+  assert.deepEqual(locks, [true, false]);
+});
+
+test("cancelling a transition flush cannot freeze the page after a late IME end", () => {
+  let composing = true;
+  const locks = [];
+  const { sync, posts } = harness({ isComposing: () => composing, onInputLock: locked => locks.push(locked) });
+  openText(sync);
+  sync.receive({ t: "flush", request_id: 92, freeze: true });
+  sync.receive({ t: "input_lock", locked: false });
+  composing = false;
+  sync.compositionEnded();
+  assert.deepEqual(locks, [false]);
+  assert.equal(posts.filter(p => p.t === "flushed" && p.request_id === 92).length, 0);
+});

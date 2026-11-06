@@ -36,6 +36,21 @@ jobs:
           cargo test --locked --release -p digger-editor --lib 2>&1 | tee artifacts/editor-lib.log
           cargo test --locked --release -p digger-editor --test properties -- --nocapture 2>&1 | tee artifacts/properties.log
 
+      - name: 准备 Node 同步基线
+        working-directory: crates/desktop/web
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: 写字台进程故障与恢复(Release)
+        run: cargo test --locked --release -p digger-store writing:: -- --test-threads=1 2>&1 | tee artifacts/writing-faults.log
+
+      - name: 写字台存储规模样本(Release)
+        run: cargo run --locked --release -q -p digger-store --example writing_bench 2>&1 | tee artifacts/writing-store.jsonl
+
+      - name: 写字台后台队列样本(Debug，单独标记)
+        run: cargo test --locked -p digger-desktop --lib markdown::tests::writing_queue_performance_samples -- --exact --ignored --nocapture 2>&1 | tee artifacts/writing-queue.log
+
       - name: Release 基准(100 / 1000 / 5000 块)
         run: |
           mkdir -p artifacts

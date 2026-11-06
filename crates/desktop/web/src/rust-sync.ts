@@ -91,6 +91,8 @@ export interface SnapshotMsg {
 }
 
 export interface SyncOptions {
+  isComposing?: () => boolean;
+  onInputLock?: (locked: boolean) => void;
   /** the editor's current text, for an explicit "commit my draft" choice after a conflict */
   getText?: () => string;
   /** called whenever the recovery state changes (the page uses it to show the conflict banner) */
@@ -123,7 +125,9 @@ export type OutMsg =
   | ({ t: "incremental"; base_version: number; removed_from: number; removed_to: number; changes: WireChange[] } & BlockResult)
   | ({ t: "update"; changes: WireChange[] } & BlockResult)
   | { t: "reject"; request_id?: number; code: SyncErrorCode; reason: string }
-  | { t: "agent_error"; reason: string };
+  | { t: "agent_error"; reason: string }
+  | { t: "flush"; request_id: number; freeze?: boolean }
+  | { t: "input_lock"; locked: boolean };
 
 /** Validate the untrusted native boundary before touching sync state or CodeMirror. */
 export function decodeOutbound(value: unknown): OutMsg {
@@ -133,6 +137,11 @@ export function decodeOutbound(value: unknown): OutMsg {
   if (!record(value)) return bad();
   const m = value;
   if (m.request_id !== undefined && !uint(m.request_id)) return bad();
+  if (m.t === "input_lock") { if (typeof m.locked !== "boolean") return bad(); return m as unknown as OutMsg; }
+  if (m.t === "flush") {
+    if (!uint(m.request_id) || (m.freeze !== undefined && typeof m.freeze !== "boolean")) return bad();
+    return m as unknown as OutMsg;
+  }
   if (m.t === "reject") {
     if (!isErrorCode(m.code) || typeof m.reason !== "string") return bad();
   } else if (m.t === "agent_error") {
@@ -242,6 +251,7 @@ export class RustSync {
   private awaitingOpen = false;
   private failureError: SyncError | null = null;
   private cancelTimer: (() => void) | null = null;
+  private flushWaiters = new Map<number, () => void>();
   private timeoutMs: number;
   private schedule: (fn: () => void, ms: number) => () => void;
 
@@ -335,6 +345,7 @@ export class RustSync {
     this.state = "ready";
     this.onBlocks();
     this.wake();
+    this.wakeFlushWaiters();
   }
 
   /** The editor's document changed (not called while loading). */
@@ -349,6 +360,7 @@ export class RustSync {
   /** Stop sending and settle every waiter with a typed error (page teardown / window close). */
   close(reason = "editor closed") {
     if (this.state === "closed") return;
+    this.rejectFlushWaiters(reason);
     this.state = "closed";
     this.inflight = false;
     this.queued = null;
@@ -358,6 +370,7 @@ export class RustSync {
   }
 
   private fail(error: SyncError) {
+    this.rejectFlushWaiters(error.message);
     this.failureError = error;
     this.awaitingOpen = false;
     this.awaitingLoad = false;
@@ -369,7 +382,10 @@ export class RustSync {
   }
 
   private flush() {
-    if (this.state !== "ready" || this.inflight || !this.queued) return;
+    if (this.state !== "ready" || this.inflight || !this.queued) {
+      this.wakeFlushWaiters();
+      return;
+    }
     const q = this.queued;
     this.queued = null;
     this.sent = q;
@@ -382,6 +398,40 @@ export class RustSync {
     q.iterChanges((a, b, _c, _d, ins) => changes.push({ from: a, to: b, insert: ins.toString() }));
     this.armTimeout(this.sentRequest);
     this.post({ t: "edit", request_id: this.sentRequest, base: this.version, changes });
+  }
+
+  /** A host save barrier: wait until sent/queued are empty and Rust has acknowledged them. */
+  private requestFlush(requestId: number, freeze = false) {
+    const reply = (error: string | null) =>
+      this.post({ t: "flushed", request_id: requestId, version: this.version, error });
+    if (this.state === "closed" || this.state === "failed") {
+      reply(this.failureError?.message ?? this.state);
+      return;
+    }
+    if (this.state === "conflict" || this.state === "recovering") {
+      reply(`页面正在${this.state === "conflict" ? "冲突" : "恢复"}，无法确认保存水位`);
+      return;
+    }
+    this.flushWaiters.set(requestId, () => { if (freeze) this.opts.onInputLock?.(true); reply(null); });
+    this.flush();
+    this.wakeFlushWaiters();
+  }
+
+  private wakeFlushWaiters() {
+    if (this.state !== "ready" || this.inflight || this.queued || this.opts.isComposing?.()) return;
+    const waiters = [...this.flushWaiters.values()];
+    this.flushWaiters.clear();
+    for (const wake of waiters) wake();
+  }
+
+  compositionEnded() { this.flush(); this.wakeFlushWaiters(); }
+
+  private rejectFlushWaiters(error: string) {
+    const waiters = [...this.flushWaiters.keys()];
+    this.flushWaiters.clear();
+    for (const requestId of waiters) {
+      this.post({ t: "flushed", request_id: requestId, version: this.version, error });
+    }
   }
 
   private armTimeout(request: number) {
@@ -423,6 +473,7 @@ export class RustSync {
 
   /** Recovery exhausted: a visible terminal state, draft kept, waiters settled. */
   private failRecovery(reason: string) {
+    this.rejectFlushWaiters(reason);
     this.failureError = new SyncError("timeout", reason);
     this.failureInfo = { message: reason, draft: this.draftText(), retryable: true };
     this.state = "failed";
@@ -468,7 +519,9 @@ export class RustSync {
     if (this.state === "closed" || this.state === "failed") return;
     // Identity filtering precedes payload validation: a malformed replay cannot spend the
     // recovery budget of the newer request. It never reaches state mutation.
-    if (typeof value === "object" && value !== null && "request_id" in value) {
+    const isFlush =
+      typeof value === "object" && value !== null && ["flush", "input_lock"].includes(String((value as { t?: unknown }).t));
+    if (!isFlush && typeof value === "object" && value !== null && "request_id" in value) {
       const id = value.request_id;
       const expected = this.state === "sending" ? this.sentRequest : this.snapshotRequest;
       if (typeof id === "number" && Number.isSafeInteger(id) && id >= 0 && id <= this.nextRequestId && id !== expected) return;
@@ -479,6 +532,11 @@ export class RustSync {
 
   private receiveValidated(m: OutMsg) {
     if (this.state === "closed" || this.state === "failed") return;
+    if (m.t === "input_lock") { if (!m.locked) this.flushWaiters.clear(); this.opts.onInputLock?.(m.locked); return; }
+    if (m.t === "flush") {
+      this.requestFlush(m.request_id, m.freeze);
+      return;
+    }
     if (m.t === "open") {
       if (!this.awaitingOpen) return;
       const open = m as unknown as OpenMsg;
@@ -606,6 +664,7 @@ export class RustSync {
       this.onBlocks();
       this.flush();
       this.wake();
+      this.wakeFlushWaiters();
       return;
     }
     if (m.t === "blocks") {
@@ -639,6 +698,7 @@ export class RustSync {
       this.onBlocks();
       this.flush();
       this.wake();
+      this.wakeFlushWaiters();
       return;
     }
     if (m.t === "reject") {
@@ -712,6 +772,7 @@ export class RustSync {
     this.state = "ready";
     this.onBlocks();
     this.wake();
+    this.wakeFlushWaiters();
   }
 
   /** Explicit author choice: take Rust's authoritative text, discarding the local draft after it was exported. */

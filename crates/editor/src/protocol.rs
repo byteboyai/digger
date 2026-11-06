@@ -62,6 +62,13 @@ pub enum EditorInbound {
     },
     /// 仅 harness:页面自带语料,请 Rust 当作新文档载入。
     Load { text: String },
+    /// 页面已把 sent/queued 全部交给 Rust 并确认排空,可以截取保存快照。
+    Flushed {
+        request_id: u64,
+        version: u64,
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// 仅 harness:代替 Agent 运行时的测试入口,按块 id 改文本。
     Agent {
         op: String,
@@ -170,6 +177,14 @@ pub enum EditorOutbound {
         len16: usize,
         blocks: Vec<BlockInfo>,
     },
+    /// 请求页面排空 sent/queued 并确认当前版本;宿主保存前使用。
+    Flush {
+        request_id: u64,
+        freeze: bool,
+    },
+    InputLock {
+        locked: bool,
+    },
     /// Agent 补丁:改动 + 结果版本与块。
     Update {
         origin: String,
@@ -180,7 +195,10 @@ pub enum EditorOutbound {
         blocks: Vec<BlockInfo>,
     },
     /// Agent 步骤没有应用(正常结果,不是故障)。
-    AgentError { reason: String, stale: bool },
+    AgentError {
+        reason: String,
+        stale: bool,
+    },
     /// 消息被拒绝(过期的 base、解析不了、未知、nonce 不对……)。
     Reject {
         code: ErrorCode,

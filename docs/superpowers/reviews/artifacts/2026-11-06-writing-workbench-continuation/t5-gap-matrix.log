@@ -1,0 +1,95 @@
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+   Compiling digger-desktop v0.1.7 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/digger/crates/desktop)
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:979:4
+    |
+979 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+   --> crates/desktop/src/apps/mod.rs:938:19
+    |
+137 | impl AppsState {
+    | -------------- method in this implementation
+...
+938 |     pub(crate) fn opened(&self) -> bool {
+    |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.59s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/target/aarch64-apple-darwin/debug/deps/digger_desktop-5852c9ad3a7740b6)
+
+running 58 tests
+test markdown::host::tests::pinning_the_clipboard_off_fails_the_check_too ... ok
+test markdown::host::tests::relaxing_any_one_pin_fails_the_check ... ok
+test markdown::host::tests::the_builder_pins_every_setting ... ok
+test markdown::host::tests::the_embedded_page_reads_the_nonce_the_host_injects ... ok
+test markdown::host::tests::the_init_script_freezes_the_nonce_and_mode ... ok
+test markdown::io::tests::blocked_io_has_a_bounded_nonblocking_queue_and_recovers_after_panic ... ok
+test markdown::recovery_clock::tests::quiet_input_waits_500ms_and_continuous_input_is_due_at_two_seconds ... ok
+test markdown::tests::a_corrupt_target_document_does_not_displace_the_dirty_source_or_prevent_its_save ... ok
+test markdown::tests::a_failed_creation_retries_with_a_new_generation_and_ignores_the_old_one ... ok
+test markdown::tests::a_failed_panel_rebuilds_when_it_is_shown_again ... ok
+test markdown::tests::a_flush_timeout_keeps_the_document_dirty_and_visible ... ok
+test markdown::tests::a_message_for_the_current_generation_is_applied ... ok
+test markdown::tests::a_message_from_an_old_generation_is_dropped ... ok
+test markdown::tests::a_message_is_dropped_when_there_is_no_webview ... ok
+test markdown::tests::a_project_document_can_be_created_saved_and_reopened_through_the_panel ... ok
+test markdown::tests::a_project_switch_failure_keeps_the_old_session_and_reports_the_error ... ok
+test markdown::tests::a_recovery_tick_writes_an_atomic_draft_for_the_active_document ... ok
+test markdown::tests::a_refused_message_is_counted_and_shown_not_hidden ... ok
+test markdown::tests::a_sqlite_write_rejection_leaves_the_buffer_editable_and_save_can_be_retried ... ok
+test markdown::tests::a_stale_project_load_cannot_replace_the_current_project ... ok
+test markdown::tests::an_admitted_save_settles_after_the_panel_and_its_future_are_dropped ... ok
+test markdown::tests::an_expired_external_confirmation_keeps_the_dirty_buffer_and_allows_a_fresh_copy ... ok
+test markdown::tests::cancelled_slow_load_and_its_late_failure_cannot_replace_the_next_session ... ok
+test markdown::tests::cancelled_transition_reply_cannot_complete_a_new_flush ... ok
+test markdown::tests::closing_sets_closed_and_advances_the_generation ... ok
+test markdown::tests::corrupt_recovery_stays_visible_and_intact_while_the_official_document_remains_editable ... ok
+test markdown::tests::delayed_recovery_cannot_overwrite_a_newer_transition_draft ... ok
+test markdown::tests::hiding_and_showing_a_ready_panel_does_not_rebuild_it ... ok
+test markdown::tests::late_save_completion_cannot_modify_another_document ... ok
+test markdown::tests::load_failure_keeps_the_dirty_document_and_a_new_attempt_can_succeed ... ok
+test markdown::tests::native_hide_theme_and_retry_preserve_the_active_dirty_document ... ok
+test markdown::tests::normal_mode_starts_empty_and_selftest_keeps_its_sample_chapter ... ok
+test markdown::tests::old_worker_replies_do_not_clear_a_new_operation_or_its_notice ... ok
+test markdown::tests::ready_opens_the_document_and_enables_the_agent_stand_in ... ok
+test markdown::tests::recovering_then_saving_preserves_nonempty_aliases_and_pending_history_across_restart ... ok
+test markdown::tests::replacing_a_project_store_during_an_admitted_save_keeps_the_new_ui_clean ... ok
+test markdown::tests::save_completion_keeps_later_input_dirty_and_preserves_its_recovery ... ok
+test markdown::tests::save_waits_for_the_page_flush_and_does_not_commit_before_it ... ok
+test markdown::tests::slow_load_rejects_old_page_edits_before_and_after_the_new_document_opens ... ok
+test markdown::tests::switching_documents_persists_a_dirty_buffer_as_recovery ... ok
+test markdown::tests::the_panel_owns_its_webview_table_and_names_no_other_panels ... ok
+test markdown::tests::the_stand_in_does_nothing_before_the_page_is_ready ... ok
+test markdown::tests::the_stand_in_rewrites_a_different_paragraph_each_time ... ok
+test markdown::tests::the_webview_agent_hook_is_refused_in_normal_operation ... ok
+test markdown::tests::transition_cancel_keeps_dirty_text_and_does_not_commit_or_switch ... ok
+test markdown::tests::transition_flushes_even_a_clean_rust_buffer_before_switching ... ok
+test markdown::tests::transition_save_commits_final_buffer_before_loading_the_next_document ... ok
+test markdown::tests::transition_timeout_cancels_the_action_and_keeps_the_original_document ... ok
+test markdown::tests::writing_queue_performance_samples ... ignored, manual backend queue samples: --ignored --nocapture
+test markdown::workbench::tests::a_recovered_session_uses_a_new_operation_id_and_can_save ... ok
+test markdown::workbench::tests::a_stale_save_reports_the_actual_revision ... ok
+test markdown::workbench::tests::behind_recovery_cannot_overwrite_newer_official_state ... ok
+test markdown::workbench::tests::create_save_and_reopen_preserve_text_and_identity ... ok
+test markdown::workbench::tests::external_file_change_blocks_the_next_mirror_without_rolling_back_the_save ... ok
+test markdown::workbench::tests::first_import_mirror_does_not_overwrite_a_file_changed_after_import ... ok
+test markdown::workbench::tests::import_preserves_bom_crlf_and_duplicate_path_returns_existing ... ok
+test markdown::workbench::tests::opening_a_project_without_a_writing_db_does_not_create_one ... ok
+test markdown::workbench::tests::recovery_round_trip_is_visible_until_discarded ... ok
+
+test result: ok. 57 passed; 0 failed; 1 ignored; 0 measured; 738 filtered out; finished in 1.21s
+

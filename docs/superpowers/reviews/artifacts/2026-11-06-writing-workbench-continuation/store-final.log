@@ -1,0 +1,126 @@
+     Running unittests src/lib.rs (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/target/aarch64-apple-darwin/debug/deps/digger_store-c8d8493d532edfb0)
+
+running 92 tests
+test archive::tests::an_existing_archive_is_never_overwritten_and_an_interrupted_link_can_resume ... ok
+test ledger::tests::a_completion_survives_a_restart ... ok
+test ledger::tests::a_corrupt_ledger_is_an_error_not_an_empty_result ... ok
+test ledger::tests::a_duplicate_event_does_not_double ... ok
+test ledger::tests::a_missing_ledger_is_an_empty_ledger_not_an_error ... ok
+test ledger::tests::since_filters_by_finish_time ... ok
+test ledger::tests::two_scopes_do_not_cross ... ok
+test migrate::tests::a_committed_migration_with_a_failed_archive_restarts_as_archive_only ... ok
+test migrate::tests::a_concurrent_writer_that_commits_after_the_exists_check_is_not_deleted ... ok
+test migrate::tests::a_failed_migration_does_not_delete_the_target_file ... ok
+test migrate::tests::a_legacy_path_with_a_quote_is_attached_safely ... ok
+test migrate::tests::a_marker_without_the_legacy_file_reports_already_migrated ... ok
+test migrate::tests::an_id_collision_with_an_existing_target_project_is_an_error ... ok
+test migrate::tests::an_old_half_completed_copy_is_marked_only_when_every_source_row_matches ... ok
+test migrate::tests::an_old_half_completed_copy_with_different_content_is_a_conflict ... ok
+test migrate::tests::conflicting_target_rows_fail_without_overwriting_and_keep_legacy ... ok
+test migrate::tests::legacy_rows_are_copied_with_their_original_ids ... ok
+test migrate::tests::legacy_without_created_ms_and_description_columns_still_migrates ... ok
+test migrate::tests::migrated_legacy_file_is_renamed_not_deleted ... ok
+test migrate::tests::migration_is_idempotent ... ok
+test migrate::tests::no_legacy_file_means_nothing_to_migrate ... ok
+test migrate::tests::open_in_switches_digger_db_to_wal ... ok
+test migrate::tests::process_death_before_and_after_project_commit_recovers_without_duplicate_rows ... 
+running 1 test
+
+running 1 test
+ok
+test migrate::tests::subprocess_project_migration ... ok
+test migrate::tests::two_concurrent_migrations_commit_one_copy_and_keep_the_archive ... ok
+test projects::tests::an_unopenable_database_is_unavailable_not_an_empty_registry ... ok
+test projects::tests::open_in_migrates_legacy_and_sets_wal ... ok
+test projects::tests::projects_and_memories_survive_reopening_the_same_file ... ok
+test projects::tests::two_writers_on_one_digger_db_never_lose_writes_or_hit_locked ... ok
+test runner::tests::a_run_survives_a_restart ... ok
+test runner::tests::finish_records_measured_start_and_finish ... ok
+test runner::tests::finishing_the_same_run_twice_does_not_double ... ok
+test runner::tests::the_registry_tracks_in_flight_runs ... ok
+test service::tests::a_corrupt_ledger_is_unavailable_not_an_empty_success ... ok
+test service::tests::a_different_cwd_yields_no_rows ... ok
+test service::tests::an_empty_ledger_returns_an_empty_success ... ok
+test service::tests::rows_map_from_the_ledger ... ok
+test service::tests::since_ts_filters_by_finish_time_in_millis ... ok
+test service::tests::unavailable_service_reports_unavailable_not_empty ... ok
+test usage_db::tests::a_conflicting_legacy_record_is_not_overwritten ... ok
+test usage_db::tests::a_corrupt_legacy_json_is_an_error_and_is_left_in_place ... ok
+test usage_db::tests::a_real_deferred_commit_failure_rolls_back_and_the_same_event_can_retry ... ok
+test usage_db::tests::export_writes_a_verified_legacy_snapshot ... ok
+test usage_db::tests::legacy_json_imports_once_and_archives_after_commit ... ok
+test usage_db::tests::out_of_range_u64_is_rejected_not_truncated ... ok
+test usage_db::tests::process_death_before_and_after_usage_commit_recovers_and_exports_losslessly ... 
+running 1 test
+
+running 1 test
+ok
+test usage_db::tests::query_filters_by_project_and_finish_time_and_uses_the_index ... ok
+test usage_db::tests::records_round_trip_with_all_fields_and_survive_reopening ... ok
+test usage_db::tests::subprocess_usage_import ... ok
+test usage_db::tests::the_same_run_id_with_new_cumulative_values_overwrites ... ok
+test usage_worker::tests::a_blocked_writer_fills_the_queue_without_blocking_submit_and_retries_the_same_event ... ok
+test usage_worker::tests::a_closed_worker_rejects_new_submissions_instead_of_dropping_them ... ok
+test usage_worker::tests::an_admitted_write_finishes_before_shutdown_even_if_enqueued_after_close ... ok
+test usage_worker::tests::queries_run_on_the_worker_and_report_unavailable_after_close ... ok
+test usage_worker::tests::shutdown_has_one_deadline_even_when_the_database_is_locked ... ok
+test usage_worker::tests::writes_are_confirmed_only_after_commit_and_survive_shutdown ... ok
+test writing::tests::a_hardlink_alias_cannot_be_used_to_overwrite_a_mirror ... ok
+test writing::tests::a_path_that_is_not_a_directory_is_unavailable ... ok
+test writing::tests::backup_restore_preserves_wal_data_recovery_external_files_and_forks_identity ... ok
+test writing::tests::blocked_mirror_prevents_future_passes_from_overwriting_external_content ... ok
+test writing::tests::corrupt_recovery_is_preserved_and_reported ... ok
+test writing::tests::create_load_and_reopen_preserve_identity_and_snapshot ... ok
+test writing::tests::cross_connection_cas_allows_exactly_one_writer ... ok
+test writing::tests::delayed_recovery_write_cannot_replace_a_newer_buffer ... ok
+test writing::tests::disk_full_and_readonly_failures_do_not_advance_any_durable_fact ... ok
+test writing::tests::duplicate_path_returns_existing_without_creating_a_copy ... ok
+test writing::tests::exhausted_retry_stops_the_document_until_an_explicit_retry ... ok
+test writing::tests::external_review_copy_keeps_official_identity_and_expired_confirmation_refuses_overwrite ... ok
+test writing::tests::future_schema_is_rejected_read_only ... ok
+test writing::tests::identity_state_with_duplicate_ids_or_bad_next_id_is_rejected ... ok
+test writing::tests::invalid_or_future_identity_state_is_rejected_not_saved ... ok
+test writing::tests::invalid_snapshot_rolls_back_everything ... ok
+test writing::tests::load_rejects_a_tampered_stored_digest ... ok
+test writing::tests::mirror_does_not_create_subdirectories_through_a_symlink_parent ... ok
+test writing::tests::mirror_permission_failure_preserves_source_and_retains_retry ... ok
+test writing::tests::mirror_refuses_paths_outside_the_project ... ok
+test writing::tests::mirror_restores_newline_and_detects_external_change ... ok
+test writing::tests::outbox_lifecycle_records_attempts_and_terminal_states ... ok
+test writing::tests::oversized_external_replacement_is_preserved_without_mirroring_over_it ... ok
+test writing::tests::path_and_size_limits_are_rejected ... ok
+test writing::tests::recovery_and_database_refuse_links_without_touching_the_original ... ok
+test writing::tests::recovery_crash_before_rename_retains_the_last_complete_draft ... 
+running 1 test
+ok
+test writing::tests::recovery_round_trips_and_classifies_against_durable ... ok
+test writing::tests::replacing_the_database_instance_refuses_old_writes_and_mirrors ... ok
+test writing::tests::replaying_the_same_operation_does_not_commit_twice ... ok
+test writing::tests::same_operation_id_with_different_content_is_rejected ... ok
+test writing::tests::save_is_atomic_and_advances_version_commit_outbox_and_project_revision ... ok
+test writing::tests::two_real_processes_racing_the_same_revision_commit_exactly_once ... 
+running 1 test
+
+running 1 test
+test writing::tests::writing_cas_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 91 filtered out; finished in 0.01s
+
+test writing::tests::writing_cas_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 91 filtered out; finished in 0.01s
+
+ok
+test writing::tests::writing_cas_child ... ok
+test writing::tests::writing_crash_child ... ok
+test writing::tests::writing_real_process_crashes_preserve_atomic_commit_and_idempotent_reply ... 
+running 1 test
+
+running 1 test
+ok
+test writing::tests::writing_real_process_mirror_crash_replays_without_external_conflict ... 
+running 1 test
+ok
+
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.35s
+

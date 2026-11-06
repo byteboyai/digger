@@ -1,0 +1,8 @@
+{
+  "app": "/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/digger-writing-gui-motsbmna/Digger Writing QA.app",
+  "binary_sha256": "9971d8703796b3dfdd78cd8f5a9a338f59a68e6429cbad3a504d58fc104fcd00",
+  "launchservices_code": -10827,
+  "harness_log_created": false,
+  "keyboard_delivery": "window_not_focused after a restore attempt; synthetic hotkey produced no Go To Folder dialog",
+  "permissions": "accessibility/screenshots granted; manual foreground focus requested"
+}

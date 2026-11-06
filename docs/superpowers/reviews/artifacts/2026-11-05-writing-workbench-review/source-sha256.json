@@ -1,0 +1,11 @@
+{
+  "crates/desktop/src/markdown/mod.rs": "43c09315f2f2763034d8d4b96cf42f4174abe0c5d784a8f3d7079440d5444890",
+  "crates/desktop/src/markdown/workbench.rs": "e480028bea0331417b3ca22f012e9c1c176e14a7765fca0b5bee97c7c59b07a6",
+  "crates/editor/src/doc.rs": "b0e9440afff2d2777f3b6860e8da5e745b5fb4bfa35af8fdb45cb9d6f4d04432",
+  "crates/store/src/writing/types.rs": "c7518591b38f6a52f0547f0b269d298760af45ba08fe1f71d4613c4484ecb0bb",
+  "crates/store/src/writing/recovery.rs": "852b42a03360463bb744cc85e87a519c939eb446d1b44683254a209806938605",
+  "crates/store/src/writing/mirror.rs": "e3eac5caefbce3ff6944b15accf7964126eb077e8e6c6272a9724b31474086f7",
+  "crates/store/src/writing/store.rs": "6fe4c1750c05aa7abc016d2ecae3df0c4cf1afc1a1bf86df491f641f84c18c6b",
+  "crates/store/src/writing/mod.rs": "0af412752ef67e30f97f47a0815fdf5d0eae526384b7909474b17bd532c7ec3d",
+  "crates/store/src/writing/tests.rs": "350a6f8b60e11928410b626d99cac0819351092dfb581809c08eb3f3c562c9a5"
+}

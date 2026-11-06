@@ -1,0 +1,2 @@
+INFO   ahead-of-remote   本地 main 领先 origin/main 14 个提交;被其他仓库依赖的提交要先推送,否则对方会引用到远端不存在的 rev
+shared-deps: 0 个阻断, 0 个警告

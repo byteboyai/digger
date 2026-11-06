@@ -344,3 +344,12 @@ per-panel `sync_native` rectangles described in the deviations above are replace
 and visibility come from the shell's panel content rectangle, minus the editor's own 56 px bar. `digger.markdown`
 sits in the left rail by default. The lifecycle selftest (validation 5) became the shell version
 (`scripts/run-editor-selftest.sh lifecycle`, eleven steps against hand-computed rectangles).
+
+**Update (2026-11-05, W1 writing workbench, partial).** The panel no longer opens a fixed in-memory sample in
+normal mode. The W1 slice adds `<project>/.digger/project.db` documents (UUIDv7 identity, version/CAS/Commit/
+Outbox), recovery drafts under `.digger/working/`, a `dozer-file-io` Markdown mirror, and normal-mode
+new/import/save/project-switch entries. SelfTest keeps its independent in-memory sample and Agent stand-in.
+This does not retroactively change the 2026-10-14 validation scope: pause/flush and IME save barriers, the file
+tree/preview edit entry, GUI/IME and full W1 acceptance remain open. See
+`docs/superpowers/notes/2026-11-05-writing-workbench-baseline.md` and
+`docs/superpowers/reviews/2026-11-05-writing-workbench-acceptance.md`.

@@ -21,6 +21,7 @@ mod runner;
 mod service;
 mod usage_db;
 mod usage_worker;
+pub mod writing;
 
 pub use ledger::{CompletionEvent, TaskUsageRecord, UsageLedger, UsageLedgerError};
 pub use migrate::{MigrationOutcome, journal_mode, migrate_legacy_projects, set_wal_mode};

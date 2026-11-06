@@ -1331,14 +1331,18 @@ dependencies = [
 name = "digger-store"
 version = "0.1.0"
 dependencies = [
+ "digger-editor",
+ "dozer-file-io",
  "dozer-model",
  "dozer-services",
  "dozer-store-project",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

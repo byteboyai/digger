@@ -1,0 +1,4 @@
+diggerd 连接失败,尝试拉起: socket 文件不存在
+2026-11-06 10:16:52.135 digger[21896:2243143] _LSModifyNotification(result->notificationID, keyCount, codesToSet, 0, NULL, NULL, NULL) returned error -50 on line 282 in NotificationTracker *createTrackerForMask(KeyMask, id, CFTypeRef)
+2026-11-06 10:16:52.200 digger[21896:2243143] Error received in message reply handler: Connection invalid
+2026-11-06 10:16:52.200 digger[21896:2243246] Connection Invalid error for service com.apple.hiservices-xpcservice.

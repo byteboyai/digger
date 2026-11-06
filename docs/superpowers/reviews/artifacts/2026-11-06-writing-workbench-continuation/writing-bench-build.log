@@ -1,0 +1,20 @@
+   Compiling digger-store v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/digger/crates/store)
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+warning: stripping debug info with `rust-objcopy` failed: signal: 6 (SIGABRT)
+  |
+  = note: dyld[22988]: Library not loaded: @rpath/libLLVM.dylib
+            Referenced from: <AC0D75A8-23BF-301F-B7CE-3E5CC0C1BC06> /Users/chrischiang/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy
+            Reason: tried: '/Users/chrischiang/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/../lib/libLLVM.dylib' (no such file), '/Users/chrischiang/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/../lib/libLLVM.dylib' (no such file)
+          
+
+warning: `digger-store` (example "writing_bench") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 2.46s
+     Running `/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/target/aarch64-apple-darwin/release/examples/writing_bench`

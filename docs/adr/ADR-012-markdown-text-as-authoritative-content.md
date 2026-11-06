@@ -426,3 +426,9 @@ To be reworked: the block model and block delta (`doc.rs`), the block-level merg
 - Handling of CRLF files and files with a BOM on import.
 - The size of the mirror sync state shown to the author, and whether Git integration through `bytegit` is offered at all.
 - Where `markdown-core` lives and how it is versioned relative to Dozer's current Markdown preview.
+
+**Update (2026-11-05, W1 partial).** Digger now stores the Markdown text and the complete block-identity state in
+`<project>/.digger/project.db` and mirrors it through `dozer-file-io`; external changes block the mirror instead of
+being overwritten. This covers the authoritative-text side of validation item 4 and the CRLF/BOM import question
+(LF in the database, original newline/BOM restored on mirror), but not automatic three-way merge or the full crash
+matrix. See `docs/superpowers/notes/2026-11-05-writing-workbench-baseline.md`.

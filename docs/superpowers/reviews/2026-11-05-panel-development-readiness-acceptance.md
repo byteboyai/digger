@@ -211,3 +211,5 @@ SELFTEST_TIMEOUT=120 bash scripts/run-editor-selftest.sh usage
 本轮全量与编译日志：`review-fix-lib.log`、`review-fix-check.log`，位于本报告原证据目录。
 
 真实 usage 自检复跑：`SELFTEST_TIMEOUT=120 bash scripts/run-editor-selftest.sh usage`，脚本退出 1，无 SUMMARY；本次应用进程在 120s 期限内未完成，日志包含 `com.apple.hiservices-xpcservice` 的 `Connection invalid`，未产生 U1–U8 判定。见 `review-fix-usage-selftest.log`。不能据此确认页面最终握手或 UI 几何通过，也不能仅凭系统服务错误排除其它原因；本次确认修复的是“显示 Usage 之前等待 Usage ready”的确定性启动缺陷，启动单元回归与产品路由自动回归通过，实机验收仍待具备正常图形访问能力的会话执行。
+
+**补记（2026-11-05，W1 写字台）**：上文 M4 在 readiness 阶段未执行，原因是当时的写字台仍是内存示例，属于功能缺失。W1 已加入项目内新建/导入/显式保存与恢复草稿入口；这不把旧 M4 改成通过——真实中文编辑、保存期间继续输入、退出重开仍需按 W1 验收重新执行。见 `2026-11-05-writing-workbench-acceptance.md`。

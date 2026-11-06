@@ -1,0 +1,181 @@
+   Compiling parking_lot_core v0.9.12
+   Compiling futures-util v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling core-foundation v0.10.1
+   Compiling memmap2 v0.9.12
+   Compiling objc2-foundation v0.3.2
+   Compiling malloc_buf v0.0.6
+   Compiling uuid v1.29.0
+   Compiling filetime v0.2.29
+   Compiling getrandom v0.2.17
+   Compiling dirs-sys v0.5.0
+   Compiling security-framework-sys v2.17.0
+   Compiling core-foundation v0.9.4
+   Compiling objc2-core-services v0.3.2
+   Compiling git2 v0.21.0
+   Compiling rustix v1.1.6
+   Compiling objc v0.2.7
+   Compiling dirs v6.0.0
+   Compiling parking_lot v0.12.5
+   Compiling fontdb v0.23.0
+   Compiling tar v0.4.46
+   Compiling ring v0.17.14
+   Compiling notify v8.2.1
+   Compiling directories v6.0.0
+   Compiling core-graphics-types v0.2.0
+   Compiling tracing v0.1.44
+   Compiling core-graphics-types v0.1.3
+   Compiling security-framework v3.7.0
+   Compiling signal-hook v0.4.6
+   Compiling dozer-preview-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling metal v0.32.0
+   Compiling tokio v1.54.1
+   Compiling dispatch2 v0.3.1
+   Compiling core-graphics v0.23.2
+   Compiling cosmic-text v0.15.0
+   Compiling usvg v0.45.1
+   Compiling winit v0.30.13
+   Compiling rustls-webpki v0.103.16
+   Compiling apple-native-keyring-store v1.0.2
+   Compiling keyring v4.2.0
+   Compiling futures-executor v0.3.34
+   Compiling rustls v0.23.46
+   Compiling bytegit v0.9.2 (https://github.com/byteboyai/bytegit?tag=v0.9.2#5472fa55)
+   Compiling resvg v0.45.1
+   Compiling futures v0.3.34
+   Compiling polling v3.11.0
+   Compiling rustix-openpty v0.2.0
+   Compiling alacritty_terminal v0.26.0
+   Compiling wgpu-hal v27.0.4
+   Compiling hyper v1.12.0
+   Compiling iced_futures v0.14.0
+   Compiling tower v0.5.3
+   Compiling dozer-services v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling tokio-util v0.7.20
+   Compiling dozer-git-runtime v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-store-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling iced_graphics v0.14.0
+   Compiling iced_debug v0.14.0
+   Compiling iced_runtime v0.14.0
+   Compiling tower-http v0.6.11
+   Compiling rmcp v3.8.0
+   Compiling wgpu-core-deps-apple v27.0.0
+   Compiling digger-store v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/digger/crates/store)
+   Compiling hyper-util v0.1.21
+   Compiling tokio-rustls v0.26.6
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling wgpu-core v27.0.3
+   Compiling iced_program v0.14.0
+   Compiling iced_winit v0.14.1
+   Compiling bytehost-apps v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling hyper-rustls v0.27.10
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+   Compiling reqwest v0.12.28
+   Compiling bytehost-git-accounts v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling bytehost-settings v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling bytehost-webview v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling bytehost-client v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling dozer-core v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling wgpu v27.0.1
+   Compiling bytehost-panel v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling digger-app-host v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/digger/crates/app-host)
+   Compiling dozer-client v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling digger-paths v0.1.0 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/digger/crates/paths)
+   Compiling cryoglyph v0.1.0
+   Compiling iced_wgpu v0.14.0
+   Compiling dozer-mcp v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling objc2-metal v0.3.2
+   Compiling objc2-core-data v0.3.2
+   Compiling objc2-core-image v0.3.2
+   Compiling objc2-cloud-kit v0.3.2
+   Compiling trash v5.2.9
+   Compiling objc2-quartz-core v0.3.2
+   Compiling softbuffer v0.4.8
+   Compiling objc2-app-kit v0.3.2
+   Compiling iced_tiny_skia v0.14.1
+   Compiling iced_renderer v0.14.0
+   Compiling iced_widget v0.14.2
+   Compiling iced v0.14.0
+   Compiling byteui v0.5.2 (https://github.com/byteboyai/byteui?tag=v0.5.2#e3382457)
+   Compiling objc2-web-kit v0.3.2
+   Compiling rfd v0.15.4
+   Compiling wry v0.55.1
+   Compiling dozer-panel-term v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling bytehost-chrome v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling bytehost-settings-ui v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling bytehost-desktop v0.1.0 (https://github.com/byteboyai/bytehost?tag=v0.4.23#386b65f4)
+   Compiling dozer-panel-host v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-conversations v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-browser v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-files v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-group-chat v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-todo v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-usage v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-project v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-agent v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling dozer-panel-preview v0.1.0 (https://github.com/byteboyai/dozer?tag=libs-2026-11-04a#15c61c9b)
+   Compiling digger-desktop v0.1.7 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/digger/crates/desktop)
+warning: unused import: `Path`
+  --> crates/desktop/src/markdown/mod.rs:17:17
+   |
+17 | use std::path::{Path, PathBuf};
+   |                 ^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `DocumentId`
+  --> crates/desktop/src/markdown/mod.rs:24:29
+   |
+24 | use digger_store::writing::{DocumentId, LoadedDocument, WritingSnapshot};
+   |                             ^^^^^^^^^^
+
+warning: field `class` is never read
+  --> crates/desktop/src/markdown/workbench.rs:40:9
+   |
+38 | pub struct RecoveredDraft {
+   |            -------------- field in this struct
+39 |     pub draft: RecoveryDraft,
+40 |     pub class: RecoveryClass,
+   |         ^^^^^
+   |
+   = note: `RecoveredDraft` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `last_receipt`, `mirror_error`, `store_id`, and `snapshot_from_doc` are never used
+   --> crates/desktop/src/markdown/workbench.rs:109:12
+    |
+ 76 | impl Workbench {
+    | -------------- methods in this implementation
+...
+109 |     pub fn last_receipt(&self) -> Option<&SaveReceipt> {
+    |            ^^^^^^^^^^^^
+...
+117 |     pub fn mirror_error(&self) -> Option<&str> {
+    |            ^^^^^^^^^^^^
+...
+121 |     pub fn store_id(&self) -> Option<&StoreId> {
+    |            ^^^^^^^^
+...
+413 |     pub fn snapshot_from_doc(&mut self, doc: &mut Doc, schema: u32) -> WritingSnapshot {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: field `catalog` is never read
+   --> crates/desktop/src/product.rs:218:5
+    |
+213 | pub struct ProductShell {
+    |            ------------ field in this struct
+...
+218 |     catalog: PanelCatalog,
+    |     ^^^^^^^
+
+warning: `digger-desktop` (lib) generated 5 warnings (run `cargo fix --lib -p digger-desktop` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.62s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

@@ -1,0 +1,15 @@
+{"blocks": 100, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 9467, "sample": 0, "save_plan_us": 15029}
+{"blocks": 100, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 8960, "sample": 1, "save_plan_us": 15086}
+{"blocks": 100, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 9499, "sample": 2, "save_plan_us": 14988}
+{"blocks": 100, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 9109, "sample": 3, "save_plan_us": 16708}
+{"blocks": 100, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 8807, "sample": 4, "save_plan_us": 16471}
+{"blocks": 1000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 13398, "sample": 0, "save_plan_us": 26727}
+{"blocks": 1000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 13436, "sample": 1, "save_plan_us": 26786}
+{"blocks": 1000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 13207, "sample": 2, "save_plan_us": 26913}
+{"blocks": 1000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 13720, "sample": 3, "save_plan_us": 26913}
+{"blocks": 1000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 12407, "sample": 4, "save_plan_us": 27975}
+{"blocks": 5000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 32476, "sample": 0, "save_plan_us": 84967}
+{"blocks": 5000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 31388, "sample": 1, "save_plan_us": 82790}
+{"blocks": 5000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 31539, "sample": 2, "save_plan_us": 81445}
+{"blocks": 5000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 30934, "sample": 3, "save_plan_us": 81888}
+{"blocks": 5000, "ipc_paint_measured": false, "load": "one real recovery write ahead of SavePlan", "profile": "test-debug", "queue_us": 30422, "sample": 4, "save_plan_us": 81674}

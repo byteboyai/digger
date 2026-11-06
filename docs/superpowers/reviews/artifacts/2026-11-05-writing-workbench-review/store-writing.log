@@ -1,0 +1,23 @@
+COMMAND: cargo test --locked --offline -p digger-store writing::tests -- --test-threads=1
+
+running 15 tests
+test writing::tests::a_path_that_is_not_a_directory_is_unavailable ... ok
+test writing::tests::corrupt_recovery_is_preserved_and_reported ... ok
+test writing::tests::create_load_and_reopen_preserve_identity_and_snapshot ... ok
+test writing::tests::cross_connection_cas_allows_exactly_one_writer ... ok
+test writing::tests::duplicate_path_returns_existing_without_creating_a_copy ... ok
+test writing::tests::future_schema_is_rejected_read_only ... ok
+test writing::tests::invalid_snapshot_rolls_back_everything ... ok
+test writing::tests::mirror_refuses_paths_outside_the_project ... ok
+test writing::tests::mirror_restores_newline_and_detects_external_change ... ok
+test writing::tests::outbox_lifecycle_records_attempts_and_terminal_states ... ok
+test writing::tests::path_and_size_limits_are_rejected ... ok
+test writing::tests::recovery_round_trips_and_classifies_against_durable ... ok
+test writing::tests::replaying_the_same_operation_does_not_commit_twice ... ok
+test writing::tests::same_operation_id_with_different_content_is_rejected ... ok
+test writing::tests::save_is_atomic_and_advances_version_commit_outbox_and_project_revision ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out; finished in 0.28s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/target/aarch64-apple-darwin/debug/deps/digger_store-4d03ee810036addf)

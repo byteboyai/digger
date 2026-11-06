@@ -1,0 +1,52 @@
+warning: unused import: `PathBuf`
+  --> crates/store/src/migrate.rs:15:23
+   |
+15 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `digger-store` (lib) generated 1 warning (run `cargo fix --lib -p digger-store` to apply 1 suggestion)
+    Checking digger-desktop v0.1.7 (/private/var/folders/9q/8pyxcmxn3_l8r62v4w_gzsnh0000gn/T/writing-workbench.d0thZs/digger/crates/desktop)
+warning: method `save` is never used
+   --> crates/desktop/src/markdown/workbench.rs:515:12
+    |
+141 | impl Workbench {
+    | -------------- method in this implementation
+...
+515 |     pub fn save(&mut self, snapshot: WritingSnapshot) -> Result<SaveReceipt, WritingError> {
+    |            ^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `catalog` is never read
+   --> crates/desktop/src/product.rs:218:5
+    |
+213 | pub struct ProductShell {
+    |            ------------ field in this struct
+...
+218 |     catalog: PanelCatalog,
+    |     ^^^^^^^
+
+warning: `digger-desktop` (lib) generated 2 warnings
+warning: function `git_snapshot` is never used
+   --> crates/desktop/src/adapters/project.rs:979:4
+    |
+979 | fn git_snapshot(repo_path: &Path) -> (Option<String>, bool, Vec<String>) {
+    |    ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `opened` is never used
+   --> crates/desktop/src/apps/mod.rs:938:19
+    |
+137 | impl AppsState {
+    | -------------- method in this implementation
+...
+938 |     pub(crate) fn opened(&self) -> bool {
+    |                   ^^^^^^
+
+warning: `digger-desktop` (lib test) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.32s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
