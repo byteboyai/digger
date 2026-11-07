@@ -152,6 +152,7 @@ pub struct MarkdownPanel {
     transition_flushed: bool,
     prepared_transition: Option<(WritingIdentity, u64)>,
     bridge: Bridge,
+    allow_unbound_editor: bool,
     nonce: String,
     /// 当前 webview 的 generation;每次销毁 / 重建都 +1,迟到的旧消息据此丢弃。
     epoch: Arc<AtomicU64>,
@@ -244,6 +245,10 @@ impl MarkdownPanel {
             transition_flushed: false,
             prepared_transition: None,
             bridge: Bridge::new(initial, mode, nonce.clone()),
+            // Lifecycle is an explicit memory-only geometry fixture. Ordinary
+            // writing sessions require a bound document before creating a page.
+            allow_unbound_editor: mode == Mode::SelfTest
+                || std::env::var("DIGGER_LIFECYCLE_SELFTEST").is_ok_and(|value| value != "usage"),
             nonce,
             epoch: Arc::new(AtomicU64::new(0)),
             creation: CreationState::Idle,
@@ -428,6 +433,10 @@ impl MarkdownPanel {
         self.ready = false;
         self.creation = CreationState::Idle;
         self.bounds = None;
+    }
+
+    fn has_editable_session(&self) -> bool {
+        self.allow_unbound_editor || self.workbench.current().is_some()
     }
 
     pub(crate) fn maintenance(&mut self) -> Task<Message> {
@@ -1086,7 +1095,11 @@ impl MarkdownPanel {
             }
             Message::OpenFile(path) => self.request_transition(Transition::File(path)),
             Message::Page(generation, raw) => {
-                if self.loading || !self.is_live() || generation != self.generation() {
+                if !self.has_editable_session()
+                    || self.loading
+                    || !self.is_live()
+                    || generation != self.generation()
+                {
                     return Task::none(); // 迟到的旧 generation:丢弃,绝不应用
                 }
                 match self.bridge.handle(&raw) {
@@ -1427,6 +1440,7 @@ impl MarkdownPanel {
             });
         }
         let visible = visible
+            && self.has_editable_session()
             && !self.loading
             && !self.transition_choice
             && !self.managing_documents

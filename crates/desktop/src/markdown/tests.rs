@@ -17,6 +17,8 @@ fn live_panel() -> MarkdownPanel {
 
 fn live_panel_with(mode: Mode) -> MarkdownPanel {
     let mut p = MarkdownPanel::with_mode(mode);
+    // Protocol/native fixtures intentionally exercise a memory-only editor.
+    p.allow_unbound_editor = true;
     p.creation = CreationState::Ready {
         generation: p.generation(),
     };
@@ -61,7 +63,7 @@ fn rect() -> LogicalRect {
 
 #[test]
 fn a_failed_creation_retries_with_a_new_generation_and_ignores_the_old_one() {
-    let mut p = MarkdownPanel::with_mode(Mode::Normal);
+    let mut p = live_panel();
     p.window = Some(window::Id::unique());
     p.bounds = Some(rect());
     p.shown = true;
@@ -118,7 +120,7 @@ fn hiding_and_showing_a_ready_panel_does_not_rebuild_it() {
 
 #[test]
 fn a_failed_panel_rebuilds_when_it_is_shown_again() {
-    let mut p = MarkdownPanel::with_mode(Mode::Normal);
+    let mut p = live_panel();
     p.creation = CreationState::Failed {
         generation: 0,
         error: "boom".into(),
@@ -1170,4 +1172,33 @@ fn an_expired_external_confirmation_keeps_the_dirty_buffer_and_allows_a_fresh_co
         "external second"
     );
     assert_eq!(store.load(&a).unwrap().snapshot.text, "");
+}
+
+#[test]
+fn ordinary_unbound_sessions_never_create_a_page_or_accept_unowned_input() {
+    let mut panel = MarkdownPanel::with_mode(Mode::Normal);
+    panel.allow_unbound_editor = false;
+    let _ = panel.sync_native(window::Id::unique(), true, rect());
+    assert!(matches!(panel.creation, CreationState::Idle));
+    assert!(!panel.shown);
+    // Even an unexpected late/native page cannot establish an editable session.
+    panel.test_edit_text("text without a document must not be admitted");
+    assert_eq!(panel.bridge.doc().text, "");
+    let project = tempfile::tempdir().unwrap();
+    panel.set_project(Some(project.path().to_owned()));
+    panel.settle_load_for_test();
+    let _ = panel.sync_native(window::Id::unique(), true, rect());
+    assert!(!panel.is_live());
+    assert!(!panel.shown);
+    let _ = panel.update(Message::NewTitleChanged("bound".into()));
+    let _ = panel.update(Message::NewPathChanged("bound.md".into()));
+    let task = panel.update(Message::Create);
+    run_task(&mut panel, task);
+    assert!(panel.has_editable_session());
+    panel.test_edit_text("input now belongs to the created document");
+    assert_eq!(
+        panel.bridge.doc().text,
+        "input now belongs to the created document"
+    );
+    assert!(panel.workbench.current().unwrap().dirty);
 }
