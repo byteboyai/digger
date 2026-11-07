@@ -1,0 +1,69 @@
+name: Native writing verification
+
+# Automated NSView/webview scenarios only. This does not certify an actual
+# Chinese input method, manual focus/overlay behavior or persistent writing UX.
+on:
+  push:
+    branches: [review/writing-workbench-20261106]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-writing:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build and record the exact executable
+        run: |
+          mkdir -p artifacts
+          cargo build --locked -p digger-desktop --bin digger --message-format=json > artifacts/build.jsonl
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          rows = [json.loads(line) for line in pathlib.Path('artifacts/build.jsonl').read_text().splitlines()]
+          paths = {r['executable'] for r in rows if r.get('reason') == 'compiler-artifact' and r.get('target', {}).get('name') == 'digger' and r.get('executable')}
+          if len(paths) != 1:
+              raise SystemExit('expected one executable from this build')
+          exe = pathlib.Path(paths.pop())
+          record = {'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'executable': str(exe), 'sha256': hashlib.sha256(exe.read_bytes()).hexdigest()}
+          pathlib.Path('artifacts/identity.json').write_text(json.dumps(record, indent=2) + '\n')
+          print(json.dumps(record))
+          PY
+      - name: Run native scenarios with isolated temporary data
+        env:
+          SELFTEST_TIMEOUT: '90'
+        run: |
+          failed=0
+          for scenario in harness lifecycle usage; do
+            if bash scripts/run-editor-selftest.sh "$scenario" > "artifacts/$scenario.log" 2>&1; then
+              echo "$scenario: passed"
+            else
+              echo "$scenario: failed"
+              failed=1
+            fi
+            tail -25 "artifacts/$scenario.log"
+          done
+          exit "$failed"
+      - name: Upload native evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-writing-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn
