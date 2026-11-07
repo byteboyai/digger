@@ -591,6 +591,10 @@ impl ProductShell {
         self.usage.seed_sample();
     }
 
+    pub(crate) fn clear_usage_sample(&mut self) {
+        self.usage.seed_empty_sample();
+    }
+
     /// 用量面板此刻的三态(唯一判断,见 [`UsageLayout`])。
     pub(crate) fn usage_layout(&self) -> UsageLayout {
         if !self.usage.has_agent_filter() {

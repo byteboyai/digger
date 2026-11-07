@@ -28,7 +28,11 @@ fn main() {
         let text = corpus(blocks);
         let mut samples = Vec::new();
         let mut sizes = Vec::new();
-        for sample in 0..44 {
+        // A 41-point p95 is determined by only three tail observations and
+        // was unstable under hosted-runner scheduling. Keep both versions on
+        // the same eight warmups and 200 measured operations; thresholds stay
+        // unchanged in check-editor-performance.py.
+        for sample in 0..208 {
             let mut bridge = Bridge::new(&text, Mode::Normal, "bench");
             let heading = (blocks / 4 * (1 + sample % 3)) / 5 * 5;
             let at_byte = text.find(&format!("# 第{heading}章")).unwrap() + 2;
@@ -43,7 +47,7 @@ fn main() {
             let raw = json!({"n":"bench", "t":"edit", "request_id":1, "base":bridge.doc().version,
                 "changes":[{"from":at,"to":at,"insert":"字"}]})
             .to_string();
-            let initial = if std::env::var_os("DIGGER_BENCH_REPLIES_DIR").is_some() && sample == 3 {
+            let initial = if std::env::var_os("DIGGER_BENCH_REPLIES_DIR").is_some() && sample == 8 {
                 Some(bridge.doc().blocks_message().to_json())
             } else {
                 None
@@ -64,14 +68,14 @@ fn main() {
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(format!("{dir}/{blocks}.json"), json!({"text":text,"initial":serde_json::from_str::<serde_json::Value>(&initial).unwrap(),"reply":value}).to_string()).unwrap();
             }
-            if sample < 3 {
+            if sample < 8 {
                 continue;
             }
             samples.push(nanos);
             sizes.push(json.len());
             println!(
                 "{}",
-                json!({"kind":"sample","label":label,"blocks":blocks,"sample":sample-3,
+                json!({"kind":"sample","label":label,"blocks":blocks,"sample":sample-8,
                 "ns":nanos,"doc_load_ns":doc_load_ns,"doc_edit_ns":doc_edit_ns,"reply_bytes":json.len(),"reply_type":value["t"],
                 "returned_blocks":value["blocks"].as_array().unwrap().len()})
             );

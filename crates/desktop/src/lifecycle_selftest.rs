@@ -68,6 +68,7 @@ enum Action {
     Close,
     /// 给用量面板注入一行样例数据,让它进入"有数据"态。
     InjectUsage,
+    ClearUsage,
 }
 
 struct Step {
@@ -212,10 +213,10 @@ fn usage_steps() -> Vec<Step> {
             expect: Expect::UsageAt(UsageWhere::RightPaired { list: 0.5 }),
         },
         Step {
-            // 先选中应用再选中用量(点已激活的图标会收起该区),再拖到左栏。落地会重新取数,结果(空)稍后才到,
-            // 会盖掉同一瞬间注入的数据:所以这一步只验证位置(无数据时占满左区内容),数据留到下一步注入。
+            // 无项目时切回不会发查询；显式清空夹具，才能确定地验证左栏无数据布局。
             name: "U6 dragging usage to the left rail moves the chart into the left zone",
             actions: vec![
+                Action::ClearUsage,
                 press(apps()),
                 release(),
                 press(usage()),
@@ -370,6 +371,10 @@ impl Driver {
                 Action::Close => Task::done(Msg::Exit),
                 Action::InjectUsage => {
                     shell.seed_usage_sample();
+                    Task::none()
+                }
+                Action::ClearUsage => {
+                    shell.clear_usage_sample();
                     Task::none()
                 }
             };

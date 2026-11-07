@@ -184,27 +184,39 @@ async function run(e: Engine) {
       const okT = a?.kind === "paragraph" && a.headingPath.join("/") === "书名/第一章/第二节" && c?.headingPath.join("/") === "书名/第二章" && h?.kind === "heading" && h.headingPath.join("/") === "书名/第一章" && !!a.blockId && a.blockId !== c?.blockId && (sel?.selFrom ?? -1) >= 0;
       result("T16 typed selection carries block id, kind, range and heading path", okT, `乙: ${a?.headingPath.join("/")} 丙: ${c?.headingPath.join("/")} 第一节: ${h?.headingPath.join("/")}`);
 
-      // T17: a patch against an out-of-date version is refused, and reloading recovers
-      const before = r.rejects().length;
-      post({ t: "edit", base: r.version() - 1, changes: [{ from: 0, to: 0, insert: "x" }] });
-      await new Promise((res) => setTimeout(res, 400));
-      const refused = r.rejects().length === before + 1 && /StaleBase/.test(r.rejects()[before]);
-      // a position inside a surrogate pair (between the two halves of 😀) cannot be a text boundary
+      // These deliberately unsolicited probes are not RustSync edits. Observe
+      // their wire replies directly: the production state machine correctly
+      // ignores unrelated rejections while ready.
+      const wireReject = async (send: () => void, label: string) => {
+        const wire = (window as unknown as { __md: { receive(json: string): void } }).__md;
+        const previous = wire.receive;
+        let resolve!: (message: { code: string; reason: string; version?: number }) => void;
+        const reply = new Promise<{ code: string; reason: string; version?: number }>((done) => { resolve = done; });
+        wire.receive = (json) => {
+          try {
+            const message = JSON.parse(json);
+            if (message?.t === "reject") resolve(message);
+          } finally { previous(json); }
+        };
+        try { send(); return await within(reply, label); }
+        finally { wire.receive = previous; }
+      };
+      const stale = await wireReject(() => post({ t: "edit", base: r.version() - 1, changes: [{ from: 0, to: 0, insert: "x" }] }), "stale probe rejection");
       await within(r.load("😀 一\n\n后文\n"), "pair doc");
-      const b2 = r.rejects().length;
-      post({ t: "edit", base: r.version(), changes: [{ from: 1, to: 1, insert: "x" }] });
-      await new Promise((res) => setTimeout(res, 400));
-      const pairRefused = r.rejects().length === b2 + 1 && /BadPosition/.test(r.rejects()[b2]);
+      const badPosition = await wireReject(() => post({ t: "edit", base: r.version(), changes: [{ from: 1, to: 1, insert: "x" }] }), "surrogate probe rejection");
       await within(r.load(r.doc()), "resync");
-      result("T17 stale patch and a position inside a surrogate pair are refused by Rust; a reload resynchronizes", refused && pairRefused && r.rustHash() === r.editorHash(), `rejects: ${JSON.stringify(r.rejects().slice(before))}`);
-      // T17b: a message without the handshake nonce, or with a wrong one, is refused and changes nothing
+      result("T17 stale patch and a position inside a surrogate pair are refused by Rust; a reload resynchronizes",
+        stale.code === "stale_base" && badPosition.code === "bad_position" && r.rustHash() === r.editorHash(),
+        `wire rejects: ${JSON.stringify([stale, badPosition])}`);
       const rawPost = (o: unknown) => window.ipc.postMessage(JSON.stringify(o));
-      const beforeNonce = r.rejects().length, docBefore = r.doc(), verBefore = r.version();
-      rawPost({ t: "edit", base: r.version(), changes: [{ from: 0, to: 0, insert: "x" }] });
-      rawPost({ n: "forged", t: "edit", base: r.version(), changes: [{ from: 0, to: 0, insert: "x" }] });
-      await new Promise((res) => setTimeout(res, 400));
-      const nonceRefused = r.rejects().length === beforeNonce + 2 && /unparsable/.test(r.rejects()[beforeNonce]) && r.rejects()[beforeNonce + 1] === "bad nonce";
-      result("T17b a message without or with a wrong nonce is refused and changes nothing", nonceRefused && r.version() === verBefore && r.doc() === docBefore, `rejects: ${JSON.stringify(r.rejects().slice(beforeNonce))}`);
+      const docBefore = r.doc(), verBefore = r.version();
+      const missingNonce = await wireReject(() => rawPost({ t: "edit", base: r.version(), changes: [{ from: 0, to: 0, insert: "x" }] }), "missing nonce rejection");
+      const wrongNonce = await wireReject(() => rawPost({ n: "forged", t: "edit", base: r.version(), changes: [{ from: 0, to: 0, insert: "x" }] }), "wrong nonce rejection");
+      result("T17b a message without or with a wrong nonce is refused and changes nothing",
+        missingNonce.code === "malformed_changes" && wrongNonce.code === "unauthorized"
+          && missingNonce.version === verBefore && wrongNonce.version === verBefore
+          && r.version() === verBefore && r.doc() === docBefore && r.syncState() === "ready",
+        `wire rejects: ${JSON.stringify([missingNonce, wrongNonce])}`);
       // T19–T23: the Agent (Rust) changes the text and the editor integrates it, also while the author is typing
       const until = async (pred: () => boolean, what: string, ms = 8000) => {
         const t0 = performance.now();

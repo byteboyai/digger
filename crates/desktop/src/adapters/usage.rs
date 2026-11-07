@@ -217,6 +217,14 @@ impl UsagePanel {
         dozer_panel_usage::update(&mut self.state, sample_loaded_message());
     }
 
+    /// 生命周期夹具显式清空数据，不依赖无项目时并不存在的后台刷新。
+    pub(crate) fn seed_empty_sample(&mut self) {
+        dozer_panel_usage::update(
+            &mut self.state,
+            UsageMessage::Loaded(1, u64::MAX, vec![], 0, std::collections::BTreeMap::new()),
+        );
+    }
+
     /// 测试用:当前作用域身份。
     #[cfg(test)]
     pub(crate) fn scope_identity(&self) -> Option<(PathBuf, u64)> {
@@ -567,6 +575,18 @@ mod tests {
         let mut panel = UsagePanel::new(svc);
         panel.set_scope(Some(PathBuf::from("/tmp/digger-usage-test")));
         panel
+    }
+
+    #[test]
+    fn explicit_empty_fixture_clears_the_agent_filter_without_changing_scope() {
+        let mut panel = panel();
+        let identity = panel.scope_identity();
+        panel.seed_sample();
+        assert!(panel.has_agent_filter());
+        panel.seed_empty_sample();
+        assert!(!panel.has_agent_filter());
+        assert!(panel.row_titles().is_empty());
+        assert_eq!(panel.scope_identity(), identity);
     }
 
     #[test]

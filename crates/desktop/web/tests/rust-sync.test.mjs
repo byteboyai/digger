@@ -606,3 +606,18 @@ test("cancelling a transition flush cannot freeze the page after a late IME end"
   assert.deepEqual(locks, [false]);
   assert.equal(posts.filter(p => p.t === "flushed" && p.request_id === 92).length, 0);
 });
+
+test("unsolicited wire rejections do not mutate an idle ready session", () => {
+  const { sync, posts } = harness();
+  openText(sync, "unchanged", 7);
+  const blocks = sync.blocks;
+  for (const code of ["stale_base", "bad_position", "malformed_changes", "unauthorized"]) {
+    sync.receiveJson(JSON.stringify({ t: "reject", code, reason: "foreign probe", version: 7 }));
+    assert.equal(sync.state, "ready");
+    assert.equal(sync.version, 7);
+    assert.equal(sync.blocks, blocks);
+    assert.equal(sync.failureInfo, null);
+  }
+  assert.equal(posts.length, 0);
+  assert.equal(sync.rejects.length, 0);
+});
