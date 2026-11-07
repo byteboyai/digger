@@ -12,6 +12,9 @@ jobs:
   slow:
     runs-on: macos-latest
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout digger
         uses: actions/checkout@v4
@@ -43,13 +46,16 @@ jobs:
           npm test
 
       - name: 写字台进程故障与恢复(Release)
-        run: cargo test --locked --release -p digger-store writing:: -- --test-threads=1 2>&1 | tee artifacts/writing-faults.log
+        run: |
+          cargo test --locked --release -p digger-store writing:: -- --test-threads=1 2>&1 | tee artifacts/writing-faults.log
 
       - name: 写字台存储规模样本(Release)
-        run: cargo run --locked --release -q -p digger-store --example writing_bench 2>&1 | tee artifacts/writing-store.jsonl
+        run: |
+          cargo run --locked --release -q -p digger-store --example writing_bench 2>&1 | tee artifacts/writing-store.jsonl
 
       - name: 写字台后台队列样本(Debug，单独标记)
-        run: cargo test --locked -p digger-desktop --lib markdown::tests::writing_queue_performance_samples -- --exact --ignored --nocapture 2>&1 | tee artifacts/writing-queue.log
+        run: |
+          cargo test --locked -p digger-desktop --lib markdown::tests::writing_queue_performance_samples -- --exact --ignored --nocapture 2>&1 | tee artifacts/writing-queue.log
 
       - name: Release 基准(100 / 1000 / 5000 块)
         run: |
@@ -57,7 +63,8 @@ jobs:
           bash scripts/bench-editor-sync.sh "$PWD/artifacts/editor" 2>&1 | tee artifacts/sync_bench.log
 
       - name: SQLite 规模验证(1k / 10k / 100k)
-        run: cargo run --locked --release -q -p digger-store --example usage_bench 2>&1 | tee artifacts/usage_bench.jsonl
+        run: |
+          cargo run --locked --release -q -p digger-store --example usage_bench 2>&1 | tee artifacts/usage_bench.jsonl
 
       - name: 上传样本与失败日志
         if: always()
