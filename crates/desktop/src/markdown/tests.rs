@@ -106,9 +106,9 @@ fn hiding_and_showing_a_ready_panel_does_not_rebuild_it() {
     let id = window::Id::unique();
     p.shown = true;
     p.bounds = Some(rect());
-    let _ = p.sync_native(id, false, rect());
+    let _ = p.sync_native(id, false, rect(), 0.);
     assert!(!p.shown);
-    let _ = p.sync_native(id, true, rect());
+    let _ = p.sync_native(id, true, rect(), 0.);
     assert!(p.shown);
     assert_eq!(
         p.generation(),
@@ -126,7 +126,7 @@ fn a_failed_panel_rebuilds_when_it_is_shown_again() {
         error: "boom".into(),
     };
     p.shown = false;
-    let _ = p.sync_native(window::Id::unique(), true, rect());
+    let _ = p.sync_native(window::Id::unique(), true, rect(), 0.);
     assert_eq!(p.creation, CreationState::Building { generation: 1 });
     assert!(p.shown);
 }
@@ -1040,9 +1040,9 @@ fn native_hide_theme_and_retry_preserve_the_active_dirty_document() {
     let window = window::Id::unique();
     panel.shown = true;
     let generation = panel.generation();
-    let _ = panel.sync_native(window, false, rect());
+    let _ = panel.sync_native(window, false, rect(), 0.);
     let _ = panel.sync_theme();
-    let _ = panel.sync_native(window, true, rect());
+    let _ = panel.sync_native(window, true, rect(), 0.);
     assert_eq!(panel.generation(), generation);
     panel.creation = CreationState::Failed {
         generation,
@@ -1178,7 +1178,7 @@ fn an_expired_external_confirmation_keeps_the_dirty_buffer_and_allows_a_fresh_co
 fn ordinary_unbound_sessions_never_create_a_page_or_accept_unowned_input() {
     let mut panel = MarkdownPanel::with_mode(Mode::Normal);
     panel.allow_unbound_editor = false;
-    let _ = panel.sync_native(window::Id::unique(), true, rect());
+    let _ = panel.sync_native(window::Id::unique(), true, rect(), 0.);
     assert!(matches!(panel.creation, CreationState::Idle));
     assert!(!panel.shown);
     // Even an unexpected late/native page cannot establish an editable session.
@@ -1187,7 +1187,7 @@ fn ordinary_unbound_sessions_never_create_a_page_or_accept_unowned_input() {
     let project = tempfile::tempdir().unwrap();
     panel.set_project(Some(project.path().to_owned()));
     panel.settle_load_for_test();
-    let _ = panel.sync_native(window::Id::unique(), true, rect());
+    let _ = panel.sync_native(window::Id::unique(), true, rect(), 0.);
     assert!(!panel.is_live());
     assert!(!panel.shown);
     let _ = panel.update(Message::NewTitleChanged("bound".into()));

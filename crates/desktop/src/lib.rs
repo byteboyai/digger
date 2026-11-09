@@ -103,3 +103,5 @@ mod tests {
         assert_eq!(cell.get(), iced::Point::new(-3.75, 1e-3));
     }
 }
+
+pub(crate) mod panel_surface;

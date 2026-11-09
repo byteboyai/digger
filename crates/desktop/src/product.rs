@@ -1127,7 +1127,18 @@ impl ProductShell {
             if self.shell.selected(side) != panel {
                 return None;
             }
-            rects.content(side)
+            rects.content(side).map(|r| {
+                crate::panel_surface::content_rect(
+                    r,
+                    crate::panel_surface::is_maximized(&self.shell, side),
+                )
+            })
+        };
+        let native_radius = crate::panel_surface::native_radius(self.shell.maximized().is_some());
+        let safe_native = |rect, id: &PanelId| {
+            content_of(id)
+                .map(|body| crate::panel_surface::native_rect(rect, body, native_radius))
+                .unwrap_or(rect)
         };
         let usage_rect = content_of(&shell::usage_id()).map(|content| {
             let pair = self
@@ -1181,7 +1192,12 @@ impl ProductShell {
                 window,
                 usage_rect.is_some() && !closing,
                 usage_rect
-                    .map(|r| logical(below_header(r, USAGE_HEADER_HEIGHT)))
+                    .map(|r| {
+                        logical(safe_native(
+                            below_header(r, USAGE_HEADER_HEIGHT),
+                            &shell::usage_id(),
+                        ))
+                    })
                     .unwrap_or(hidden),
             )
             .map(Msg::NativeUsage);
@@ -1193,6 +1209,7 @@ impl ProductShell {
                 window,
                 markdown_rect.is_some(),
                 markdown_rect.map(logical).unwrap_or(hidden),
+                native_radius,
             )
         }
         .map(Msg::Markdown);
@@ -1201,7 +1218,9 @@ impl ProductShell {
             .sync_native(
                 window,
                 todo_rect.is_some() && !closing,
-                todo_rect.map(logical).unwrap_or(hidden),
+                todo_rect
+                    .map(|r| logical(safe_native(r, &shell::todo_id())))
+                    .unwrap_or(hidden),
             )
             .map(Msg::NativeTodo);
         let review_task = self
@@ -1212,7 +1231,9 @@ impl ProductShell {
                     && !closing
                     && !self.window_minimized
                     && !self.review_overlay_open(),
-                review_rect.map(logical).unwrap_or(hidden),
+                review_rect
+                    .map(|r| logical(safe_native(r, &shell::conversations_id())))
+                    .unwrap_or(hidden),
                 self.projects.current_project_id(),
             )
             .map(Msg::ReviewNative);
@@ -1223,7 +1244,9 @@ impl ProductShell {
                 window,
                 chat_rect.is_some() && !closing && !self.window_minimized,
                 chat_overlay,
-                chat_rect.map(logical).unwrap_or(hidden),
+                chat_rect
+                    .map(|r| logical(safe_native(r, &shell::group_chat_id())))
+                    .unwrap_or(hidden),
                 self.projects.current_project_id(),
                 std::time::Instant::now(),
             )
@@ -1235,6 +1258,7 @@ impl ProductShell {
                     .then(|| self.projects.current_project_id())
                     .flatten(),
                 content: content_of(&shell::browser_id()),
+                corner_radius: native_radius,
                 window_active: !closing && !self.window_minimized,
                 overlay_open: self.chat_overlay_open(),
             },
@@ -2455,7 +2479,10 @@ impl ProductShell {
             return None;
         }
         let rects = self.shell.rects(&metrics_from_theme());
-        let content = rects.content(side)?;
+        let content = crate::panel_surface::content_rect(
+            rects.content(side)?,
+            crate::panel_surface::is_maximized(&self.shell, side),
+        );
         let pair = shell::pair_rects(&self.shell, side);
         Some(crate::adapters::agent_layout::terminal_block(
             content,
@@ -2890,7 +2917,11 @@ impl ShellHost<Msg> for ProductShell {
     }
 
     fn body<'a>(&'a self, panel: &PanelId, area: &BodyArea) -> El<'a, Msg> {
-        match panel.as_str() {
+        let maximized = crate::panel_surface::is_maximized(&self.shell, area.side);
+        let adjusted =
+            crate::panel_surface::area(*area, maximized, shell::pair_rects(&self.shell, area.side));
+        let area = &adjusted;
+        let content = match panel.as_str() {
             "digger.usage" => self.usage_view(area),
             "digger.todo" => self.todo_view(area),
             "digger.markdown" => self.markdown_view(),
@@ -2901,7 +2932,8 @@ impl ShellHost<Msg> for ProductShell {
             "digger.group_chat" => self.group_chat.view(self.projects.current_project(), area),
             "digger.browser" => self.browser.view(self.projects.current_project(), area),
             _ => column![].into(),
-        }
+        };
+        crate::panel_surface::wrap(content, maximized)
     }
 
     fn top_bar<'a>(&'a self) -> TopBarSlots<'a, Msg> {
@@ -7155,6 +7187,7 @@ mod tests {
 
     include!("product_usage_tests.rs");
     include!("product_writing_tests.rs");
+    include!("product_surface_tests.rs");
 
     fn load_sample_rows(shell: &mut ProductShell) {
         let scope = PathBuf::from("/sample/project");

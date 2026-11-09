@@ -247,7 +247,13 @@ pub(crate) fn collect_preview_desired(
         let Some(slot) = shell::pair_rects(shell, side).map(|p| p.second) else {
             continue;
         };
-        let rect = logical(preview_webview_rect(slot));
+        let maximized = crate::panel_surface::is_maximized(shell, side);
+        let body = crate::panel_surface::content_rect(rects.content(side).unwrap(), maximized);
+        let rect = logical(crate::panel_surface::native_rect(
+            preview_webview_rect(slot),
+            body,
+            crate::panel_surface::native_radius(maximized),
+        ));
         desired.extend(preview.desired(panel, project, |_| Some(rect)));
         // 页签条可用宽度:预览块真实宽度减三颗按钮与间距(Dozer 同款估算)。
         let avail = (slot.w - PREVIEW_CHROME_RESERVE_PX).max(0.0);

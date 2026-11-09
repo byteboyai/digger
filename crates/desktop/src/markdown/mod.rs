@@ -1431,6 +1431,7 @@ impl MarkdownPanel {
         id: window::Id,
         visible: bool,
         rect: LogicalRect,
+        corner_radius: f32,
     ) -> Task<Message> {
         self.window = Some(id);
         if let Some(generation) = self.retired_generation.take() {
@@ -1451,6 +1452,27 @@ impl MarkdownPanel {
             y: rect.y + BAR_HEIGHT,
             width: rect.width,
             height: (rect.height - BAR_HEIGHT).max(1.0),
+        };
+        let web = crate::panel_surface::native_rect(
+            bytehost_chrome::Rect::new(
+                web.x as f32,
+                web.y as f32,
+                web.width as f32,
+                web.height as f32,
+            ),
+            bytehost_chrome::Rect::new(
+                rect.x as f32,
+                rect.y as f32,
+                rect.width as f32,
+                rect.height as f32,
+            ),
+            corner_radius,
+        );
+        let web = LogicalRect {
+            x: web.x as f64,
+            y: web.y as f64,
+            width: web.w as f64,
+            height: web.h as f64,
         };
         let was_shown = self.shown;
         if !visible {

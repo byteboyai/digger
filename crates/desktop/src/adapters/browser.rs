@@ -30,6 +30,7 @@ const SIDEBAR_MIRRORED: bool = false;
 
 /// 本帧同步原生层需要的输入(都是产品壳算好的)。
 pub struct NativeInputs {
+    pub corner_radius: f32,
     /// 当前项目;没有、或正在关闭时为 `None`(销毁全部网页)。
     pub project_id: Option<i64>,
     /// 面板内容矩形;面板没被选中时为 `None`(停放)。
@@ -180,6 +181,7 @@ impl BrowserPanel {
                     self.notice_height() + find_extra,
                     sidebar,
                 );
+                let r = crate::panel_surface::native_rect(r, content, inputs.corner_radius);
                 LogicalRect {
                     x: f64::from(r.x),
                     y: f64::from(r.y),
@@ -669,6 +671,7 @@ mod tests {
 
     fn inputs(project_id: Option<i64>, content: Option<Rect>) -> NativeInputs {
         NativeInputs {
+            corner_radius: 0.,
             project_id,
             content,
             window_active: true,

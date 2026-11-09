@@ -133,13 +133,24 @@ pub fn rules(panel: &PanelId) -> Option<PanelRules> {
 /// 某侧当前面板的配对矩形(度量与规则取产品的);该侧面板不是配对面板时为 `None`。
 pub fn pair_rects(model: &ShellModel, side: Side) -> Option<PairRects> {
     let metrics = metrics_from_theme();
-    model.pair_rects(
-        side,
-        &Ctx {
-            metrics: &metrics,
-            rules: &rules,
-        },
-    )
+    let panel = model.selected(side);
+    let rules = rules(panel)?;
+    let pane = rules.pane?;
+    let rect = crate::panel_surface::content_rect(
+        model.rects(&metrics).content(side)?,
+        crate::panel_surface::is_maximized(model, side),
+    );
+    let dims = model.panes().get_or(
+        panel,
+        bytehost_core::panes::PaneDims::new(pane.default_split, false),
+    );
+    Some(bytehost_chrome::model::pair_rects(
+        rect,
+        dims,
+        pane.spec,
+        side != rules.default_side,
+        &metrics,
+    ))
 }
 
 /// 默认布局:沿用 Dozer 的分工,左区放内容型面板、右区放辅助型面板。左宽 640 与 Dozer 一致。
@@ -429,7 +440,17 @@ pub fn save_window_size(path: &Path, model: &ShellModel) -> std::io::Result<()> 
 
 /// 把一条骨架消息交给模型,度量与面板规则取产品的。
 pub fn update(model: &mut ShellModel, msg: ShellMsg) -> Outcome {
-    let metrics = metrics_from_theme();
+    let mut metrics = metrics_from_theme();
+    // Pair dragging uses the same inner frame as the maximized body/native views.
+    if model.maximized().is_some()
+        && matches!(
+            model.dragging_divider(),
+            Some(bytehost_chrome::Divider::Pair(_))
+        )
+        && matches!(msg, ShellMsg::CursorMoved { .. })
+    {
+        metrics.maximize_padding += crate::panel_surface::radius(true);
+    }
     model.update(
         msg,
         &Ctx {

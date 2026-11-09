@@ -93,6 +93,8 @@ dozer-panel-usage.workspace = true
 dozer-panel-todo.workspace = true
 
 [dev-dependencies]
+# Pixel regression checks for panel corner masks (same backend as iced_tiny_skia).
+tiny-skia = "0.11.4"
 # Headless widget layout/operation tests without a window or GPU.
 tempfile = "3"
 # 集成测试在进程内拉起真实 diggerd(S3b-1 Task 6)。

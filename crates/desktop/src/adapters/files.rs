@@ -503,8 +503,13 @@ impl FilesPanel {
     /// 面板视图(区域几何由骨架给出,与 Dozer 的 `files_pane` 同义)。
     pub fn view(&self, width: Length, outer: Border) -> Element<'_, Msg> {
         match &self.state {
-            Some(state) => dozer_panel_files::view::view(state, self, width, outer, 0.0, 0.0, 0.0)
-                .map(Msg::Files),
+            Some(state) => {
+                let view = dozer_panel_files::view::view(state, self, width, outer, 0.0, 0.0, 0.0)
+                    .map(Msg::Files);
+                #[cfg(target_os = "macos")]
+                let view = super::files_secondary_click::SecondaryClick::new(view).into();
+                view
+            }
             None => iced::widget::container(iced::widget::Space::new())
                 .width(width)
                 .height(Length::Fill)
@@ -678,6 +683,116 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn trackpad_secondary_clicks_reach_the_actual_tree_without_selecting_or_opening() {
+        use iced_core::{Event, keyboard, mouse};
+        let dirs = TwoProjects::new("secondary-click");
+        let mut panel = panel("secondary-click");
+        panel.set_project(Some(&project("a", &dirs.a)));
+        for (label, path, is_dir) in [
+            ("a", dirs.a.clone(), true),
+            ("only-in-a.txt", dirs.a.join("only-in-a.txt"), false),
+        ] {
+            for control_click in [false, true] {
+                let mut view = panel.view(Length::Fill, Border::default());
+                crate::adapters::scale_widget_checks::with_layout(
+                    &mut view,
+                    400.,
+                    |view, tree, node, renderer, texts| {
+                        let bounds = texts.0.iter().find(|(text, _)| text == label).unwrap().1;
+                        let cursor = mouse::Cursor::Available(bounds.center());
+                        let button = if control_click {
+                            mouse::Button::Left
+                        } else {
+                            mouse::Button::Right
+                        };
+                        let mut messages = vec![];
+                        // Two quick secondary clicks must never become a primary double click.
+                        for _ in 0..2 {
+                            let mut events = vec![];
+                            if control_click {
+                                events.push(Event::Keyboard(keyboard::Event::ModifiersChanged(
+                                    keyboard::Modifiers::CTRL,
+                                )));
+                            }
+                            events.push(Event::Mouse(mouse::Event::ButtonPressed(button)));
+                            // Control can be released before the pointer; retain the original gesture.
+                            events.push(Event::Keyboard(keyboard::Event::ModifiersChanged(
+                                keyboard::Modifiers::empty(),
+                            )));
+                            events.push(Event::Mouse(mouse::Event::ButtonReleased(button)));
+                            for event in events {
+                                view.as_widget_mut().update(
+                                    tree,
+                                    &event,
+                                    iced_core::Layout::new(node),
+                                    cursor,
+                                    renderer,
+                                    &mut iced_core::clipboard::Null,
+                                    &mut iced_core::Shell::new(&mut messages),
+                                    &iced_core::Rectangle::with_size(iced_core::Size::new(
+                                        400., 600.,
+                                    )),
+                                );
+                            }
+                        }
+                        assert_eq!(messages.iter().filter(|m| matches!(m, Msg::Files(FilesMessage::ContextMenuOpen {path: actual, is_dir: directory}) if actual == &path && *directory == is_dir)).count(), 2,
+                            "one menu per secondary click: {label}, control_click={control_click}");
+                        assert!(
+                            !messages.iter().any(|m| matches!(
+                                m,
+                                Msg::Files(
+                                    FilesMessage::TreeRowPress { .. }
+                                        | FilesMessage::TreeRowDoubleClick { .. }
+                                        | FilesMessage::Toggle(_)
+                                )
+                            )),
+                            "secondary click must not select, arm dragging, open or toggle: {label}"
+                        );
+                    },
+                );
+            }
+        }
+        // A normal primary click keeps the tree selection/drag entry point.
+        let mut view = panel.view(Length::Fill, Border::default());
+        let messages = crate::adapters::scale_widget_checks::with_layout(
+            &mut view,
+            400.,
+            |view, tree, node, renderer, texts| {
+                let point = texts
+                    .0
+                    .iter()
+                    .find(|(text, _)| text == "only-in-a.txt")
+                    .unwrap()
+                    .1
+                    .center();
+                let mut messages = vec![];
+                view.as_widget_mut().update(
+                    tree,
+                    &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    iced_core::Layout::new(node),
+                    mouse::Cursor::Available(point),
+                    renderer,
+                    &mut iced_core::clipboard::Null,
+                    &mut iced_core::Shell::new(&mut messages),
+                    &iced_core::Rectangle::with_size(iced_core::Size::new(400., 600.)),
+                );
+                messages
+            },
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Msg::Files(FilesMessage::TreeRowPress { .. })))
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, Msg::Files(FilesMessage::ContextMenuOpen { .. })))
+        );
     }
 
     /// 没有项目:面板是空的,且不向宿主提任何请求或命令。

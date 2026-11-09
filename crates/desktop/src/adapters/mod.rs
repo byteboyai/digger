@@ -13,6 +13,8 @@ pub mod agent_keys;
 pub mod agent_layout;
 pub mod agent_tabs;
 pub mod files;
+#[cfg(target_os = "macos")]
+mod files_secondary_click;
 pub mod hover;
 pub mod menu_overlay;
 #[cfg(target_os = "macos")]

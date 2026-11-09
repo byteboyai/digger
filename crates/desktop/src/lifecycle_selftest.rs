@@ -296,7 +296,13 @@ fn want(area: Area, window: (f32, f32)) -> (f64, f64, f64, f64) {
             h - TOP_BAR - 2.0 * MAXIMIZE_PADDING,
         ),
     };
-    (x, y + bar, cw, ch - bar)
+    // Rounded frame: 7px native bottom clearance normally; maximized body
+    // reserves a 10px frame on all sides before laying out the editor bar.
+    if matches!(area, Area::Maximized) {
+        (x + 10., y + 10. + bar, cw - 20., ch - 20. - bar)
+    } else {
+        (x, y + bar, cw, ch - bar - 7.)
+    }
 }
 
 impl Driver {
@@ -472,7 +478,7 @@ fn want_usage(place: UsageWhere, window: (f32, f32)) -> (f64, f64, f64, f64) {
     let left_w = 640f64.clamp(MIN_ZONE, (zones - MIN_ZONE).max(MIN_ZONE));
     let body_h = h - TOP_BAR - FOOTBAR;
     let y = TOP_BAR + 6.0 + 1.0 + USAGE_HEADER;
-    let ch = body_h - 6.0 - 2.0 - USAGE_HEADER;
+    let ch = body_h - 6.0 - 2.0 - USAGE_HEADER - 7.0;
     // 右区内容:外边距 上6 右6,内边距 1;左区内容:外边距 上6 左6,内边距 1
     let (rx, rw) = (RAIL + left_w + DIVIDER + 1.0, (zones - left_w) - 6.0 - 2.0);
     let (lx, lw) = (RAIL + 6.0 + 1.0, left_w - 6.0 - 2.0);
@@ -577,10 +583,10 @@ mod tests {
 
     #[test]
     fn the_expected_rectangles_are_the_hand_computed_ones() {
-        // left zone 640: content x 44+6+1, y 40+6+1, w 640-8, h 900-40-22-8; the editor bar (84) comes off the top
+        // left zone 640: content x 44+6+1, y 40+6+1, w 640-8, h 900-40-22-8; the editor bar (84) comes off the top, with 7px bottom corner clearance
         assert_eq!(
             want(Area::Left { pref: 640.0 }, WINDOW),
-            (51.0, 131.0, 632.0, 746.0)
+            (51.0, 131.0, 632.0, 739.0)
         );
         // a narrow window clamps the preference: W=700 ⇒ zones 604, upper max(604-320,320)=320
         assert_eq!(
@@ -590,10 +596,10 @@ mod tests {
         // right zone with left 500: zones 1344, right = 844; x = 44+500+8+1
         assert_eq!(
             want(Area::Right { pref: 500.0 }, WINDOW),
-            (553.0, 131.0, 844.0 - 8.0, 746.0)
+            (553.0, 131.0, 844.0 - 8.0, 739.0)
         );
-        // maximize box: x 84, y 80+84, w 1440-88-80, h 900-40-80-84
-        assert_eq!(want(Area::Maximized, WINDOW), (84.0, 164.0, 1272.0, 696.0));
+        // maximize frame: 10px inside the outer box, then 84px editor bar
+        assert_eq!(want(Area::Maximized, WINDOW), (94.0, 174.0, 1252.0, 676.0));
     }
 
     #[test]
@@ -662,24 +668,24 @@ mod tests {
     #[test]
     fn the_usage_expectations_are_the_hand_computed_ones() {
         let w = (1200.0, 800.0);
-        // 右区内容 x 693 y 47 w 456;图表在 80 的头部之下:y 127 h 650
+        // 右区内容 x 693 y 47 w 456;图表在 80 的头部之下:y 127 h 643 (7px bottom corner clearance)
         assert_eq!(
             want_usage(UsageWhere::RightFull, w),
-            (693.0, 127.0, 456.0, 650.0)
+            (693.0, 127.0, 456.0, 643.0)
         );
         // 配对宽 448,默认列表占 0.35 ⇒ 内容 291.2
         let (x, y, cw, h) = want_usage(UsageWhere::RightPaired { list: 0.35 }, w);
-        assert_eq!((x, y, h), (693.0, 127.0, 650.0));
+        assert_eq!((x, y, h), (693.0, 127.0, 643.0));
         assert!((cw - 291.2).abs() < 1e-9);
         // 镜像:左区内容 x 51 w 632,配对宽 624,列表 0.5 ⇒ 312;内容 x = 51 + 312 + 8
         assert_eq!(
             want_usage(UsageWhere::LeftPaired { list: 0.5 }, w),
-            (371.0, 127.0, 312.0, 650.0)
+            (371.0, 127.0, 312.0, 643.0)
         );
         // 左区无数据:整个内容区 x 51 w 632
         assert_eq!(
             want_usage(UsageWhere::LeftFull, w),
-            (51.0, 127.0, 632.0, 650.0)
+            (51.0, 127.0, 632.0, 643.0)
         );
     }
 

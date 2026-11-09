@@ -55,6 +55,16 @@ jobs:
           cargo test --locked -p digger-desktop --lib product::tests::writing_transition -- --test-threads=1
           cargo test --locked -p digger-desktop --lib lifecycle_selftest::tests::startup_shows_the_scenario_page_before_waiting_for_ready -- --exact
 
+      - name: 面板圆角与触摸板回归
+        run: |
+          cargo test --locked -p digger-desktop --lib panel_surface:: -- --test-threads=1
+          cargo test --locked -p digger-desktop --lib maximized_terminal_grid -- --test-threads=1
+          cargo test --locked -p digger-desktop --lib trackpad_secondary_clicks -- --test-threads=1
+          for scale in 0.5 1 2; do
+            BYTEUI_ICON_SCALE="$scale" DIGGER_SURFACE_ARTIFACTS="artifacts/panel-corners/dark-$scale" cargo test --locked -p digger-desktop --lib every_panel_keeps -- --test-threads=1
+          done
+          DIGGER_SURFACE_SCHEME=light DIGGER_SURFACE_ARTIFACTS=artifacts/panel-corners/light cargo test --locked -p digger-desktop --lib every_panel_keeps -- --test-threads=1
+
       - name: 写字台文稿存储回归
         run: |
           cargo test --locked -p digger-store writing:: -- --test-threads=1
@@ -94,3 +104,11 @@ jobs:
 
       - name: 嵌入页面与源码一致
         run: bash scripts/build-editor-web.sh --check
+
+      - name: 上传面板圆角渲染图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-corners-${{ github.run_id }}
+          path: artifacts/panel-corners/
+          if-no-files-found: warn
