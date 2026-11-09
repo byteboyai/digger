@@ -110,5 +110,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: panel-corners-${{ github.run_id }}
-          path: artifacts/panel-corners/
+          path: crates/desktop/artifacts/panel-corners/
           if-no-files-found: warn
