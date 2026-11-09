@@ -123,23 +123,36 @@ mod tests {
 
     #[test]
     fn data_dir_env_moves_every_path_together() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("custom-digger");
-        std::fs::create_dir_all(&root).unwrap();
-        // 用 scoped_env 的方式设置环境变量(测试结束自动恢复)
-        // 这里直接测试:设 DIGGER_DATA_DIR 后所有路径都在其下
-        // SAFETY: 测试代码,单线程执行,不会与其他线程竞争环境变量。
-        unsafe {
-            std::env::set_var("DIGGER_DATA_DIR", &root);
+        const CHILD: &str = "DIGGER_PATHS_OVERRIDE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("custom-digger");
+            std::fs::create_dir_all(&root).unwrap();
+            // Only the child receives the override. Other parallel tests keep
+            // a stable environment, including a caller-provided data root.
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::data_dir_env_moves_every_path_together",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("DIGGER_DATA_DIR", &root)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "override subprocess failed:\n{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
         }
+        let root = PathBuf::from(std::env::var_os("DIGGER_DATA_DIR").unwrap());
         let config = config_dir();
         let state = state_dir();
         let db = projects_db_path();
         let socket = product().socket_path();
-        // SAFETY: 测试代码,清理环境变量。
-        unsafe {
-            std::env::remove_var("DIGGER_DATA_DIR");
-        }
         assert!(
             config.starts_with(&root),
             "config {config:?} should be under {root:?}"
@@ -212,8 +225,8 @@ mod tests {
     #[test]
     fn config_dir_ends_with_digger() {
         // 默认根带产品名;`DIGGER_DATA_DIR` 覆盖时路径由调用方给,不含 "digger"
-        // 也合法(审核环境正是如此)。两种情形都要过,且不假设环境变量在两次
-        // 读取之间不变(测试并行,另有测试会临时设置/清理它)。
+        // 也合法(审核环境正是如此)。覆盖根目录的验证在独立子进程执行，
+        // 不修改其它并行测试的进程环境。
         let c = config_dir();
         let root = std::env::var_os("DIGGER_DATA_DIR");
         assert!(
