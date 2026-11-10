@@ -465,3 +465,44 @@ fn actual_probe_is_scheduled_after_destroy_and_stale_results_are_rejected() {
     native.update(Event::Probed(generation, zero));
     assert_eq!(native.last_probe(), None);
 }
+
+#[test]
+fn review_page_fetches_its_snapshot_from_the_digger_document_origin() {
+    let serving = Serving::default();
+    let snapshot = r#"{"entries":[],"agent_label":"codebuddy"}"#;
+    serving.set(Some(Arc::new(Mutex::new(Some(snapshot.into())))));
+    let (status, _, html) = serving.serve("/host.html").unwrap();
+    assert_eq!(status, 200);
+    let html = String::from_utf8(html).unwrap();
+    assert!(html.contains("connect-src 'self'"));
+    assert!(html.contains("src=\"review-trace.js\""));
+    let (status, mime, script) = serving.serve("/review-trace.js").unwrap();
+    assert_eq!((status, mime), (200, "text/javascript"));
+    let script = String::from_utf8(script).unwrap();
+    assert!(
+        !script.contains("dozer://review-trace/data.json"),
+        "shared script must not fetch from a different product's scheme"
+    );
+    // Inspect the fetch actually emitted by the bundled shared page, rather
+    // than a separate fixture which could silently keep using the right URL.
+    let literal = script
+        .split("fetch(")
+        .nth(1)
+        .expect("page loads its snapshot")
+        .split(')')
+        .next()
+        .unwrap();
+    let path: String = serde_json::from_str(literal).expect("snapshot fetch uses a literal URL");
+    assert_eq!(
+        path, "data.json",
+        "snapshot URL is relative to the current document, including Digger's custom scheme"
+    );
+    assert_eq!(
+        serving.serve(&format!("/{path}")).unwrap(),
+        (200, "application/json", snapshot.as_bytes().to_vec())
+    );
+    // JSON content is opaque: even text mentioning the old URL must survive.
+    let content = "{\"text\":\"dozer://review-trace/data.json\"}";
+    serving.set(Some(Arc::new(Mutex::new(Some(content.into())))));
+    assert_eq!(serving.serve("/data.json").unwrap().2, content.as_bytes());
+}

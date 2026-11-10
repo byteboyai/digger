@@ -65,6 +65,9 @@ jobs:
           done
           DIGGER_SURFACE_SCHEME=light DIGGER_SURFACE_ARTIFACTS=artifacts/panel-corners/light cargo test --locked -p digger-desktop --lib every_panel_keeps -- --test-threads=1
 
+      - name: 会话详情资源协议回归
+        run: cargo test --locked -p digger-desktop --lib review_ -- --test-threads=1
+
       - name: 图标栏单击与拖动回归
         run: cargo test --locked -p digger-desktop --lib product::tests::rail_ -- --test-threads=1
 

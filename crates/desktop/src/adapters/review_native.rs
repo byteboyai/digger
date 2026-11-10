@@ -125,12 +125,24 @@ impl Serving {
             .map(|s| s.lock().map(|v| v.clone()).map_err(|e| e.to_string()))
             .transpose()?
             .flatten();
-        Ok(
-            match serve_review_trace(path.trim_start_matches('/'), json.as_deref()) {
-                Some((mime, body)) => (200, mime, body),
-                None => (404, "text/plain", vec![]),
-            },
-        )
+        let path = path.trim_start_matches('/');
+        Ok(match serve_review_trace(path, json.as_deref()) {
+            Some((mime, body)) => {
+                // The pinned shared bundle still fetches a hard-coded Dozer
+                // URL. Keep Digger's page/data on the same origin allowed by
+                // its CSP, without modifying conversation JSON or the CSP.
+                let body = if path == "review-trace.js" {
+                    String::from_utf8(body)
+                        .map_err(|e| format!("invalid review script: {e}"))?
+                        .replace("dozer://review-trace/data.json", "data.json")
+                        .into_bytes()
+                } else {
+                    body
+                };
+                (200, mime, body)
+            }
+            None => (404, "text/plain", vec![]),
+        })
     }
 }
 pub struct ReviewNative {
