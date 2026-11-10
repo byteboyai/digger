@@ -19,6 +19,19 @@ impl canvas::Program<crate::product::Msg> for FirstFrame {
         _: iced::mouse::Cursor,
     ) -> Option<canvas::Action<crate::product::Msg>> {
         if !*sent
+            && selftest_enabled()
+            && matches!(
+                event,
+                iced_core::Event::Window(window::Event::RedrawRequested(_))
+            )
+        {
+            eprintln!(
+                "INFO settings: redraw {:?}, expected {:?}",
+                bounds.size(),
+                self.expected
+            );
+        }
+        if !*sent
             && matches!(
                 event,
                 iced_core::Event::Window(window::Event::RedrawRequested(_))
@@ -123,10 +136,12 @@ pub(crate) fn check_prepared(handle: &dyn window::Window) -> Result<(), String> 
                 "settings must stay transparent at the parent frame while preparing".into(),
             );
         }
-        // addChildWindow may order its child. Keep both visibility and alpha gated.
-        window.orderOut(None);
+        // A Metal surface needs an ordered window to prepare its drawable.
+        // Keep it completely transparent until the correctly sized frame is
+        // presented; ordering out here can stall the first GPU frame forever.
+        window.orderFront(None);
         if selftest_enabled() {
-            eprintln!("PASS settings: attached/resized while transparent and hidden");
+            eprintln!("PASS settings: attached/resized while fully transparent");
         }
         Ok(())
     }
