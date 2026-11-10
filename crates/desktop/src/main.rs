@@ -22,11 +22,7 @@ fn update(shell: &mut ProductShell, msg: Msg) -> iced::Task<Msg> {
 }
 
 fn view(shell: &ProductShell, id: window::Id) -> Element<'_, Msg> {
-    if shell.is_settings_window(id) {
-        shell.settings_overlay_view()
-    } else {
-        bytehost_desktop::Product::view(shell)
-    }
+    shell.view_window(id)
 }
 
 fn title(shell: &ProductShell, id: window::Id) -> String {

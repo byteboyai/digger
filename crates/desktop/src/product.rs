@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use bytehost_chrome::persist::SCHEMA_VERSION;
 use bytehost_chrome::{
     BodyArea, Divider, El, Loaded, PairRects, PanelMeta, PanelRules, Rect, ShellHost, ShellModel,
-    ShellMsg, TopBarSlots, metrics_from_theme, pair_view,
+    ShellMsg, Side, TopBarSlots, metrics_from_theme, pair_view,
 };
 use bytehost_core::registry::PanelCatalog;
 use bytehost_core::{LogicalRect, PanelId, PanelMeta as CatalogEntry};
@@ -55,6 +55,11 @@ pub enum Msg {
     },
     /// 窗口骨架的消息(点图标、拖分隔线、窗口缩放……),由 `bytehost-chrome` 的 `ShellModel` 处理。
     Shell(ShellMsg),
+    /// Rail hover produced by the UI (programmatic shell moves remain explicit).
+    RailDragHover {
+        side: Side,
+        index: usize,
+    },
     /// Agent 面板壳(守护进程可用性)的消息。
     AgentShell(crate::adapters::agent::AgentShellMsg),
     /// Agent 面板的库消息,带项目 id(S6d-2):路由只投给该项目的状态。
@@ -1413,6 +1418,10 @@ impl ProductShell {
                     // 创建结果必须带着创建时的身份回来;窗口槽位在 `Created`
                     // 里按 key 接受,迟到的旧 create 不会覆盖当前实例。
                     let (id, open) = iced::window::open(crate::settings::window::settings_window());
+                    // The runtime may ask for its view before the Created callback.
+                    // Reserve the identity now so its first UI can only be settings.
+                    let accepted = self.settings.on_native_opened(key, id);
+                    debug_assert!(accepted);
                     tasks.push(
                         open.map(move |_| {
                             Msg::Settings(crate::settings::Message::Created(key, id))
@@ -1610,21 +1619,40 @@ impl ProductShell {
                     return Task::none();
                 };
                 iced::window::size(main).then(move |size| {
-                    // Resize is an effect with no Output; `then` would never run.
-                    iced::window::resize(id, size).chain(
-                        bytehost_desktop::dialog::attach_child(main, id).map(move |result| {
-                            Msg::Settings(crate::settings::Message::Bound(
-                                key,
-                                result.map_err(|error| error.to_string()),
-                            ))
-                        }),
+                    // AppKit can order a child when it is attached. Keep its alpha
+                    // at zero throughout resizing/attachment, even while hidden.
+                    window::run(id, crate::settings::presentation::prepare_hidden).then(
+                        move |result| {
+                            if let Err(error) = result {
+                                return Task::done(Msg::Settings(Message::Bound(key, Err(error))));
+                            }
+                            window::resize(id, size).chain(
+                                bytehost_desktop::dialog::attach_child(main, id).then(
+                                    move |result| match result {
+                                        Err(error) => Task::done(Msg::Settings(Message::Bound(
+                                            key,
+                                            Err(error.to_string()),
+                                        ))),
+                                        Ok(()) => window::run(
+                                            id,
+                                            crate::settings::presentation::check_prepared,
+                                        )
+                                        .map(
+                                            move |result| {
+                                                Msg::Settings(Message::Bound(key, result))
+                                            },
+                                        ),
+                                    },
+                                ),
+                            )
+                        },
                     )
                 })
             }
             Message::Bound(key, result) => match result {
                 Ok(()) => {
-                    let effects = self.settings.on_bound(key);
-                    self.apply_settings_effects(effects)
+                    self.settings.prepare_presentation(key);
+                    Task::none()
                 }
                 Err(detail) => {
                     // 只有当前 attempt 的失败才清理由它自己的实例;旧 session /
@@ -1640,6 +1668,77 @@ impl ProductShell {
                     }
                 }
             },
+            Message::FirstFrame(key, id) => {
+                if !self.settings.accept_first_frame(key, id) {
+                    return Task::none();
+                }
+                let Some(permit) = self.settings.presentation_permit.clone() else {
+                    return Task::none();
+                };
+                let _ = self.settings.on_bound(key);
+                // iced defers window actions emitted during redraw until after
+                // drawing/presenting that frame. No timer or placeholder frame.
+                window::run(id, move |handle| {
+                    if !permit.load(std::sync::atomic::Ordering::Acquire) {
+                        return Ok(false);
+                    }
+                    crate::settings::presentation::reveal(handle)
+                })
+                .map(move |result| Msg::Settings(Message::Presented(key, id, result)))
+            }
+            Message::Presented(key, id, result) => {
+                if self.settings.key() != Some(key)
+                    || self.settings.window != Some(id)
+                    || !matches!(
+                        self.settings.phase(),
+                        bytehost_settings::dialog::Phase::Open
+                    )
+                {
+                    return Task::none();
+                }
+                match result {
+                    Ok(true) => {
+                        if crate::settings::presentation::selftest_enabled() {
+                            window::screenshot(id).map(move |image| {
+                                Msg::Settings(Message::SelftestSnapshot(key, id, image))
+                            })
+                        } else {
+                            window::gain_focus(id)
+                        }
+                    }
+                    Ok(false) => Task::none(),
+                    Err(detail) => {
+                        if self.settings.presentation_failed(key, id, detail) {
+                            self.settings.take_window_for(key);
+                            window::close(id)
+                        } else {
+                            Task::none()
+                        }
+                    }
+                }
+            }
+            Message::SelftestSnapshot(key, id, image) => {
+                if !crate::settings::presentation::selftest_enabled()
+                    || self.settings.key() != Some(key)
+                    || self.settings.window != Some(id)
+                {
+                    return Task::none();
+                }
+                if let Err(error) = crate::settings::presentation::validate_snapshot(
+                    &image,
+                    Size::new(self.shell.window().0, self.shell.window().1),
+                ) {
+                    eprintln!("FAIL settings first frame: {error}");
+                    eprintln!("SUMMARY settings presentation: failed");
+                    std::process::exit(1);
+                }
+                self.settings.selftest_cycles += 1;
+                eprintln!(
+                    "PASS settings: first screenshot has correct scrim/card and viewport (cycle {})",
+                    self.settings.selftest_cycles
+                );
+                self.close_settings()
+            }
             Message::SyncResult(key, detail) => {
                 if let Some(detail) = detail {
                     self.settings.on_sync_failed(key, detail);
@@ -1890,7 +1989,7 @@ impl ProductShell {
         let card = container(self.settings_view())
             .width(Length::Fixed(rect.width))
             .height(Length::Fixed(rect.height));
-        container(card)
+        let content: Element<'_, Msg> = container(card)
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(iced::alignment::Horizontal::Center)
@@ -1905,7 +2004,21 @@ impl ProductShell {
                 ),
                 ..container::Style::default()
             })
-            .into()
+            .into();
+        match self.settings.pending_frame {
+            Some((key, id)) => iced::widget::stack![
+                content,
+                iced_widget::canvas::Canvas::new(crate::settings::presentation::FirstFrame {
+                    key,
+                    id,
+                    expected: Size::new(width, height),
+                })
+                .width(Length::Fill)
+                .height(Length::Fill)
+            ]
+            .into(),
+            None => content,
+        }
     }
 
     /// 设置窗创建 / 绑定失败后的主窗口入口。
@@ -2836,6 +2949,19 @@ impl ProductShell {
         self.window
     }
 
+    pub fn view_window(&self, id: window::Id) -> Element<'_, Msg> {
+        if self.settings.window == Some(id) {
+            self.settings_overlay_view()
+        } else if self.window.is_some_and(|main| main != id) {
+            iced::widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            crate::adapters::shell_pointer::ShellPointer::new(Product::view(self)).into()
+        }
+    }
+
     /// 这个原生窗口是不是设置窗。
     pub fn is_settings_window(&self, id: window::Id) -> bool {
         self.settings.owns_window(id)
@@ -2905,7 +3031,10 @@ impl dozer_panel_agent::adapter::TaskTitleSource for NoTasks {
 
 impl ShellHost<Msg> for ProductShell {
     fn lift(msg: ShellMsg) -> Msg {
-        Msg::Shell(msg)
+        match msg {
+            ShellMsg::RailDragMove { side, index } => Msg::RailDragHover { side, index },
+            other => Msg::Shell(other),
+        }
     }
 
     fn meta(&self, panel: &PanelId) -> Option<PanelMeta> {
@@ -3036,6 +3165,18 @@ impl Product<Msg> for ProductShell {
             };
         }
         match m {
+            Msg::RailDragHover { side, index } => {
+                let active = self.shell.rail_drag().is_some_and(|drag| {
+                    self.shell.rail_drag_confirmed()
+                        || drag.pending_cross.is_some()
+                        || drag.source_index != drag.origin_index
+                });
+                if active {
+                    self.on_shell(ShellMsg::RailDragMove { side, index })
+                } else {
+                    Task::none()
+                }
+            }
             Msg::WindowReady(id, size) => {
                 self.window = Some(id);
                 crate::set_main_window(Some(id));
@@ -3056,7 +3197,12 @@ impl Product<Msg> for ProductShell {
                 #[cfg(not(target_os = "macos"))]
                 let guard = Task::none();
                 let query = self.query_window_state();
-                Task::batch([resized, guard, query])
+                let settings_test = if crate::settings::presentation::selftest_enabled() {
+                    Task::done(Msg::Settings(crate::settings::Message::Open(None)))
+                } else {
+                    Task::none()
+                };
+                Task::batch([resized, guard, query, settings_test])
             }
             Msg::WindowAnimationFocus(id, focused) => {
                 if self.window == Some(id) && !self.closing {
@@ -3943,7 +4089,19 @@ impl Product<Msg> for ProductShell {
                 // 设置实例真正销毁后才推进控制器;旧实例只在槽位匹配时清理。
                 if self.settings.owns_window(id) {
                     let effects = self.settings.on_native_closed(id);
-                    self.apply_settings_effects(effects)
+                    let task = self.apply_settings_effects(effects);
+                    if crate::settings::presentation::selftest_enabled()
+                        && self.settings.selftest_cycles > 0
+                    {
+                        if self.settings.selftest_cycles == 3 {
+                            eprintln!("SUMMARY settings presentation: 3 cycles passed, 0 failed");
+                            return iced::exit();
+                        }
+                        return task.chain(Task::done(Msg::Settings(
+                            crate::settings::Message::Open(None),
+                        )));
+                    }
+                    task
                 } else {
                     Task::none()
                 }
@@ -4689,7 +4847,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unified_settings_created_runs_binding_after_the_resize_effect() {
+    async fn unified_settings_created_prepares_hidden_child_before_resize_and_binding() {
         use iced::futures::StreamExt;
         use iced_runtime::window::Action as WindowAction;
         let mut shell = fresh("settings-created-effects");
@@ -4707,12 +4865,10 @@ mod tests {
             }
             _ => panic!("expected parent size query"),
         }
-        assert!(matches!(actions.next().await,
-            Some(iced_runtime::Action::Window(WindowAction::Resize(id, _))) if id == child));
         assert!(
             matches!(actions.next().await,
-            Some(iced_runtime::Action::Window(WindowAction::Run(id, _))) if id == parent),
-            "native binding must run after the output-free resize effect"
+            Some(iced_runtime::Action::Window(WindowAction::Run(id, _))) if id == child),
+            "prepare the hidden child before resize/attachment can order it"
         );
     }
 
@@ -4764,7 +4920,6 @@ mod tests {
             std::path::Path::new("/repo/src/main.rs")
         ));
     }
-    use bytehost_chrome::Side;
     use bytehost_desktop::HostSurfaceEvent;
 
     use dozer_services::{MemoryService, ProjectService};
@@ -7188,6 +7343,8 @@ mod tests {
     include!("product_usage_tests.rs");
     include!("product_writing_tests.rs");
     include!("product_surface_tests.rs");
+    include!("product_settings_presentation_tests.rs");
+    include!("product_rail_pointer_tests.rs");
 
     fn load_sample_rows(shell: &mut ProductShell) {
         let scope = PathBuf::from("/sample/project");

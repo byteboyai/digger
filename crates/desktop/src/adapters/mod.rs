@@ -20,6 +20,7 @@ pub mod menu_overlay;
 #[cfg(target_os = "macos")]
 pub mod native_menu;
 pub mod project;
+pub(crate) mod shell_pointer;
 pub mod usage;
 
 pub mod usage_native;

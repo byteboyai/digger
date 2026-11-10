@@ -16,6 +16,18 @@ pub fn subscription(shell: &ProductShell) -> Subscription<Msg> {
         if crate::is_secondary_window(id) {
             return None;
         }
+        // Pointer samples/press/release come from ShellPointer in widget order,
+        // not this asynchronous subscription. Keep native resize/focus cleanup.
+        if matches!(
+            &evt,
+            iced::Event::Mouse(
+                iced::mouse::Event::CursorMoved { .. }
+                    | iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)
+                    | iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)
+            )
+        ) {
+            return None;
+        }
         bytehost_chrome::map_event(&evt).map(Msg::Shell)
     });
     if shell.closing {

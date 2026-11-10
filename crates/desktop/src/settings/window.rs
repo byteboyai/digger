@@ -29,6 +29,8 @@ pub fn main_window(size: Size) -> window::Settings {
 /// `exit_on_close_request: false` 让系统关闭 / Esc / 关闭按钮都走统一生命周期。
 pub fn settings_window() -> window::Settings {
     window::Settings {
+        // Never expose the placeholder frame or the unprepared GPU surface.
+        visible: false,
         // 占位尺寸;绑定父窗口后立即被父客户区替换。
         size: Size::new(800.0, 600.0),
         min_size: Some(Size::new(1.0, 1.0)),

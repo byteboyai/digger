@@ -11,6 +11,7 @@
 //! 语言偏好由产品本地持久化，高级页尚未注册。
 
 pub mod language;
+pub(crate) mod presentation;
 pub mod theme;
 pub mod window;
 
@@ -41,6 +42,9 @@ pub enum Message {
     Created(DialogKey, iced_window::Id),
     /// 原生父子绑定结果;携带创建时的会话身份,迟到结果不能影响新会话。
     Bound(DialogKey, Result<(), String>),
+    FirstFrame(DialogKey, iced_window::Id),
+    Presented(DialogKey, iced_window::Id, Result<bool, String>),
+    SelftestSnapshot(DialogKey, iced_window::Id, iced_window::Screenshot),
     /// 父窗移动 / 缩放后的重新同步结果。失败只更新可见错误,不改变会话相位。
     SyncResult(DialogKey, Option<String>),
     /// 销毁回包在限定时间内没有到达:强制结束,避免卡在 Closing。
@@ -81,6 +85,9 @@ pub struct State {
     /// `window` 所属的对话框身份。销毁 / 回包必须按身份定位实例,
     /// 不能用"当前 window"代替。
     pub window_key: Option<DialogKey>,
+    pub(crate) pending_frame: Option<(DialogKey, iced_window::Id)>,
+    pub(crate) presentation_permit: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub(crate) selftest_cycles: u8,
     // Timed-out sessions relinquish the active slot, but keep resource ownership
     // until the actual native Closed event. Old cleanup cannot target a new session.
     retired_windows: std::collections::HashMap<DialogKey, iced_window::Id>,
@@ -122,6 +129,9 @@ impl State {
         Self {
             window: None,
             window_key: None,
+            pending_frame: None,
+            presentation_permit: None,
+            selftest_cycles: 0,
             retired_windows: std::collections::HashMap::new(),
             core: SettingsState::new(),
             dialog: DialogController::new(SETTINGS_OWNER, DialogKind::Settings),
@@ -223,6 +233,7 @@ impl State {
 
     /// 关闭设置状态并返回原生命令。重复关闭幂等。
     pub fn close(&mut self) -> Vec<DialogEffect> {
+        self.cancel_presentation();
         self.core.close();
         self.admission.cancel_owner(self.git.owner());
         self.git.close();
@@ -232,6 +243,7 @@ impl State {
 
     /// 父窗退出:即使创建回包永远不到也必须结束。
     pub fn parent_closed(&mut self) -> Vec<DialogEffect> {
+        self.cancel_presentation();
         self.core.close();
         self.admission.cancel_owner(self.git.owner());
         self.git.close();
@@ -241,6 +253,7 @@ impl State {
 
     /// 创建失败后的显式重试。
     pub fn retry(&mut self) -> Vec<DialogEffect> {
+        self.cancel_presentation();
         let effects = self.dialog.retry();
         self.bind_error = None;
         self.sync_git_owner(&effects);
@@ -266,6 +279,64 @@ impl State {
         }
     }
 
+    fn cancel_presentation(&mut self) {
+        self.pending_frame = None;
+        if let Some(permit) = self.presentation_permit.take() {
+            permit.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// Binding alone is not presentation readiness. A redraw of the bound,
+    /// correctly sized settings view must precede ordering the window on-screen.
+    pub(crate) fn prepare_presentation(&mut self, key: DialogKey) -> bool {
+        if self.dialog.key() != Some(key)
+            || self.window_key != Some(key)
+            || !matches!(self.phase(), Phase::Opening)
+        {
+            return false;
+        }
+        let Some(id) = self.window else {
+            return false;
+        };
+        self.cancel_presentation();
+        self.presentation_permit = Some(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        self.pending_frame = Some((key, id));
+        true
+    }
+
+    pub(crate) fn accept_first_frame(&mut self, key: DialogKey, id: iced_window::Id) -> bool {
+        if self.pending_frame != Some((key, id))
+            || self.window != Some(id)
+            || self.window_key != Some(key)
+            || self.key() != Some(key)
+            || !matches!(self.phase(), Phase::Opening)
+        {
+            return false;
+        }
+        self.pending_frame = None;
+        true
+    }
+
+    pub(crate) fn presentation_failed(
+        &mut self,
+        key: DialogKey,
+        id: iced_window::Id,
+        detail: String,
+    ) -> bool {
+        if self.key() != Some(key)
+            || self.window != Some(id)
+            || self.window_key != Some(key)
+            || !matches!(self.phase(), Phase::Open)
+        {
+            return false;
+        }
+        self.cancel_presentation();
+        self.bind_error = Some(detail.clone());
+        self.dialog
+            .fail_current(DialogFailure::new("present", detail));
+        true
+    }
+
     /// 原生父子绑定成功:此时才算进入 Open,失败窗口不会假装已打开。
     pub fn on_bound(&mut self, key: DialogKey) -> Vec<DialogEffect> {
         if self.dialog.key() != Some(key) || self.window_key != Some(key) {
@@ -284,6 +355,7 @@ impl State {
         if self.dialog.key() != Some(key) || !matches!(self.dialog.phase(), Phase::Opening) {
             return false;
         }
+        self.cancel_presentation();
         let detail = detail.into();
         self.bind_error = Some(detail.clone());
         self.dialog.fail_current(DialogFailure::new("bind", detail));
@@ -314,6 +386,7 @@ impl State {
         if self.window_key != Some(key) {
             return None;
         }
+        self.cancel_presentation();
         self.window_key = None;
         self.window.take()
     }
@@ -347,6 +420,7 @@ impl State {
         if self.window != Some(id) {
             return Vec::new();
         }
+        self.cancel_presentation();
         let key = self.window_key;
         self.window = None;
         self.window_key = None;
